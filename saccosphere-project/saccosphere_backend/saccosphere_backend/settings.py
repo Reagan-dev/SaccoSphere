@@ -40,9 +40,8 @@ INSTALLED_APPS = [
     'accounts',  # Our custom accounts app
     'rest_framework',  # Django REST framework
     'saccomembership',
-    'saccomanagement',
-    'payments',
-    'services'
+    'saccomanagement'
+
 ]
 
 MIDDLEWARE = [
