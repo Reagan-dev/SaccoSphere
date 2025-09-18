@@ -1,13 +1,13 @@
 from django.shortcuts import render
-from rest_framework import viesets,status,permissions
+from rest_framework import viewsets,status,permissions
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from .models import Management
 from .serializers import ManagementSerializer, ManagementDetailSerializer
-from saccomembership.models import Member
+from saccomembership.models import Membership
 
 
-class ManagementViewSet(viesets.ModelViewSet):
+class ManagementViewSet(viewsets.ModelViewSet):
     query_set = Management.objects.all()
     permission_classes = [permissions.IsAuthenticated]
     

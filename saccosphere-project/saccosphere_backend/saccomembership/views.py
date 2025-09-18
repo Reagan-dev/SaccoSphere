@@ -11,7 +11,7 @@ class MembershipViewSet(viewsets.ModelViewSet):
     permissions_classes = [permissions.IsAuthenticated]
     
     
-    def get_serilizer_class(self):
+    def get_serializer_class(self):
         if self.action in ['list','retrieve']:
             return MembershipDetailSerializer
         return MembershipSerializer
@@ -53,4 +53,3 @@ class MembershipViewSet(viewsets.ModelViewSet):
         return Response({'status': 'left'}, status=status.HTTP_200_OK)
         
     
-_
