@@ -21,5 +21,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/members/', include('saccomembership.urls')),
     path('api/management/', include('saccomanagement.urls')),
-   
+    path('api/accounts/', include('accounts.urls')),
+    path('api/services/', include('services.urls')),
+    path('api/payments/', include('payments.urls')),
 ]
