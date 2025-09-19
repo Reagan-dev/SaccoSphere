@@ -43,4 +43,8 @@ class ProfileSerializer(serializers.ModelSerializer):
         model = Profile
         
         fields = ['id', 'user', 'phone_number', 'profile_picture', 'bio', 'created_at', 'updated_at']
+<<<<<<< HEAD
         read_only_fields = ['id', 'created_at', 'updated_at']
+=======
+        read_only_fields = ['id', 'created_at', 'updated_at']
+>>>>>>> c3a3906a2794d59cc9fd8f89f88b2fce15d60e94
