@@ -1,11 +1,11 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from .models import saving
+from .models import Saving
 from payments.models import Transaction, PaymentProvider
 from django.utils import timezone
 import uuid
 
-@receiver(post_save, sender=saving)
+@receiver(post_save, sender=Saving)
 def create_transaction_for_saving(sender, instance, created, **kwargs):
     if created:
         Transaction.objects.create(

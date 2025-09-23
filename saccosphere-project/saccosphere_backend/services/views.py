@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
 
-from .models import service, saving, loan, insurance
+from .models import Service, Saving, Loan, Insurance
 from .serializers import (
     ServiceSerializer,
     SavingSerializer,
@@ -18,7 +18,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     - Anyone can view services.
     - Only staff/admin users can create, update, or delete.
     """
-    queryset = service.objects.all().order_by("-created_at")
+    queryset = Service.objects.all().order_by("-created_at")
     serializer_class = ServiceSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
@@ -41,7 +41,7 @@ class SavingViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return (
-            saving.objects.filter(member=self.request.user)
+            Saving.objects.filter(member=self.request.user)
             .select_related("service", "member")
             .order_by("-created_at")
         )
@@ -71,8 +71,8 @@ class LoanViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         if self.request.user.is_staff:
-            return loan.objects.select_related("service", "member").order_by("-created_at")
-        return loan.objects.filter(member=self.request.user).select_related("service").order_by("-created_at")
+            return Loan.objects.select_related("service", "member").order_by("-created_at")
+        return Loan.objects.filter(member=self.request.user).select_related("service").order_by("-created_at")
 
     def perform_create(self, serializer):
         serializer.save(member=self.request.user)
@@ -117,7 +117,7 @@ class InsuranceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return (
-            insurance.objects.filter(member=self.request.user)
+            Insurance.objects.filter(member=self.request.user)
             .select_related("service", "member")
             .order_by("-created_at")
         )

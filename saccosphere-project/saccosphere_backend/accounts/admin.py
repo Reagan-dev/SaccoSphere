@@ -38,7 +38,7 @@ class ProfileAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at')
     fieldsets = (
         ('User', {'fields': ('user',)}),
-        ('Contact Information', {'fields': ('phone_number')}),
+        ('Contact Information', {'fields': ('phone_number',)}),
         ('Additional Info', {'fields': ('profile_picture', 'bio')}),
         ('Timestamps', {'fields': ('created_at', 'updated_at')}),
     )

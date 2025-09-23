@@ -4,23 +4,23 @@ import uuid
 from django.utils import timezone
 
 # model that defines sacco services (savings, loans, and insuarance)
-class service(models.Model):
+class Service(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
-    describtion = models.TextField(blank=True)
+    description = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return self.name
 
 
-class saving(models.Model):
+class Saving(models.Model):
     # savings deposits and withdrawals by a member without forgetting a member can have many savings records linked to a sacco service.
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     member = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="savings")
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     service = models.ForeignKey(
-        service,
+        Service,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -37,7 +37,7 @@ class saving(models.Model):
         return f"{self.transaction_type.title()} - {self.amount} by {self.member.username}"
     
 
-class loan(models.Model):
+class Loan(models.Model):
     LOAN_STATUS = [
         ("pending", "Pending"),
         ("approved", "Approved"),
@@ -52,7 +52,7 @@ class loan(models.Model):
         related_name="loans"
     )
     service = models.ForeignKey(
-        service,
+        Service,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -76,7 +76,7 @@ class loan(models.Model):
         return f"Loan of {self.amount} for {self.member.username} ({self.status})"
 
 
-class insurance(models.Model):
+class Insurance(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     member = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -84,7 +84,7 @@ class insurance(models.Model):
         related_name="insurances"
     )
     service = models.ForeignKey(
-        service,
+        Service,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -99,15 +99,15 @@ class insurance(models.Model):
     
     def save(self, *args, **kwargs):
         if self.end_date < timezone.now().date():
-            # auto-expire
-            print(f"Policy {self.policy_number} expired.")
+        # auto-expire
+          print(f"Policy {self.policy_number} expired.")
         super().save(*args, **kwargs)
-        
-@property
-def is_expired(self):
-    return self.end_date < timezone.now().date()     
 
-    def __str__(self):
-        return f"Insurance {self.policy_number} for {self.member.username}"
+    @property
+    def is_expired(self):
+     return self.end_date < timezone.now().date()
+
+def __str__(self):
+    return f"Insurance {self.policy_number} for {self.member.username}"
         
 
