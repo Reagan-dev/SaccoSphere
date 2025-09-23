@@ -24,6 +24,7 @@ class SavingSerializer(serializers.ModelSerializer):
 
 
 class LoanSerializer(serializers.ModelSerializer):
+    total_payable = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     service = ServiceSerializer(read_only=True)
     service_id = serializers.PrimaryKeyRelatedField(
         queryset=Service.objects.all(),
@@ -34,11 +35,12 @@ class LoanSerializer(serializers.ModelSerializer):
     class Meta:
         model = Loan
         fields = ['id', 'member', 'service', 'service_id', 'amount', 'interest_rate',
-                  'duration_months', 'status', 'created_at']
+                  'duration_months', 'status', 'created_at', 'total_payable']
         read_only_fields = ['id', 'created_at', 'status']
 
 
 class InsuranceSerializer(serializers.ModelSerializer):
+    is_expired = serializers.BooleanField(read_only=True)
     service = ServiceSerializer(read_only=True)
     service_id = serializers.PrimaryKeyRelatedField(
         queryset=Service.objects.all(),
@@ -49,5 +51,5 @@ class InsuranceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Insurance
         fields = ['id', 'member', 'service', 'service_id', 'policy_number',
-                  'coverage_amount', 'premium', 'start_date', 'end_date', 'created_at']
+                  'coverage_amount', 'premium', 'start_date', 'end_date', 'created_at', 'is_expired']
         read_only_fields = ['id', 'created_at']

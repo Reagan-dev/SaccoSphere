@@ -17,6 +17,16 @@ class Membership(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     date_joined = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
+    
+    def approve(self):
+        self.status = 'approved'
+        self.is_active = True
+        self.save()
+        
+    def reject(self):
+        self.status = 'rejected'
+        self.is_active = False
+        self.save()    
 
     class Meta:
         unique_together = ('user', 'sacco')
