@@ -14,5 +14,4 @@ class ManagementDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Management
         fields = ['id', 'sacco', 'management']
-        read_only_fields = ['id']        
-        
+        read_only_fields = ['id']      
