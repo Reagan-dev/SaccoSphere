@@ -2,6 +2,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
+from rest_framework.permissions import IsAdminUser
 
 from .models import Service, Saving, Loan, Insurance
 from .serializers import (
@@ -20,15 +21,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
     """
     queryset = Service.objects.all().order_by("-created_at")
     serializer_class = ServiceSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
-    def create(self, request, *args, **kwargs):
-        if not request.user.is_staff:
-            return Response(
-                {"detail": "Only admins can create services. Users are not allowed to create services."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        return super().create(request, *args, **kwargs)
+    def get_permissions(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return [IsAdminUser()]
+        return [permissions.AllowAny()]  # Anyone can view/list
 
 
 class SavingViewSet(viewsets.ModelViewSet):
@@ -36,6 +33,7 @@ class SavingViewSet(viewsets.ModelViewSet):
     API endpoint to manage member savings (deposits/withdrawals).
     - Members can only view and manage their own savings.
     """
+    queryset = Saving.objects.all()
     serializer_class = SavingSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -49,16 +47,6 @@ class SavingViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(member=self.request.user)
 
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        if serializer.is_valid():
-            self.perform_create(serializer)
-            return Response(
-                {"message": "Saving record created successfully.", "data": serializer.data},
-                status=status.HTTP_201_CREATED,
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 class LoanViewSet(viewsets.ModelViewSet):
     """
@@ -66,31 +54,22 @@ class LoanViewSet(viewsets.ModelViewSet):
     - Members can create/view their loans.
     - Admins/staff can see all loans and approve/reject them.
     """
+    queryset = Loan.objects.all()
     serializer_class = LoanSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        if self.request.user.is_staff:
-            return Loan.objects.select_related("service", "member").order_by("-created_at")
-        return Loan.objects.filter(member=self.request.user).select_related("service").order_by("-created_at")
+        if self.request.user.is_staff:  # Admin sees all
+            return Loan.objects.all().select_related("service", "member").order_by("-created_at")
+        return Loan.objects.filter(member=self.request.user).select_related("service", "member").order_by("-created_at")
 
     def perform_create(self, serializer):
         serializer.save(member=self.request.user)
 
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        if serializer.is_valid():
-            self.perform_create(serializer)
-            return Response(
-                {"message": "Loan application submitted successfully.", "data": serializer.data},
-                status=status.HTTP_201_CREATED,
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
     # 🔹 Custom admin actions for loan approval/rejection
     @action(detail=True, methods=["post"], permission_classes=[permissions.IsAdminUser])
     def approve(self, request, pk=None):
-        loan = get_object_or_404(loan, pk=pk)
+        loan = get_object_or_404(Loan, pk=pk)
         if loan.status != "pending":
             return Response({"detail": "Loan is not pending."}, status=status.HTTP_400_BAD_REQUEST)
         loan.status = "approved"
@@ -99,7 +78,7 @@ class LoanViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], permission_classes=[permissions.IsAdminUser])
     def reject(self, request, pk=None):
-        loan = get_object_or_404(loan, pk=pk)
+        loan = get_object_or_404(Loan, pk=pk)
         if loan.status != "pending":
             return Response({"detail": "Loan is not pending."}, status=status.HTTP_400_BAD_REQUEST)
         loan.status = "rejected"
@@ -112,6 +91,7 @@ class InsuranceViewSet(viewsets.ModelViewSet):
     API endpoint to manage member insurance policies.
     - Members can only view/manage their own policies.
     """
+    queryset = Insurance.objects.all()
     serializer_class = InsuranceSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -124,13 +104,3 @@ class InsuranceViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(member=self.request.user)
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        if serializer.is_valid():
-            self.perform_create(serializer)
-            return Response(
-                {"message": "Insurance policy created successfully.", "data": serializer.data},
-                status=status.HTTP_201_CREATED,
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

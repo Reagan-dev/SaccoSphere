@@ -1,12 +1,9 @@
+
 from rest_framework import serializers
 from .models import Service, Saving, Loan, Insurance
 
 
 class ServiceSerializer(serializers.ModelSerializer):
-    service_id = serializers.PrimaryKeyRelatedField(
-        queryset=Service.objects.all(),
-        source='service',
-        write_only=True)
     class Meta:
         model = Service
         fields = ['id', 'name', 'description', 'created_at']

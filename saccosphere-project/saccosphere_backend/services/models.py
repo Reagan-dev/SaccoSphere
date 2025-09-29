@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 import uuid
 from django.utils import timezone
+from decimal import Decimal
 
 # model that defines sacco services (savings, loans, and insuarance)
 class Service(models.Model):
@@ -60,20 +61,24 @@ class Loan(models.Model):
     )
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     interest_rate = models.DecimalField(
-        max_digits=5,
-        decimal_places=2,
-        help_text="Annual interest rate in %"
-    )
+    max_digits=5,
+    decimal_places=2,
+    help_text="Annual interest rate in %"
+   )
     duration_months = models.PositiveIntegerField()
     status = models.CharField(max_length=20, choices=LOAN_STATUS, default="pending")
     created_at = models.DateTimeField(auto_now_add=True)
-    
-    def total_payable(self):
-        """Principal + Interest"""
-        return self.amount + (self.amount * (self.interest_rate / 100) * (self.duration_months / 12))
 
-    def __str__(self):
-        return f"Loan of {self.amount} for {self.member.username} ({self.status})"
+    @property
+    def total_payable(self):
+       # Ensure safe Decimal arithmetic
+       amount = self.amount or Decimal("0")
+       interest_rate = Decimal(self.interest_rate) / Decimal("100")
+       duration_years = Decimal(self.duration_months) / Decimal("12")
+       return amount + (amount * interest_rate * duration_years)
+
+def __str__(self):
+    return f"Loan of {self.amount} for {self.member.username} ({self.status})"
 
 
 class Insurance(models.Model):
