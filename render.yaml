@@ -5,7 +5,8 @@ services:
     env: python
     plan: free                       # Change plan if needed
     region:                   # Change to your nearest region
-    branch: main                     # Git branch to deploy
+    branch: main 
+    rootDir: saccosphere-project                    
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn saccosphere_backend.wsgi:application 
     envVars:
