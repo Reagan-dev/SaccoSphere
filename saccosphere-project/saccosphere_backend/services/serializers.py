@@ -54,3 +54,4 @@ class InsuranceSerializer(serializers.ModelSerializer):
         fields = ['id', 'member', 'service', 'service_id', 'policy_number',
                   'coverage_amount', 'premium', 'start_date', 'end_date', 'created_at', 'is_expired']
         read_only_fields = ['id', 'created_at']
+\]]][i8]

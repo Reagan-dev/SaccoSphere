@@ -33,3 +33,33 @@ class Membership(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.sacco.name} ({self.status})"
+
+
+
+# Dynamic registration fields per sacco
+class Saccofield(models.Model):
+    FIELD_TYPES = [
+        ('text', 'Text'),
+        ('number', 'Number'),
+        ('date', 'Date'),
+        ('email', 'Email'),
+        ('file', 'File Upload'),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sacco = models.ForeignKey(Sacco, on_delete=models.CASCADE, related_name='custom_fields')
+    field_name = models.CharField(max_length=100)
+    field_type = models.CharField(max_length=20, choices=FIELD_TYPES, default='text')
+    required = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"{self.sacco.name} - {self.field_name})"
+
+
+class MembershipFieldData(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    membership = models.ForeignKey(Membership, on_delete=models.CASCADE, related_name='field_data')
+    sacco_field = models.ForeignKey(Saccofield, on_delete=models.CASCADE)
+    value = models.TextField(blank = True, null = True)
+
+    def __str__(self):
+        return f"{self.sacco_field.field_name}: {self.value}"

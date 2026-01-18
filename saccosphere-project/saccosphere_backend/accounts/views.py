@@ -157,5 +157,3 @@ class ProfileViewSet(viewsets.ModelViewSet):
             message="Profile deleted successfully.",
             status_code=status.HTTP_204_NO_CONTENT,
         )
-
-

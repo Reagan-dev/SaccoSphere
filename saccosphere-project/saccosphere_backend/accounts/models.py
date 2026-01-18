@@ -53,7 +53,8 @@ class Sacco(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
     registration_number = models.CharField(max_length=50, unique=True) # Unique registration number for each sacco
-    website = models.URLField(blank=True, null=True)
+    website_url = models.URLField(blank=True, null=True)
+    is_internal = models.BooleanField(default=True) # Indicates if the sacco uses internal registration
     address = models.CharField(max_length=255, blank=True, null=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     email = models.EmailField(unique=True)
@@ -77,3 +78,5 @@ class Profile(models.Model):
 
     def __str__(self):
         return f"{self.user.email}'s Profile"
+    
+    
