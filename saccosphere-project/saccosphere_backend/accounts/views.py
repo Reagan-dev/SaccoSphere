@@ -2,7 +2,7 @@ from django.shortcuts import render
 from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from .serializers import UserSerializer, RegisterUserSerializer, LoginSerializer, logoutSerializer, SaccoSerializer, ProfileSerializer
 from .models import User, Sacco, Profile
 
@@ -84,36 +84,42 @@ class LogoutView(APIView):
 class SaccoViewSet(viewsets.ModelViewSet):
     queryset = Sacco.objects.all()
     serializer_class = SaccoSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
-
-    def perform_create(self, serializer):
-        serializer.save()
+    
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:  # anyone can view/list
+            return [permissions.AllowAny()]
+        return [permissions.IsAdminUser()]  # admin required for create/update/delete
 
     def create(self, request, *args, **kwargs):
-        response = super().create(request, *args, **kwargs)
-        return standard_response(
-            success=True,
-            message="Sacco created successfully.",
-            data=response.data,
-            status_code=status.HTTP_201_CREATED,
-        )
-
+        if not request.user.is_staff:
+            return standard_response(
+                success=False,
+                message="Only administrators can register a sacco.",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        return super().create(request, *args, **kwargs)
+    
     def update(self, request, *args, **kwargs):
-        response = super().update(request, *args, **kwargs)
-        return standard_response(
-            success=True,
-            message="Sacco updated successfully.",
-            data=response.data,
-            status_code=status.HTTP_200_OK,
-        )
-
+        if not request.user.is_staff:
+            return standard_response(
+                success=False,
+                message="Only administrators can update a sacco.",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        return super().update(request, *args, **kwargs)
+    
     def destroy(self, request, *args, **kwargs):
-        super().destroy(request, *args, **kwargs)
-        return standard_response(
-            success=True,
-            message="Sacco deleted successfully.",
-            status_code=status.HTTP_204_NO_CONTENT,
-        )
+        if not request.user.is_staff:
+            return standard_response(
+                success=False,
+                message="Only administrators can delete a sacco.",
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        return super().destroy(request, *args, **kwargs)
+        
+
+
+
     
 class ProfileViewSet(viewsets.ModelViewSet):
     queryset = Profile.objects.all()
@@ -151,5 +157,3 @@ class ProfileViewSet(viewsets.ModelViewSet):
             message="Profile deleted successfully.",
             status_code=status.HTTP_204_NO_CONTENT,
         )
-
-

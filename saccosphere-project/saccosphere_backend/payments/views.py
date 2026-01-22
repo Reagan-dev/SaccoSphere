@@ -39,6 +39,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
     - Members can create transactions & view their own.
     - Admins can view all transactions.
     """
+    queryset = Transaction.objects.all()
     serializer_class = TransactionSerializer
     permission_classes = [permissions.IsAuthenticated]
 

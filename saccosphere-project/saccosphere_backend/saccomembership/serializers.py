@@ -6,10 +6,16 @@ class MembershipSerializer(serializers.ModelSerializer):
     class Meta:
         model = Membership
         fields = ['id', 'user', 'sacco', 'status', 'date_joined', 'is_active']
-        read_only_fields = ['id', 'date_joined','is_active']
+        read_only_fields = ['id', 'user', 'date_joined', 'is_active']
+
     def validate(self, data):
-        if Membership.objects.filter(user=data['user'], sacco=data['sacco']).exists():
-            raise serializers.ValidationError("This user is already a member of the Sacco.")
+        request = self.context.get('request')
+        user = request.user if request else data.get('user')
+
+        if Membership.objects.filter(user=user, sacco=data['sacco']).exists():
+            raise serializers.ValidationError(
+                {"non_field_errors": ["This user is already a member of the Sacco."]}
+            )
         return data
 
         

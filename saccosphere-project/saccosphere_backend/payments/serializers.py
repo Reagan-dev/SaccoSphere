@@ -11,7 +11,7 @@ class PaymentProviderSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
         
 class TransactionSerializer(serializers.ModelSerializer):
-    provider = PaymentProviderSerializer(read_only=True)
+    provider = serializers.PrimaryKeyRelatedField(queryset=PaymentProvider.objects.all())
 
     class Meta:
         model = Transaction

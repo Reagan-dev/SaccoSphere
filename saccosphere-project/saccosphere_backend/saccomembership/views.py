@@ -1,9 +1,9 @@
-from django.shortcuts import render
+from django.http import JsonResponse
+from django.shortcuts import render, redirect, get_object_or_404
 from rest_framework import viewsets,permissions,status
 from rest_framework.decorators import action
 from rest_framework.response import Response 
-from django.shortcuts import get_object_or_404
-from .models import Membership
+from .models import Membership, MembershipFieldData, Sacco
 from .serializers import MembershipSerializer,MembershipDetailSerializer
 
 class MembershipViewSet(viewsets.ModelViewSet):
@@ -53,3 +53,26 @@ class MembershipViewSet(viewsets.ModelViewSet):
         return Response({'status': 'left'}, status=status.HTTP_200_OK)
         
     
+
+def join_sacco(request, sacco_id):
+    sacco = get_object_or_404(Sacco, id=sacco_id)
+
+    if not sacco.is_internal:
+        return redirect(sacco.website_url)
+    
+    if request.method == 'POST':
+        membership = Membership.objects.create(
+            user=request.user,
+            sacco=sacco,
+        )
+        for field in sacco.custom_fields.all():
+            value = request.POST.get(field.field_name)
+            MembershipFieldData.objects.create(
+                membership=membership,
+                sacco_field=field,
+                value=value
+            )
+        return JsonResponse({"message": "Registration submitted for approval"})
+    
+    custom_fields = sacco.custom_fields.all()
+    return render(request, 'join_sacco.html', {'sacco': sacco, 'fields': custom_fields})
