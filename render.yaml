@@ -1,0 +1,25 @@
+# render.yaml
+services:
+  - type: web
+    name: saccosphere_backend        # Render service name (can be anything unique)
+    env: python
+    plan: free                       # Change plan if needed
+    region:                   # Change to your nearest region
+    branch: main 
+    rootDir: saccosphere-project                    
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn saccosphere_backend.wsgi:application 
+    envVars:
+      - key: SECRET_KEY
+        value: 
+      - key: DEBUG
+        value: 'False'
+      - key: ALLOWED_HOSTS
+        value: saccosphere_backend.onrender.com,localhost,127.0.0.1
+      - key: DATABASE_URL
+        value: ''  # Will be auto-set when PostgreSQL is attached
+
+databases:
+  - name: saccosphere-db             # PostgreSQL database service
+    plan: free                        # Choose free or paid
+    region:                    # Same as web service
