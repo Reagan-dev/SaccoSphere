@@ -18,8 +18,8 @@ ecdsa==0.19.1
 fastapi==0.115.14
 greenlet==3.2.3
 gunicorn==23.0.0
-h11==0.16.0
-httpx==0.24.1
+h11
+httpx
 idna==3.10
 inflection==0.5.1
 mysql-connector-python==9.3.0
