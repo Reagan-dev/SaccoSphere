@@ -6,6 +6,7 @@ django-csp==4.0
 djangorestframework==3.16.0
 djangorestframework_simplejwt==5.5.1
 drf-yasg==1.21.11
+python-dotenv
 
 fastapi==0.115.14
 
