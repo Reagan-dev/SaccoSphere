@@ -52,4 +52,6 @@ tzdata==2025.2
 uritemplate==4.2.0
 uvicorn==0.35.0
 whitenoise==6.9.0
-yt-dlp==2025.9.5
+yt-dlp==2025.9.5   
+
+
