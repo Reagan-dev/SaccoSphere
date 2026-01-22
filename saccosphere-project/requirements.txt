@@ -1,3 +1,4 @@
+
 annotated-types==0.7.0
 anyio==4.9.0
 asgiref==3.8.1
@@ -7,6 +8,9 @@ cffi==1.17.1
 click==8.2.1
 colorama==0.4.6
 cryptography==45.0.4
+=======
+
+>>>>>>> 5fdcfd858428c66850acd0b17ff8a86694fa35b9
 dj-database-url==3.0.1
 Django==5.2.3
 django-cors-headers==4.7.0
@@ -14,6 +18,7 @@ django-csp==4.0
 djangorestframework==3.16.0
 djangorestframework_simplejwt==5.5.1
 drf-yasg==1.21.11
+
 ecdsa==0.19.1
 fastapi==0.115.14
 greenlet==3.2.3
@@ -52,3 +57,23 @@ uritemplate==4.2.0
 uvicorn==0.35.0
 whitenoise==6.9.0
 yt-dlp==2025.9.5
+=======
+python-dotenv
+
+fastapi==0.115.14
+
+gunicorn==23.0.0
+httpx==0.24.1
+mysql-connector-python==9.3.0
+mysqlclient==2.2.7
+packaging==25.0
+psycopg2-binary==2.9.10
+pillow==11.3.0
+PyJWT==2.8.0
+PyYAML==6.0.3
+
+SQLAlchemy==2.0.41
+
+whitenoise==6.9.0
+
+>>>>>>> 5fdcfd858428c66850acd0b17ff8a86694fa35b9
