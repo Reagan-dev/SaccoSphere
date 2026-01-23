@@ -24,7 +24,7 @@ class SaccoAdmin(admin.ModelAdmin):
     ordering = ('name',)
     readonly_fields = ('created_at', 'updated_at')
     fieldsets = (
-        ('Basic Information', {'fields': ('name', 'registration_number', 'email', 'phone_number', 'website')}),
+        ('Basic Information', {'fields': ('name', 'registration_number', 'email', 'phone_number', 'website_url')}),
         ('Address & Description', {'fields': ('address', 'description')}),
         ('Logo & Verification', {'fields': ('logo', 'verified')}),
         ('Timestamps', {'fields': ('created_at', 'updated_at')}),
