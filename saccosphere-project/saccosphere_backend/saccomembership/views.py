@@ -54,8 +54,8 @@ class MembershipViewSet(viewsets.ModelViewSet):
         
     
 
-def join_sacco(request, sacco_id):
-    sacco = get_object_or_404(Sacco, id=sacco_id)
+def join_sacco(request, uuid):
+    sacco = get_object_or_404(Sacco, id=uuid)
 
     if not sacco.is_internal:
         return redirect(sacco.website_url)
