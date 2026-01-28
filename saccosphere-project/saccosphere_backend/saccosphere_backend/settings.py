@@ -112,7 +112,6 @@ WSGI_APPLICATION = 'saccosphere_backend.wsgi.application'
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if DATABASE_URL:
-    # Production / Render PostgreSQL
     DATABASES = {
         'default': dj_database_url.parse(
             DATABASE_URL,
@@ -120,8 +119,8 @@ if DATABASE_URL:
             ssl_require=True
         )
     }
+    DATABASES['default']['OPTIONS'] = {'sslmode': 'require'}
 else:
-    # Local development (SQLite)
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
