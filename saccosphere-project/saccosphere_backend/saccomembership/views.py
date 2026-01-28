@@ -4,7 +4,7 @@ from rest_framework import viewsets,permissions,status
 from rest_framework.decorators import action
 from rest_framework.response import Response 
 from .models import Membership, MembershipFieldData, Sacco
-from .serializers import MembershipSerializer,MembershipDetailSerializer
+from .serializers import MembershipCreateSerializer,MembershipDetailSerializer
 
 class MembershipViewSet(viewsets.ModelViewSet):
     queryset = Membership.objects.all()
@@ -14,7 +14,7 @@ class MembershipViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action in ['list','retrieve']:
             return MembershipDetailSerializer
-        return MembershipSerializer
+        return MembershipCreateSerializer
     
     def query_set(self):
         user = self.request.user
@@ -66,7 +66,7 @@ def join_sacco(request, uuid):
             sacco=sacco,
         )
         for field in sacco.custom_fields.all():
-            value = request.POST.get(field.field_name)
+            value = request.POST.get(field.field_key)
             MembershipFieldData.objects.create(
                 membership=membership,
                 sacco_field=field,

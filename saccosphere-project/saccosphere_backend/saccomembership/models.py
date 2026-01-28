@@ -37,7 +37,7 @@ class Membership(models.Model):
 
 
 # Dynamic registration fields per sacco
-class Saccofield(models.Model):
+class SaccoField(models.Model):
     FIELD_TYPES = [
         ('text', 'Text'),
         ('number', 'Number'),
@@ -45,21 +45,59 @@ class Saccofield(models.Model):
         ('email', 'Email'),
         ('file', 'File Upload'),
     ]
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    sacco = models.ForeignKey(Sacco, on_delete=models.CASCADE, related_name='custom_fields')
-    field_name = models.CharField(max_length=100)
-    field_type = models.CharField(max_length=20, choices=FIELD_TYPES, default='text')
+    sacco = models.ForeignKey(
+        Sacco,
+        on_delete=models.CASCADE,
+        related_name='custom_fields'
+    )
+
+    # internal, never changes
+    field_key = models.SlugField(
+        max_length=100,
+        help_text="Internal key e.g. national_id"
+    )
+
+    # user-facing label
+    field_label = models.CharField(
+        max_length=100,
+        help_text="Displayed label e.g. National ID Number"
+    )
+
+    field_type = models.CharField(
+        max_length=20,
+        choices=FIELD_TYPES,
+        default='text'
+    )
+
     required = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = ('sacco', 'field_key')
+        ordering = ['order']
 
     def __str__(self):
-        return f"{self.sacco.name} - {self.field_name})"
+        return f"{self.sacco.name} - {self.field_label}"
+
 
 
 class MembershipFieldData(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    membership = models.ForeignKey(Membership, on_delete=models.CASCADE, related_name='field_data')
-    sacco_field = models.ForeignKey(Saccofield, on_delete=models.CASCADE)
-    value = models.TextField(blank = True, null = True)
+    membership = models.ForeignKey(
+        Membership,
+        on_delete=models.CASCADE,
+        related_name='field_data'
+    )
+    sacco_field = models.ForeignKey(
+        SaccoField,
+        on_delete=models.CASCADE
+    )
+    value = models.TextField(blank=True, null=True)
+
+    class Meta:
+        unique_together = ('membership', 'sacco_field')
 
     def __str__(self):
-        return f"{self.sacco_field.field_name}: {self.value}"
+        return f"{self.sacco_field.field_label}: {self.value}"
