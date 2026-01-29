@@ -75,4 +75,4 @@ def join_sacco(request, uuid):
         return JsonResponse({"message": "Registration submitted for approval"})
     
     custom_fields = sacco.custom_fields.all()
-    return render(request, 'join_sacco.html', {'sacco': sacco, 'fields': custom_fields})
+    return render(request, 'saccomembership/join_sacco.html', {'sacco': sacco, 'fields': custom_fields})
