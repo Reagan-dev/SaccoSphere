@@ -1,12 +1,9 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
-from .views import MembershipViewSet, sacco_fields  
+from .views import MembershipViewSet, SaccoFieldViewSet 
 
 router = DefaultRouter()
 router.register(r'memberships', MembershipViewSet, basename='membership')
+router.register(r'sacco_fields', SaccoFieldViewSet, basename='sacco-fields')
 
-urlpatterns = [
-    path('saccos/fields/', sacco_fields, name='sacco_fields'),
-]
-
-urlpatterns += router.urls
+urlpatterns = router.urls

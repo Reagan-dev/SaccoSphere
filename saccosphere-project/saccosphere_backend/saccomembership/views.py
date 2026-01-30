@@ -62,12 +62,13 @@ class MembershipViewSet(viewsets.ModelViewSet):
         membership.save()
         return Response({'status': 'left'})
     
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def sacco_fields(request, id):
-    sacco = get_object_or_404(Sacco, id=id)
+class SaccoFieldViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = SaccoFieldSerializer
+    permission_classes = [IsAuthenticated]
 
-    fields = SaccoField.objects.filter(sacco=sacco).order_by('order')
-    serializer = SaccoFieldSerializer(fields, many=True)
-
-    return Response(serializer.data)
+    def get_queryset(self):
+        # Filter by sacco ID from query parameter `id`
+        sacco_id = self.request.query_params.get('id')
+        if sacco_id:
+            return SaccoField.objects.filter(sacco_id=sacco_id).order_by('order')
+        return SaccoField.objects.none()  # return empty if no id provided
