@@ -80,3 +80,15 @@ class MembershipDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Membership
         fields = ['id', 'user', 'sacco', 'status', 'date_joined', 'is_active']
+
+class SaccoFieldSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SaccoField
+        fields = [
+            'id',
+            'field_key',
+            'field_label',
+            'field_type',
+            'required',
+            'order'
+        ]

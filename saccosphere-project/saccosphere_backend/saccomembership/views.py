@@ -1,14 +1,16 @@
 from django.http import JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from rest_framework import viewsets,permissions,status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework import viewsets, permissions, status
-from rest_framework.decorators import action
 from rest_framework.response import Response
-from .models import Membership
+from rest_framework.permissions import IsAuthenticated
+from .models import Membership, SaccoField, MembershipFieldData
+from accounts.models import Sacco
 from .serializers import (
     MembershipCreateSerializer,
-    MembershipDetailSerializer
+    MembershipDetailSerializer,
+    SaccoFieldSerializer
 )
 
 
@@ -59,3 +61,13 @@ class MembershipViewSet(viewsets.ModelViewSet):
         membership.is_active = False
         membership.save()
         return Response({'status': 'left'})
+    
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def sacco_fields(request, sacco_id):
+    sacco = get_object_or_404(Sacco, id=sacco_id)
+
+    fields = SaccoField.objects.filter(sacco=sacco).order_by('order')
+    serializer = SaccoFieldSerializer(fields, many=True)
+
+    return Response(serializer.data)
