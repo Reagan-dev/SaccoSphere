@@ -5,7 +5,7 @@ from accounts.serializers import UserSerializer, SaccoSerializer
 
 class MembershipCreateSerializer(serializers.ModelSerializer):
     fields = serializers.DictField(
-        child=serializers.JSONField(),
+        child=serializers.CharField(),
         write_only=True
     )
 
@@ -19,39 +19,24 @@ class MembershipCreateSerializer(serializers.ModelSerializer):
             'is_active',
             'fields',
         ]
-        read_only_fields = [
-            'id',
-            'status',
-            'date_joined',
-            'is_active',
-        ]
+        read_only_fields = ['id', 'status', 'date_joined', 'is_active']
 
     def validate(self, data):
-        request = self.context.get('request')
-
-        if not request or not request.user.is_authenticated:
-            raise serializers.ValidationError("Authentication required.")
-
+        request = self.context['request']
         user = request.user
         sacco = data['sacco']
         submitted_fields = data.get('fields', {})
 
-        # Prevent duplicate membership
         if Membership.objects.filter(user=user, sacco=sacco).exists():
-            raise serializers.ValidationError(
-                {"detail": "You are already a member of this sacco."}
-            )
+            raise serializers.ValidationError("You already joined this sacco.")
 
         sacco_fields = SaccoField.objects.filter(sacco=sacco)
         field_map = {f.field_key: f for f in sacco_fields}
 
         errors = {}
 
-        # Validate required + unknown fields
         for field in sacco_fields:
-            value = submitted_fields.get(field.field_key)
-
-            if field.required and not value:
+            if field.required and not submitted_fields.get(field.field_key):
                 errors[field.field_key] = "This field is required."
 
         for key in submitted_fields.keys():
@@ -64,7 +49,7 @@ class MembershipCreateSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        request = self.context.get('request')
+        request = self.context['request']
         user = request.user
         fields_data = validated_data.pop('fields')
         sacco = validated_data['sacco']
@@ -76,7 +61,7 @@ class MembershipCreateSerializer(serializers.ModelSerializer):
         )
 
         sacco_fields = SaccoField.objects.filter(sacco=sacco)
-        field_map = {field.field_key: field for field in sacco_fields}
+        field_map = {f.field_key: f for f in sacco_fields}
 
         for key, value in fields_data.items():
             MembershipFieldData.objects.create(
@@ -86,7 +71,8 @@ class MembershipCreateSerializer(serializers.ModelSerializer):
             )
 
         return membership
-    
+
+
 class MembershipDetailSerializer(serializers.ModelSerializer):
     sacco = SaccoSerializer(read_only=True)
     user = UserSerializer(read_only=True)
@@ -94,5 +80,3 @@ class MembershipDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Membership
         fields = ['id', 'user', 'sacco', 'status', 'date_joined', 'is_active']
-        read_only_fields = ['id', 'date_joined', 'is_active']
-   
