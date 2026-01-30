@@ -64,8 +64,8 @@ class MembershipViewSet(viewsets.ModelViewSet):
     
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def sacco_fields(request, sacco_id):
-    sacco = get_object_or_404(Sacco, id=sacco_id)
+def sacco_fields(request, id):
+    sacco = get_object_or_404(Sacco, id=id)
 
     fields = SaccoField.objects.filter(sacco=sacco).order_by('order')
     serializer = SaccoFieldSerializer(fields, many=True)

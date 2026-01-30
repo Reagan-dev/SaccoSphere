@@ -6,7 +6,7 @@ router = DefaultRouter()
 router.register(r'memberships', MembershipViewSet, basename='membership')
 
 urlpatterns = [
-    path('saccos/<int:sacco_id>/fields/', sacco_fields, name='sacco_fields'),
+    path('saccos/<uuid:id>/fields/', sacco_fields, name='sacco_fields'),
 ]
 
 urlpatterns += router.urls
