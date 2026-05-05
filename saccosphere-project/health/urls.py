@@ -1,11 +1,12 @@
 from django.urls import path
 
-from .views import HealthCheckView, ReadinessCheckView
+from .views import LivenessView, ReadinessView
 
 
 app_name = 'health'
 
 urlpatterns = [
-    path('', HealthCheckView.as_view(), name='health-check'),
-    path('ready/', ReadinessCheckView.as_view(), name='readiness-check'),
+    path('', LivenessView.as_view(), name='liveness'),
+    path('live/', LivenessView.as_view(), name='liveness-check'),
+    path('ready/', ReadinessView.as_view(), name='readiness'),
 ]

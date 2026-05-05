@@ -1,0 +1,114 @@
+services:
+  - type: web
+    name: saccosphere-api
+    runtime: python
+    plan: free
+    buildCommand: ./build.sh
+    startCommand: gunicorn config.wsgi:application
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: false
+      - key: ALLOWED_HOSTS
+        value: .onrender.com
+      - key: DATABASE_URL
+        fromDatabase:
+          name: saccosphere-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: saccosphere-redis
+          property: connectionString
+  - type: redis
+    name: saccosphere-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+
+databases:
+  - name: saccosphere-db
+    plan: free
+
+# ============================================================
+# REVIEW — READ THIS THEN DELETE FROM THIS LINE TO THE END
+# ============================================================
+#
+# saccomanagement/models.py
+#
+# SystemAuditLog records important actions in the system. It stores who did
+# the action, what resource was touched, the old and new values, IP address,
+# browser user agent, and when it happened. This is useful for security and
+# accountability.
+#
+# DataConsentLog records when one user accesses another user's data and why.
+# This helps with privacy tracking and audit requirements.
+#
+# notifications/models.py
+#
+# Notification stores an in-app notification for a user. It tracks the title,
+# message, category, read state, push state, optional mobile deep link, and an
+# optional related object reference.
+#
+# DeviceToken stores a mobile or web push notification token for a user. It
+# lets the platform know which devices can receive push notifications.
+#
+# ledger/models.py
+#
+# LedgerEntry stores an accounting record for a SACCO membership. Each entry is
+# either a debit or credit and belongs to a category such as saving deposit,
+# loan repayment, fee, penalty, or dividend.
+#
+# dashboard/views.py and dashboard/urls.py
+#
+# The dashboard views are empty authenticated API views for Week 2 work. They
+# return empty JSON for now, but the routes are already connected.
+#
+# billing/models.py
+#
+# SaccoSubscription is a basic subscription record for one SACCO. It stores the
+# plan, status, monthly fee, and dates.
+#
+# PlatformRevenue is a simple revenue tracking record for subscription revenue,
+# transaction fees, or other platform income.
+#
+# health/views.py and health/urls.py
+#
+# LivenessView returns {"status": "ok"} when the app process is alive.
+# ReadinessView checks whether the database and cache are reachable before
+# returning ready status.
+#
+# Deployment files
+#
+# requirements.txt lists the Python packages needed by the project. Procfile
+# tells a hosting platform how to start the web server. build.sh installs
+# packages, collects static files, and runs migrations. render.yaml describes
+# the Render web service, PostgreSQL database, and Redis service.
+#
+# Django/Python concepts you might not know well
+#
+# A GenericIPAddressField stores IPv4 or IPv6 addresses safely.
+#
+# A database index makes common filters faster. For example, notifications are
+# indexed by user and is_read because unread-notification queries are common.
+#
+# A health check is used by hosting platforms to know if the app is alive. A
+# readiness check is stricter because it confirms dependencies like the
+# database and cache are reachable.
+#
+# Manual test to confirm it works
+#
+# After installing requirements, run python manage.py makemigrations and python
+# manage.py migrate. Then visit /health/ and /health/ready/ to confirm the app
+# responds.
+#
+# Important design decision
+#
+# The deployment files use config.wsgi because this project's actual WSGI file
+# is config/wsgi.py. Using a different module name would make Gunicorn fail at
+# startup.
+#
+# END OF REVIEW — DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
+# ============================================================

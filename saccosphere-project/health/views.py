@@ -1,28 +1,59 @@
+from django.core.cache import cache
+from django.db import connection
+from rest_framework import status
+from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from config.response import StandardResponseMixin
 
-
-class HealthCheckView(StandardResponseMixin, APIView):
+class LivenessView(APIView):
     authentication_classes = []
     permission_classes = []
 
     def get(self, request):
-        return self.ok({'status': 'ok'}, 'SaccoSphere is healthy')
+        return Response({'status': 'ok'})
 
-    def post(self, request):
-        return self.created(
-            {
-                'status': 'ok',
-                'received': request.data,
-            },
-            'Health check post received',
+
+class ReadinessView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request):
+        checks = {
+            'database': self._database_ready(),
+            'cache': self._cache_ready(),
+        }
+        ready = all(checks.values())
+        response_status = (
+            status.HTTP_200_OK
+            if ready
+            else status.HTTP_503_SERVICE_UNAVAILABLE
         )
 
+        return Response(
+            {
+                'status': 'ok' if ready else 'unavailable',
+                'checks': checks,
+            },
+            status=response_status,
+        )
 
-class ReadinessCheckView(StandardResponseMixin, APIView):
-    authentication_classes = []
-    permission_classes = []
+    def _database_ready(self):
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT 1')
+                cursor.fetchone()
+        except Exception:
+            return False
 
-    def get(self, request):
-        return self.ok({'ready': True}, 'SaccoSphere is ready')
+        return True
+
+    def _cache_ready(self):
+        try:
+            cache.set('health:readiness', 'ok', timeout=5)
+            return cache.get('health:readiness') == 'ok'
+        except Exception:
+            return False
+
+
+HealthCheckView = LivenessView
+ReadinessCheckView = ReadinessView
