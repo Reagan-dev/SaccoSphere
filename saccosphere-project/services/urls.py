@@ -1,3 +1,39 @@
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
+
+from .views import (
+    LoanApplyView,
+    LoanCollectionView,
+    LoanDetailView,
+    LoanListView,
+    LoanTypeListView,
+    RepaymentScheduleView,
+    SavingListView,
+    SavingsTypeViewSet,
+)
+
+
+router = DefaultRouter()
+router.register(
+    'savings-types',
+    SavingsTypeViewSet,
+    basename='savings-type',
+)
+
+
 app_name = 'services'
 
-urlpatterns = []
+urlpatterns = [
+    path('', include(router.urls)),
+    path('savings/', SavingListView.as_view(), name='saving-list'),
+    path('loan-types/', LoanTypeListView.as_view(), name='loan-type-list'),
+    path('loans/', LoanCollectionView.as_view(), name='loan-collection'),
+    path('loans/apply/', LoanApplyView.as_view(), name='loan-apply'),
+    path('loans/list/', LoanListView.as_view(), name='loan-list'),
+    path('loans/<uuid:id>/', LoanDetailView.as_view(), name='loan-detail'),
+    path(
+        'loans/<uuid:id>/schedule/',
+        RepaymentScheduleView.as_view(),
+        name='repayment-schedule',
+    ),
+]
