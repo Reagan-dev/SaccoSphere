@@ -1,0 +1,12 @@
+{
+  "recommendations": [
+    "eamodio.gitlens",
+    "mikestead.dotenv",
+    "ms-python.python",
+    "ms-python.black-formatter",
+    "batisteo.vscode-django",
+    "qwtel.sqlite-viewer",
+    "rangav.vscode-thunder-client",
+    "usernamehw.errorlens"
+  ]
+}
