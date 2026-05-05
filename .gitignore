@@ -1,0 +1,16 @@
+venv/
+.venv/
+saccosphere-project/.venv/
+
+__pycache__/
+*.py[cod]
+
+db.sqlite3
+saccosphere-project/db.sqlite3
+
+logs/
+saccosphere-project/logs/
+
+.env
+*.log
+tmp*/
