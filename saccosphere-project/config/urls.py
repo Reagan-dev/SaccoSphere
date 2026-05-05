@@ -20,7 +20,7 @@ schema_view = get_schema_view(
 
 api_v1_patterns = [
     path('accounts/', include('accounts.urls')),
-    path('saccomembership/', include('saccomembership.urls')),
+    path('members/', include('saccomembership.urls')),
     path('saccomanagement/', include('saccomanagement.urls')),
     path('services/', include('services.urls')),
     path('payments/', include('payments.urls')),

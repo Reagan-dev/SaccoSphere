@@ -1,4 +1,6 @@
 from rest_framework import status
+from rest_framework.exceptions import NotAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
 
@@ -54,7 +56,14 @@ class StandardResponseMixin:
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    def permission_denied(self, message):
+    def permission_denied(self, request=None, message=None, code=None):
+        if request is not None and not isinstance(request, str):
+            if request.authenticators and not request.successful_authenticator:
+                raise NotAuthenticated()
+
+            raise PermissionDenied(detail=message, code=code)
+
+        message = message or request
         return Response(
             {
                 'success': False,
