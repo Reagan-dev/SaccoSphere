@@ -44,7 +44,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'config.middleware.CorrelationIdMiddleware',
+    'config.middleware.RequestCorrelationMiddleware',
+    'config.middleware.LoggingMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -137,7 +138,7 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PAGINATION_CLASS': (
-        'rest_framework.pagination.PageNumberPagination'
+        'config.pagination.SaccoSpherePagination'
     ),
     'PAGE_SIZE': 20,
     'EXCEPTION_HANDLER': (

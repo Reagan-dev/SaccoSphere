@@ -11,3 +11,4 @@ whitenoise
 Pillow
 redis
 sentry-sdk
+celery
