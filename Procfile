@@ -1,1 +1,0 @@
-web: gunicorn saccosphere_backend.wsgi:application
