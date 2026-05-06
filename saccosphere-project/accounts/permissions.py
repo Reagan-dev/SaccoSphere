@@ -34,3 +34,43 @@ class IsPhoneVerified(BasePermission):
             return False
 
         return bool(user.phone_number)
+
+
+class IsSuperAdmin(BasePermission):
+    """
+    Allow access only to users with SUPER_ADMIN role.
+    """
+
+    message = 'Only super admins can access this resource.'
+
+    def has_permission(self, request, view):
+        user = request.user
+
+        if not user or not user.is_authenticated:
+            return False
+
+        # Import here to avoid circular imports
+        from saccomanagement.models import Role
+
+        return user.roles.filter(name=Role.SUPER_ADMIN).exists()
+
+
+class IsSaccoAdmin(BasePermission):
+    """
+    Allow access to users with SACCO_ADMIN or SUPER_ADMIN role.
+    """
+
+    message = 'Only sacco admins or super admins can access this resource.'
+
+    def has_permission(self, request, view):
+        user = request.user
+
+        if not user or not user.is_authenticated:
+            return False
+
+        # Import here to avoid circular imports
+        from saccomanagement.models import Role
+
+        return user.roles.filter(
+            name__in=[Role.SACCO_ADMIN, Role.SUPER_ADMIN]
+        ).exists()

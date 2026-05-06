@@ -61,3 +61,102 @@ class DataConsentLog(models.Model):
             f'{self.accessed_by.email} accessed {self.user.email} '
             f'{self.data_type}'
         )
+
+
+class Role(models.Model):
+    """
+    Role-based access control model.
+    
+    A role represents a set of permissions a user has within a sacco context.
+    Platform-wide roles have sacco=None.
+    """
+
+    MEMBER = 'MEMBER'
+    SACCO_ADMIN = 'SACCO_ADMIN'
+    SUPER_ADMIN = 'SUPER_ADMIN'
+
+    ROLE_CHOICES = [
+        (MEMBER, 'Member'),
+        (SACCO_ADMIN, 'Sacco Admin'),
+        (SUPER_ADMIN, 'Super Admin'),
+    ]
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='roles',
+        help_text='The user who holds this role.',
+    )
+    sacco = models.ForeignKey(
+        'accounts.Sacco',
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name='admin_roles',
+        help_text='The SACCO this role is scoped to. Null for platform-wide roles.',
+    )
+    name = models.CharField(
+        max_length=20,
+        choices=ROLE_CHOICES,
+        help_text='The role name (MEMBER, SACCO_ADMIN, SUPER_ADMIN).',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['user', 'sacco', 'name']
+        ordering = ['-created_at']
+
+    def __str__(self):
+        sacco_context = self.sacco.name if self.sacco else 'Platform'
+        return f'{self.user.email} — {self.name} — {sacco_context}'
+
+
+class RolePermission(models.Model):
+    """
+    Granular permissions tied to a role.
+    
+    Controls CRUD operations on specific resources (e.g., 'loans', 'members').
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    role = models.ForeignKey(
+        Role,
+        on_delete=models.CASCADE,
+        related_name='permissions',
+        help_text='The role this permission belongs to.',
+    )
+    resource = models.CharField(
+        max_length=50,
+        help_text='Resource name (e.g., loans, members, reports).',
+    )
+    can_create = models.BooleanField(
+        default=False,
+        help_text='Allow creation of this resource.',
+    )
+    can_read = models.BooleanField(
+        default=True,
+        help_text='Allow reading this resource.',
+    )
+    can_update = models.BooleanField(
+        default=False,
+        help_text='Allow updating this resource.',
+    )
+    can_delete = models.BooleanField(
+        default=False,
+        help_text='Allow deletion of this resource.',
+    )
+
+    class Meta:
+        unique_together = ['role', 'resource']
+
+    def __str__(self):
+        return f'{self.role} — {self.resource}'
