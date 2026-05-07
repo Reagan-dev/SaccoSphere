@@ -8,7 +8,6 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsSuperAdmin, IsSaccoAdmin
 from accounts.models import User, Sacco
-from config.response import SuccessResponse
 
 from .models import Role
 from .role_serializers import RoleSerializer
