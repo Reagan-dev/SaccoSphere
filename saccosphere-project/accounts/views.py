@@ -178,7 +178,6 @@ class PasswordChangeView(StandardResponseMixin, APIView):
         request.user.save(update_fields=['password'])
         return self.ok(None, 'Password changed successfully')
 
-
 class SaccoListView(StandardResponseMixin, ListAPIView):
     serializer_class = SaccoListSerializer
     permission_classes = [AllowAny]
@@ -190,35 +189,72 @@ class SaccoListView(StandardResponseMixin, ListAPIView):
         if not user.is_authenticated or not user.is_staff:
             queryset = queryset.filter(is_publicly_listed=True)
 
-        search = self.request.query_params.get('search')
-        sector = self.request.query_params.get('sector')
-        county = self.request.query_params.get('county')
-        membership_type = self.request.query_params.get('membership_type')
-        verified_only = self.request.query_params.get('verified_only')
+        # Annotate member count
+        queryset = queryset.annotate(
+            member_count=Count(
+                'membership',
+                filter=Q(membership__status='APPROVED'),
+            )
+        )
 
+        # Search filters
+        search = self.request.query_params.get('search')
         if search:
             queryset = queryset.filter(
                 Q(name__icontains=search)
                 | Q(description__icontains=search)
+                | Q(registration_number__icontains=search)
             )
+
+        # Exact filters
+        sector = self.request.query_params.get('sector')
         if sector:
             queryset = queryset.filter(sector=sector)
+
+        county = self.request.query_params.get('county')
         if county:
-            queryset = queryset.filter(county__iexact=county)
+            queryset = queryset.filter(county__icontains=county)
+
+        membership_type = self.request.query_params.get('membership_type')
         if membership_type:
             queryset = queryset.filter(membership_type=membership_type)
+
+        # Boolean filters
+        verified_only = self.request.query_params.get('verified_only')
         if verified_only == 'true':
             queryset = queryset.filter(is_verified=True)
 
-        try:
-            return queryset.annotate(
-                member_count=Count(
-                    'membership',
-                    filter=Q(membership__status='approved'),
-                )
-            )
-        except FieldError:
-            return queryset
+        # Member count range filters
+        min_members = self.request.query_params.get('min_members')
+        if min_members:
+            try:
+                min_members = int(min_members)
+                queryset = queryset.filter(member_count__gte=min_members)
+            except (ValueError, TypeError):
+                pass
+
+        max_members = self.request.query_params.get('max_members')
+        if max_members:
+            try:
+                max_members = int(max_members)
+                queryset = queryset.filter(member_count__lte=max_members)
+            except (ValueError, TypeError):
+                pass
+
+        # Ordering
+        ordering = self.request.query_params.get('ordering', '-created_at')
+        valid_orderings = [
+            'name',
+            '-name',
+            'member_count',
+            '-member_count',
+            'created_at',
+            '-created_at',
+        ]
+        if ordering in valid_orderings:
+            queryset = queryset.order_by(ordering)
+
+        return queryset
 
     @swagger_auto_schema(
         operation_summary='List SACCOs',

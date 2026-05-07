@@ -100,6 +100,8 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
 class SaccoListSerializer(serializers.ModelSerializer):
     member_count = serializers.IntegerField(read_only=True)
+    membership_open = serializers.SerializerMethodField()
+    can_apply = serializers.SerializerMethodField()
 
     class Meta:
         model = Sacco
@@ -112,7 +114,18 @@ class SaccoListSerializer(serializers.ModelSerializer):
             'membership_type',
             'is_verified',
             'member_count',
+            'registration_fee',
+            'membership_open',
+            'can_apply',
         )
+
+    def get_membership_open(self, obj):
+        """Check if membership is open for applications."""
+        return obj.membership_type == Sacco.MembershipType.OPEN
+
+    def get_can_apply(self, obj):
+        """Check if current user can apply (always False for AllowAny)."""
+        return False
 
 
 class SaccoDetailSerializer(SaccoListSerializer):
