@@ -6,6 +6,58 @@ from django.db import models
 from django.utils import timezone
 
 
+KENYA_COUNTIES = [
+    'Baringo',
+    'Bomet',
+    'Bungoma',
+    'Baricho',
+    'Elgeyo-Marakwet',
+    'Embu',
+    'Garissa',
+    'Homa Bay',
+    'Isiolo',
+    'Kajiado',
+    'Kakamega',
+    'Kamba',
+    'Kericho',
+    'Kiambu',
+    'Kilifi',
+    'Kirinyaga',
+    'Kisii',
+    'Kisumu',
+    'Kitui',
+    'Kwale',
+    'Laikipia',
+    'Lamu',
+    'Machakos',
+    'Makueni',
+    'Mandera',
+    'Marsabit',
+    'Meru',
+    'Migori',
+    'Mombasa',
+    'Murang\'a',
+    'Nairobi',
+    'Nakuru',
+    'Nandi',
+    'Narok',
+    'Nyamira',
+    'Nyandarua',
+    'Nyeri',
+    'Samburu',
+    'Siaya',
+    'Taita-Taveta',
+    'Tana River',
+    'Transnzoia',
+    'Turkana',
+    'Tharaka-Nithi',
+    'Uasin Gishu',
+    'Vihiga',
+    'Wajir',
+    'West Pokot',
+]
+
+
 class UserManager(BaseUserManager):
     use_in_migrations = True
 
@@ -175,6 +227,12 @@ class Sacco(models.Model):
     min_loan_months = models.PositiveIntegerField(
         default=3,
         help_text='Minimum membership duration before loan eligibility.',
+    )
+    registration_fee = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text='Joining fee in KES.',
     )
     website = models.URLField(
         null=True,
