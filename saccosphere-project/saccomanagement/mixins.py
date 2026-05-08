@@ -1,3 +1,4 @@
+from django.http import JsonResponse
 from rest_framework.exceptions import PermissionDenied
 
 from saccomanagement.models import Role
@@ -10,6 +11,57 @@ class SaccoScopedMixin:
     Provides methods to filter querysets based on the current SACCO context.
     Only SACCO_ADMIN and SUPER_ADMIN can use these views.
     """
+
+    def _set_sacco_context(self):
+        """
+        Set SACCO context from X-Sacco-ID header or first SACCO_ADMIN role.
+        
+        Called before get_queryset to validate and set the SACCO context.
+        Returns JsonResponse with 403 if unauthorized, None otherwise.
+        """
+        user = self.request.user
+        
+        # Initialize as None
+        self.request.current_sacco = None
+        
+        # SUPER_ADMIN sees all data
+        if user.is_staff or user.roles.filter(name=Role.SUPER_ADMIN).exists():
+            return None
+        
+        # Get all SACCO_ADMIN roles
+        admin_roles = user.roles.filter(
+            name=Role.SACCO_ADMIN,
+            sacco__isnull=False,
+        ).select_related('sacco')
+        
+        if not admin_roles.exists():
+            # Not a SACCO admin
+            return None
+        
+        # Check for X-Sacco-ID header
+        sacco_id = self.request.headers.get('X-Sacco-ID')
+        
+        if sacco_id:
+            # Validate the header-specified SACCO
+            role = admin_roles.filter(sacco_id=sacco_id).first()
+            if not role:
+                return JsonResponse(
+                    {
+                        'success': False,
+                        'message': 'You do not have access to this SACCO.',
+                        'error_code': 'UNAUTHORIZED_SACCO',
+                    },
+                    status=403,
+                )
+            self.request.current_sacco = role.sacco
+            return None
+        
+        # No header: use first SACCO_ADMIN role
+        role = admin_roles.first()
+        if role:
+            self.request.current_sacco = role.sacco
+        
+        return None
 
     def get_sacco_context(self):
         """

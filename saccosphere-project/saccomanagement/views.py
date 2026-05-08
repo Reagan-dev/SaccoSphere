@@ -31,6 +31,13 @@ class AdminMemberListView(SaccoScopedMixin, ListAPIView):
     serializer_class = MembershipListSerializer
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
 
+    def get(self, request, *args, **kwargs):
+        """Set SACCO context before processing request."""
+        response = self._set_sacco_context()
+        if response:  # 403 error
+            return response
+        return super().get(request, *args, **kwargs)
+
     def get_queryset(self):
         """Get members scoped to current SACCO with search/status filters."""
         queryset = Membership.objects.all()
@@ -81,6 +88,13 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
     lookup_field = 'id'
+
+    def patch(self, request, *args, **kwargs):
+        """Set SACCO context before processing request."""
+        response = self._set_sacco_context()
+        if response:  # 403 error
+            return response
+        return super().patch(request, *args, **kwargs)
 
     def get_queryset(self):
         """Get loans scoped to current SACCO."""
