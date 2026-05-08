@@ -1,10 +1,14 @@
+from decimal import Decimal
+from django.db.models import Sum
 from rest_framework.generics import (
+    APIView,
     CreateAPIView,
     ListAPIView,
     ListCreateAPIView,
     RetrieveAPIView,
 )
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from .models import Loan, LoanType, RepaymentSchedule, Saving, SavingsType
@@ -141,6 +145,91 @@ class LoanDetailView(RetrieveAPIView):
             'membership__sacco',
             'loan_type',
         )
+
+
+class SavingsBreakdownView(APIView):
+    """
+    Get savings breakdown by type for a specific SACCO.
+    
+    GET /api/v1/services/savings/breakdown/?sacco_id=
+    
+    Returns aggregated totals for BOSA, FOSA, and SHARE_CAPITAL.
+    """
+    
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """Calculate and return savings breakdown."""
+        sacco_id = request.query_params.get('sacco_id')
+        
+        if not sacco_id:
+            return Response({
+                'success': False,
+                'message': 'sacco_id parameter is required.',
+                'error_code': 'MISSING_PARAMETER',
+            }, status=400)
+
+        # Get aggregated savings data
+        savings_data = Saving.objects.filter(
+            membership__user=request.user,
+            membership__sacco_id=sacco_id,
+            status='ACTIVE'
+        ).values('savings_type__name').annotate(
+            total=Sum('amount')
+        )
+
+        # Initialize breakdown with defaults
+        breakdown = {
+            'sacco_id': sacco_id,
+            'sacco_name': '',
+            'bosa_total': Decimal('0.00'),
+            'fosa_total': Decimal('0.00'),
+            'share_capital_total': Decimal('0.00'),
+            'dividend_eligible_total': Decimal('0.00'),
+            'total': Decimal('0.00'),
+        }
+
+        # Get SACCO name
+        from accounts.models import Sacco
+        try:
+            sacco = Sacco.objects.get(id=sacco_id)
+            breakdown['sacco_name'] = sacco.name
+        except Sacco.DoesNotExist:
+            pass
+
+        # Process aggregated data
+        for item in savings_data:
+            savings_type = item['savings_type__name']
+            total = item['total'] or Decimal('0.00')
+            
+            if savings_type == SavingsType.Name.BOSA:
+                breakdown['bosa_total'] = total
+            elif savings_type == SavingsType.Name.FOSA:
+                breakdown['fosa_total'] = total
+            elif savings_type == SavingsType.Name.SHARE_CAPITAL:
+                breakdown['share_capital_total'] = total
+
+        # Calculate total and dividend eligible amount
+        breakdown['total'] = (
+            breakdown['bosa_total'] + 
+            breakdown['fosa_total'] + 
+            breakdown['share_capital_total']
+        )
+
+        # Get dividend eligible total
+        dividend_eligible = Saving.objects.filter(
+            membership__user=request.user,
+            membership__sacco_id=sacco_id,
+            status='ACTIVE',
+            dividend_eligible=True
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        
+        breakdown['dividend_eligible_total'] = dividend_eligible
+
+        return Response({
+            'success': True,
+            'data': breakdown
+        })
 
 
 class RepaymentScheduleView(ListAPIView):
