@@ -173,6 +173,19 @@ class AmortizationEngineTestCase(TestCase):
         # January has 31 days, so due_day=31 is valid
         self.assertEqual(schedule[0]['due_date'], date(2024, 1, 31))
 
+    def test_due_date_adjustment(self):
+        """Test due date adjustment when due_day exceeds month length."""
+        schedule = generate_repayment_schedule(
+            loan_amount=Decimal('10000.00'),
+            annual_interest_rate=Decimal('12.0'),
+            term_months=1,
+            start_date=date(2024, 1, 30),  # Before due_day
+            due_day=31  # February doesn't have 31 days
+        )
+        
+        # Should adjust to last day of February (29 in leap year 2024)
+        self.assertEqual(schedule[0]['due_date'], date(2024, 2, 29))
+
     def test_interest_portion_decreases_over_time(self):
         """Test that interest portion decreases while principal increases."""
         schedule = generate_repayment_schedule(

@@ -526,7 +526,7 @@ class PasswordResetRequestView(APIView):
     @swagger_auto_schema(
         operation_summary='Request password reset',
         request_body=serializers.OTPRequestSerializer,
-        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}},
+        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
     )
     def post(self, request):
         serializer = serializers.OTPRequestSerializer(data=request.data)
@@ -562,7 +562,7 @@ class PasswordResetConfirmView(APIView):
     @swagger_auto_schema(
         operation_summary='Confirm password reset',
         request_body=serializers.PasswordResetConfirmSerializer,
-        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}},
+        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
     )
     def post(self, request):
         serializer = serializers.PasswordResetConfirmSerializer(data=request.data)
