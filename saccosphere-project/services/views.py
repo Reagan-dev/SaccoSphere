@@ -237,7 +237,66 @@ class RepaymentScheduleView(ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        """Get or generate repayment schedule for the loan."""
+        from django.db import transaction
+        from django.utils import timezone
+        from .engines.amortization import generate_repayment_schedule
+        
+        loan_id = self.kwargs['id']
+        
+        # Check if schedule already exists
+        existing_schedule = RepaymentSchedule.objects.filter(
+            loan__id=loan_id,
+            loan__membership__user=self.request.user,
+        ).select_related('loan')
+        
+        if existing_schedule.exists():
+            return existing_schedule
+        
+        # Get the loan
+        try:
+            loan = Loan.objects.get(
+                id=loan_id,
+                membership__user=self.request.user,
+            )
+        except Loan.DoesNotExist:
+            return RepaymentSchedule.objects.none()
+        
+        # Generate schedule if loan is in appropriate status
+        if loan.status not in [Loan.Status.APPROVED, Loan.Status.ACTIVE, Loan.Status.DISBURSEMENT_PENDING]:
+            return RepaymentSchedule.objects.none()
+        
+        # Use disbursement date or today as start date
+        start_date = loan.disbursement_date or timezone.localdate()
+        
+        # Generate amortisation schedule
+        schedule_data = generate_repayment_schedule(
+            loan_amount=loan.amount,
+            annual_interest_rate=loan.interest_rate,
+            term_months=loan.term_months,
+            start_date=start_date,
+        )
+        
+        # Create RepaymentSchedule records in a transaction
+        with transaction.atomic():
+            schedule_instances = []
+            for instalment in schedule_data:
+                schedule_instances.append(
+                    RepaymentSchedule(
+                        loan=loan,
+                        instalment_number=instalment['instalment_number'],
+                        due_date=instalment['due_date'],
+                        amount=instalment['amount'],
+                        principal=instalment['principal'],
+                        interest=instalment['interest'],
+                        balance_after=instalment['balance_after'],
+                    )
+                )
+            
+            RepaymentSchedule.objects.bulk_create(schedule_instances)
+        
+        # Return the newly created schedule
         return RepaymentSchedule.objects.filter(
-            loan__id=self.kwargs['id'],
+            loan__id=loan_id,
             loan__membership__user=self.request.user,
         ).select_related('loan')
