@@ -53,7 +53,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
-    'saccomanagement.middleware.SaccoContextMiddleware',
+
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
@@ -174,6 +174,15 @@ DEFAULT_FROM_EMAIL = config(
     'DEFAULT_FROM_EMAIL',
     default='SaccoSphere <no-reply@saccosphere.local>',
 )
+
+# OTP Configuration
+OTP_EXPIRY_MINUTES = 5
+OTP_MAX_ATTEMPTS = 3
+OTP_RESEND_COOLDOWN_SECONDS = 60
+
+# Africa's Talking SMS Configuration
+AT_API_KEY = config('AT_API_KEY', default='')
+AT_USERNAME = config('AT_USERNAME', default='sandbox')
 
 REDIS_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
 
