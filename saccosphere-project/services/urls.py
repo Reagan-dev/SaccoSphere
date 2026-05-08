@@ -9,6 +9,7 @@ from .views import (
     LoanTypeListView,
     RepaymentScheduleView,
     SavingListView,
+    SavingsBreakdownView,
     SavingsTypeViewSet,
 )
 
@@ -26,6 +27,7 @@ app_name = 'services'
 urlpatterns = [
     path('', include(router.urls)),
     path('savings/', SavingListView.as_view(), name='saving-list'),
+    path('savings/breakdown/', SavingsBreakdownView.as_view(), name='savings-breakdown'),
     path('loan-types/', LoanTypeListView.as_view(), name='loan-type-list'),
     path('loans/', LoanCollectionView.as_view(), name='loan-collection'),
     path('loans/apply/', LoanApplyView.as_view(), name='loan-apply'),
