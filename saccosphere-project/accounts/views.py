@@ -17,15 +17,19 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.response import StandardResponseMixin
 
-from .models import Sacco
+from .models import Sacco, User
 from .serializers import (
     PasswordChangeSerializer,
+    PasswordResetConfirmSerializer,
     SaccoDetailSerializer,
     SaccoListSerializer,
     UserLoginSerializer,
     UserProfileSerializer,
     UserRegistrationSerializer,
 )
+from .otp_utils import create_otp_token, verify_otp, OTPError
+from .integrations.otp_service import ATSMSClient, ATSMSError
+from .throttles import OTPSendThrottle
 
 
 class RegisterView(StandardResponseMixin, CreateAPIView):
@@ -358,3 +362,229 @@ class SaccoDetailView(StandardResponseMixin, RetrieveAPIView):
         instance = self.get_object()
         serializer = self.get_serializer(instance)
         return self.ok(serializer.data)
+
+
+class OTPSendView(APIView):
+    """Send OTP to user's phone number."""
+    permission_classes = [AllowAny]
+    throttle_classes = [OTPSendThrottle]
+
+    @swagger_auto_schema(
+        operation_summary='Send OTP code',
+        request_body=serializers.OTPRequestSerializer,
+        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
+    )
+    def post(self, request):
+        serializer = serializers.OTPRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        phone_number = serializer.validated_data['phone_number']
+        purpose = serializer.validated_data['purpose']
+        
+        # Find user for phone verification or password reset
+        user = None
+        if purpose in ['PHONE_VERIFY', 'PASSWORD_RESET']:
+            try:
+                user = User.objects.get(phone_number=phone_number)
+            except User.DoesNotExist:
+                # For password reset, don't reveal if phone exists
+                if purpose == 'PASSWORD_RESET':
+                    return Response({'message': 'OTP sent. Check your phone.'}, status=200)
+                else:
+                    return Response({'error': 'Phone number not found'}, status=400)
+        
+        if not user:
+            return Response({'error': 'User not found'}, status=400)
+        
+        try:
+            # Create OTP token
+            token = create_otp_token(user, phone_number, purpose)
+            
+            # Send SMS
+            client = ATSMSClient()
+            result = client.send_otp(phone_number, token.code, purpose)
+            
+            if result:
+                return Response({'message': 'OTP sent. Check your phone.'}, status=200)
+            else:
+                return Response({'error': 'Failed to send OTP'}, status=502)
+                
+        except ATSMSError as e:
+            return Response({'error': str(e)}, status=502)
+        except Exception as e:
+            return Response({'error': 'Internal server error'}, status=500)
+
+
+class OTPVerifyView(APIView):
+    """Verify OTP code."""
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_summary='Verify OTP code',
+        request_body=serializers.OTPVerifySerializer,
+        responses={200: UserProfileSerializer},
+    )
+    def post(self, request):
+        serializer = serializers.OTPVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        phone_number = serializer.validated_data['phone_number']
+        code = serializer.validated_data['code']
+        
+        try:
+            token = verify_otp(phone_number, code, 'PHONE_VERIFY')
+            
+            # Update user's phone number
+            user = token.user
+            user.phone_number = phone_number
+            user.save(update_fields=['phone_number'])
+            
+            # Return user data
+            user_serializer = UserProfileSerializer(user)
+            return Response(user_serializer.data, status=200)
+            
+        except OTPError as e:
+            return Response({'error': str(e)}, status=400)
+        except Exception as e:
+            return Response({'error': 'Internal server error'}, status=500)
+
+
+class OTPResendView(APIView):
+    """Resend OTP code."""
+    permission_classes = [AllowAny]
+    throttle_classes = [OTPSendThrottle]
+
+    @swagger_auto_schema(
+        operation_summary='Resend OTP code',
+        request_body=serializers.OTPRequestSerializer,
+        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}},
+                  429: {'type': 'object', 'properties': {'error': {'type': 'string'}}},
+        }
+    )
+    def post(self, request):
+        serializer = serializers.OTPRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        phone_number = serializer.validated_data['phone_number']
+        purpose = serializer.validated_data['purpose']
+        
+        # Check cooldown
+        from django.utils import timezone
+        from datetime import timedelta
+        from accounts.models import OTPToken
+        
+        recent_token = OTPToken.objects.filter(
+            phone_number=phone_number
+        ).order_by('-created_at').first()
+        
+        if recent_token:
+            time_passed = timezone.now() - recent_token.created_at
+            cooldown_period = timedelta(seconds=720)  # 12 minutes = 5/hour
+            
+            if time_passed < cooldown_period:
+                remaining_seconds = int((cooldown_period - time_passed).total_seconds())
+                return Response({
+                    'error': f'Too many OTP requests. Try again in {remaining_seconds // 60} minutes.',
+                    'seconds_remaining': remaining_seconds
+                }, status=429)
+        
+        # Invalidate old token and create new one
+        try:
+            user = User.objects.get(phone_number=phone_number)
+            
+            # Mark old tokens as used
+            OTPToken.objects.filter(
+                phone_number=phone_number,
+                purpose=purpose,
+                is_used=False
+            ).update(is_used=True)
+            
+            # Create new token
+            token = create_otp_token(user, phone_number, purpose)
+            
+            # Send SMS
+            client = ATSMSClient()
+            result = client.send_otp(phone_number, token.code, purpose)
+            
+            if result:
+                return Response({'message': 'OTP sent. Check your phone.'}, status=200)
+            else:
+                return Response({'error': 'Failed to send OTP'}, status=502)
+                
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=400)
+        except ATSMSError as e:
+            return Response({'error': str(e)}, status=502)
+        except Exception as e:
+            return Response({'error': 'Internal server error'}, status=500)
+
+
+class PasswordResetRequestView(APIView):
+    """Request password reset via OTP."""
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_summary='Request password reset',
+        request_body=serializers.OTPRequestSerializer,
+        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}},
+    )
+    def post(self, request):
+        serializer = serializers.OTPRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        phone_number = serializer.validated_data['phone_number']
+        
+        # Always return 200 (don't reveal if phone exists)
+        try:
+            user = User.objects.get(phone_number=phone_number)
+            token = create_otp_token(user, phone_number, 'PASSWORD_RESET')
+            
+            # Send SMS
+            client = ATSMSClient()
+            result = client.send_otp(phone_number, token.code, 'PASSWORD_RESET')
+            
+            if result:
+                return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
+            else:
+                return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
+                
+        except User.DoesNotExist:
+            # Don't reveal if phone exists
+            return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
+        except Exception as e:
+            return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
+
+
+class PasswordResetConfirmView(APIView):
+    """Confirm password reset with OTP."""
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_summary='Confirm password reset',
+        request_body=serializers.PasswordResetConfirmSerializer,
+        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}},
+    )
+    def post(self, request):
+        serializer = serializers.PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        phone_number = serializer.validated_data['phone_number']
+        code = serializer.validated_data['code']
+        new_password = serializer.validated_data['new_password']
+        
+        try:
+            token = verify_otp(phone_number, code, 'PASSWORD_RESET')
+            
+            # Update user password
+            user = token.user
+            user.set_password(new_password)
+            user.save(update_fields=['password'])
+            
+            return Response({'message': 'Password reset successful.'}, status=200)
+            
+        except OTPError as e:
+            return Response({'error': str(e)}, status=400)
+        except Exception as e:
+            return Response({'error': 'Internal server error'}, status=500)
+
+
