@@ -289,6 +289,24 @@ class SaccoListView(StandardResponseMixin, ListAPIView):
                 type=openapi.TYPE_BOOLEAN,
                 description='Only return verified SACCOs when true.',
             ),
+            openapi.Parameter(
+                'min_members',
+                openapi.IN_QUERY,
+                type=openapi.TYPE_INTEGER,
+                description='Minimum number of approved members.',
+            ),
+            openapi.Parameter(
+                'max_members',
+                openapi.IN_QUERY,
+                type=openapi.TYPE_INTEGER,
+                description='Maximum number of approved members.',
+            ),
+            openapi.Parameter(
+                'ordering',
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                description='Order results by field. Use - prefix for descending.',
+            ),
         ],
         responses={200: SaccoListSerializer(many=True)},
     )
