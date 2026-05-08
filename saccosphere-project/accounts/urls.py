@@ -8,7 +8,12 @@ from .views import (
     LoginView,
     LogoutView,
     MeView,
+    OTPSendView,
+    OTPVerifyView,
+    OTPResendView,
     PasswordChangeView,
+    PasswordResetRequestView,
+    PasswordResetConfirmView,
     RegisterView,
     SaccoDetailView,
     SaccoListView,
@@ -35,4 +40,11 @@ urlpatterns = [
     ),
     path('saccos/', SaccoListView.as_view(), name='sacco-list'),
     path('saccos/<uuid:id>/', SaccoDetailView.as_view(), name='sacco-detail'),
+    # OTP endpoints
+    path('otp/send/', OTPSendView.as_view(), name='otp-send'),
+    path('otp/verify/', OTPVerifyView.as_view(), name='otp-verify'),
+    path('otp/resend/', OTPResendView.as_view(), name='otp-resend'),
+    # Password reset endpoints
+    path('password/reset/', PasswordResetRequestView.as_view(), name='password-reset'),
+    path('password/reset/confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
 ]
