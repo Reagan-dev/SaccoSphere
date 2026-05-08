@@ -1,7 +1,7 @@
 from decimal import Decimal
 from django.db.models import Sum
+from rest_framework.views import APIView
 from rest_framework.generics import (
-    APIView,
     CreateAPIView,
     ListAPIView,
     ListCreateAPIView,
