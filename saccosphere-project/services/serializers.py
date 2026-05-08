@@ -41,7 +41,8 @@ class SavingsTypeSerializer(serializers.ModelSerializer):
 
 class SavingSerializer(serializers.ModelSerializer):
     membership = MembershipSummarySerializer(read_only=True)
-    savings_type = SavingsTypeNameSerializer(read_only=True)
+    savings_type = SavingsTypeSerializer(read_only=True)
+    savings_type_id = serializers.UUIDField(write_only=True)
 
     class Meta:
         model = Saving
@@ -49,6 +50,7 @@ class SavingSerializer(serializers.ModelSerializer):
             'id',
             'membership',
             'savings_type',
+            'savings_type_id',
             'amount',
             'total_contributions',
             'total_withdrawals',
@@ -182,6 +184,21 @@ class GuarantorSerializer(serializers.ModelSerializer):
             'requested_at',
             'responded_at',
         )
+
+
+class SavingsBreakdownSerializer(serializers.Serializer):
+    """
+    Serializer for savings breakdown by type.
+    
+    Returns aggregated totals for BOSA, FOSA, and SHARE_CAPITAL.
+    """
+    sacco_id = serializers.UUIDField(read_only=True)
+    sacco_name = serializers.CharField(read_only=True)
+    bosa_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    fosa_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    share_capital_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    dividend_eligible_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
 
 
 class InsuranceSerializer(serializers.ModelSerializer):
