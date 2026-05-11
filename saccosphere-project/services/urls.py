@@ -2,6 +2,8 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    GuarantorRequestView,
+    GuarantorSearchView,
     LoanApplyView,
     LoanCollectionView,
     LoanDetailView,
@@ -43,5 +45,15 @@ urlpatterns = [
         'loans/<uuid:id>/schedule/',
         RepaymentScheduleView.as_view(),
         name='repayment-schedule',
+    ),
+    path(
+        'loans/<uuid:loan_id>/guarantors/search/',
+        GuarantorSearchView.as_view(),
+        name='guarantor-search',
+    ),
+    path(
+        'loans/<uuid:loan_id>/guarantors/',
+        GuarantorRequestView.as_view(),
+        name='guarantor-request',
     ),
 ]

@@ -29,8 +29,10 @@ class LoanTypeNameSerializer(serializers.Serializer):
 
 
 class GuarantorUserSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
     email = serializers.EmailField(read_only=True)
     full_name = serializers.CharField(source='get_full_name', read_only=True)
+    phone_number = serializers.CharField(read_only=True)
 
 
 class SavingsTypeSerializer(serializers.ModelSerializer):
@@ -184,6 +186,24 @@ class GuarantorSerializer(serializers.ModelSerializer):
             'requested_at',
             'responded_at',
         )
+
+
+class GuarantorSearchResultSerializer(serializers.Serializer):
+    """Serialize guarantor search result details."""
+
+    user = GuarantorUserSerializer(read_only=True)
+    member_number = serializers.CharField(read_only=True)
+    savings_total = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
+    available_capacity = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
+    can_guarantee = serializers.BooleanField(read_only=True)
 
 
 class SavingsBreakdownSerializer(serializers.Serializer):

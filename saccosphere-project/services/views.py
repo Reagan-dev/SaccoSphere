@@ -1,6 +1,7 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -15,11 +16,22 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
-from accounts.models import Sacco
+from accounts.models import Sacco, User
+from saccomembership.models import Membership
 
 from .engines.loan_limits import calculate_loan_limit
-from .models import Loan, LoanType, RepaymentSchedule, Saving, SavingsType
+from .models import (
+    GuaranteeCapacity,
+    Guarantor,
+    Loan,
+    LoanType,
+    RepaymentSchedule,
+    Saving,
+    SavingsType,
+)
 from .serializers import (
+    GuarantorSearchResultSerializer,
+    GuarantorSerializer,
     LoanApplySerializer,
     LoanDetailSerializer,
     LoanListSerializer,
@@ -218,6 +230,215 @@ class LoanDetailView(RetrieveAPIView):
         )
 
 
+class GuarantorSearchView(APIView):
+    """Search for a possible guarantor for a loan."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, loan_id):
+        """Find a guarantor by phone number or member number."""
+        phone = request.query_params.get('phone')
+        member_number = request.query_params.get('member_number')
+
+        if not phone and not member_number:
+            return Response(
+                {'detail': 'phone or member_number query parameter required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        loan = get_object_or_404(
+            Loan.objects.select_related(
+                'membership',
+                'membership__sacco',
+                'membership__user',
+            ),
+            id=loan_id,
+            membership__user=request.user,
+        )
+        guarantor_user = self._find_guarantor_user(
+            loan=loan,
+            phone=phone,
+            member_number=member_number,
+        )
+
+        if guarantor_user is None or guarantor_user == request.user:
+            return Response(
+                {'detail': 'No matching guarantor found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        membership = Membership.objects.filter(
+            user=guarantor_user,
+            sacco=loan.membership.sacco,
+            status=Membership.Status.APPROVED,
+        ).first()
+
+        if membership is None:
+            return Response(
+                {'detail': 'No matching guarantor found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        capacity = self._update_guarantee_capacity(
+            guarantor_user,
+            loan.membership.sacco,
+        )
+        data = {
+            'user': guarantor_user,
+            'member_number': membership.member_number,
+            'savings_total': capacity.total_savings,
+            'available_capacity': capacity.available_capacity,
+            'can_guarantee': capacity.available_capacity > Decimal('0'),
+        }
+        serializer = GuarantorSearchResultSerializer(data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def _find_guarantor_user(self, loan, phone=None, member_number=None):
+        """Find a possible guarantor user by phone or member number."""
+        if phone:
+            user = User.objects.filter(
+                phone_number__icontains=phone,
+            ).first()
+
+            if user is not None:
+                return user
+
+        if member_number:
+            membership = Membership.objects.select_related('user').filter(
+                member_number__iexact=member_number,
+                sacco=loan.membership.sacco,
+                status=Membership.Status.APPROVED,
+            ).first()
+
+            if membership is not None:
+                return membership.user
+
+        return None
+
+    def _update_guarantee_capacity(self, user, sacco):
+        """Refresh and return a user's guarantee capacity."""
+        total_savings = Saving.objects.filter(
+            membership__user=user,
+            membership__sacco=sacco,
+            status=Saving.Status.ACTIVE,
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        active_guarantees = Guarantor.objects.filter(
+            guarantor=user,
+            status__in=[
+                Guarantor.Status.PENDING,
+                Guarantor.Status.APPROVED,
+            ],
+        ).aggregate(total=Sum('guarantee_amount'))['total'] or Decimal('0')
+        available_capacity = max(
+            total_savings - active_guarantees,
+            Decimal('0'),
+        )
+        capacity, _ = GuaranteeCapacity.objects.get_or_create(user=user)
+        capacity.total_savings = total_savings
+        capacity.active_guarantees = active_guarantees
+        capacity.available_capacity = available_capacity
+        capacity.save(update_fields=[
+            'total_savings',
+            'active_guarantees',
+            'available_capacity',
+            'updated_at',
+        ])
+        return capacity
+
+
+class GuarantorRequestView(APIView):
+    """Request a member to guarantee a loan."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, loan_id):
+        """Create a pending guarantor request for a loan."""
+        loan = get_object_or_404(
+            Loan.objects.select_related('membership', 'membership__user'),
+            id=loan_id,
+            membership__user=request.user,
+        )
+
+        if loan.status not in [
+            Loan.Status.PENDING,
+            Loan.Status.GUARANTORS_PENDING,
+        ]:
+            return Response(
+                {
+                    'detail': (
+                        'Guarantors can only be requested for pending loans.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        guarantor_user_id = request.data.get('guarantor_user_id')
+        guarantee_amount = self._parse_guarantee_amount(
+            request.data.get('guarantee_amount'),
+        )
+
+        if not guarantor_user_id or guarantee_amount is None:
+            return Response(
+                {
+                    'detail': (
+                        'guarantor_user_id and guarantee_amount are required.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if guarantee_amount <= Decimal('0'):
+            return Response(
+                {'detail': 'Guarantee amount must be greater than zero.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if guarantee_amount > loan.amount:
+            return Response(
+                {'detail': 'Guarantee amount cannot exceed loan amount.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        guarantor_user = get_object_or_404(User, id=guarantor_user_id)
+
+        if guarantor_user == request.user:
+            return Response(
+                {'detail': 'You cannot guarantee your own loan.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            if Guarantor.objects.filter(
+                loan=loan,
+                guarantor=guarantor_user,
+            ).exists():
+                return Response(
+                    {'detail': 'Guarantor request already exists.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            guarantor = Guarantor.objects.create(
+                loan=loan,
+                guarantor=guarantor_user,
+                guarantee_amount=guarantee_amount,
+                status=Guarantor.Status.PENDING,
+            )
+
+            if loan.status != Loan.Status.GUARANTORS_PENDING:
+                loan.status = Loan.Status.GUARANTORS_PENDING
+                loan.save(update_fields=['status', 'updated_at'])
+
+        serializer = GuarantorSerializer(guarantor)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def _parse_guarantee_amount(self, value):
+        """Parse a guarantee amount into Decimal."""
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+
+
 class SavingsBreakdownView(APIView):
     """
     Get savings breakdown by type for a specific SACCO.
@@ -371,3 +592,71 @@ class RepaymentScheduleView(ListAPIView):
             loan__id=loan_id,
             loan__membership__user=self.request.user,
         ).select_related('loan')
+
+
+# ============================================================
+# REVIEW - READ THIS THEN DELETE FROM THIS LINE TO THE END
+# ============================================================
+#
+# services/admin.py
+#
+# GuarantorAdmin makes guarantor requests easy to inspect in Django admin. It
+# shows a short loan id, guarantor email, status, guarantee amount, and request
+# date. It also lets staff filter by status and search by guarantor email.
+#
+# GuaranteeCapacityAdmin shows each user's calculated guarantee capacity:
+# total savings, active guarantees, available capacity, and last update time.
+#
+# services/serializers.py
+#
+# GuarantorSearchResultSerializer returns the result of a guarantor search. It
+# includes the possible guarantor's user details, SACCO member number, savings
+# total, available capacity, and whether they can guarantee at all.
+#
+# services/views.py
+#
+# GuarantorSearchView lets a loan applicant search for a guarantor by phone or
+# member number. It only searches within the same SACCO as the loan, excludes
+# the applicant, refreshes the user's GuaranteeCapacity, and returns one result.
+#
+# GuarantorRequestView creates a pending Guarantor record. It checks that the
+# loan belongs to the requester, that the loan is in a valid status, that the
+# guarantee amount is valid, and then moves the loan to GUARANTORS_PENDING.
+#
+# services/urls.py
+#
+# The new guarantor routes live under the loan they belong to:
+# /api/v1/services/loans/{loan_id}/guarantors/search/ for search and
+# /api/v1/services/loans/{loan_id}/guarantors/ for creating a request.
+#
+# Django/Python concepts you might not know well
+#
+# get_object_or_404 fetches a database object or returns a 404 response if it
+# does not exist. Here it also enforces ownership by filtering loans to
+# membership__user=request.user.
+#
+# transaction.atomic groups database writes so they succeed or fail together.
+# It is used when creating the guarantor request and updating the loan status.
+#
+# aggregate(Sum('amount')) asks the database to calculate totals, which is
+# better than loading every saving or guarantor row into Python and adding it.
+#
+# select_related fetches linked objects like membership, SACCO, and user in
+# the same query. That reduces repeated database hits in request handling.
+#
+# One manual test
+#
+# Log in as a loan applicant, then call
+# GET /api/v1/services/loans/<loan_id>/guarantors/search/?phone=<phone>.
+# Confirm it returns the guarantor user, member number, savings total, and
+# can_guarantee=true. Then POST the returned user id to the guarantor request
+# endpoint and confirm the loan becomes GUARANTORS_PENDING.
+#
+# Important design decision
+#
+# Search requires the possible guarantor to have an approved membership in the
+# same SACCO as the loan. This prevents a member from asking someone outside
+# the SACCO to guarantee a SACCO loan.
+#
+# END OF REVIEW - DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
+# ============================================================
