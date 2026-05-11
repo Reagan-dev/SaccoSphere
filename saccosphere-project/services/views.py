@@ -1,6 +1,9 @@
 from decimal import Decimal
+
+from django.core.cache import cache
 from django.db.models import Sum
-from rest_framework.views import APIView
+from django.shortcuts import get_object_or_404
+from rest_framework import status
 from rest_framework.generics import (
     CreateAPIView,
     ListAPIView,
@@ -9,8 +12,12 @@ from rest_framework.generics import (
 )
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
+from accounts.models import Sacco
+
+from .engines.loan_limits import calculate_loan_limit
 from .models import Loan, LoanType, RepaymentSchedule, Saving, SavingsType
 from .serializers import (
     LoanApplySerializer,
@@ -80,9 +87,73 @@ class LoanTypeListView(ListAPIView):
         return queryset
 
 
-class LoanApplyView(CreateAPIView):
+class LoanEligibilityCreateMixin:
+    """Create loans only after checking member eligibility limits."""
+
+    def create(self, request, *args, **kwargs):
+        """Create a loan application after checking member eligibility."""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        loan_type = serializer.validated_data['loan_type']
+        amount = serializer.validated_data['amount']
+        eligibility = calculate_loan_limit(request.user, loan_type.sacco)
+
+        if not eligibility['eligible']:
+            return Response(
+                {'reason': eligibility['reason']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if amount > eligibility['max_amount']:
+            return Response(
+                {
+                    'detail': (
+                        'Requested amount exceeds your loan limit of '
+                        f'KES {eligibility["max_amount"]}.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+
+class LoanApplyView(LoanEligibilityCreateMixin, CreateAPIView):
     serializer_class = LoanApplySerializer
     permission_classes = [IsAuthenticated]
+
+
+class LoanEligibilityView(APIView):
+    """Return the authenticated member's loan eligibility for a SACCO."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """Calculate and return loan eligibility details."""
+        sacco_id = request.query_params.get('sacco_id')
+
+        if not sacco_id:
+            return Response(
+                {'detail': 'sacco_id parameter is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cache_key = f'loan_eligibility:{request.user.id}:{sacco_id}'
+        eligibility = cache.get(cache_key)
+
+        if eligibility is None:
+            sacco = get_object_or_404(Sacco, id=sacco_id)
+            eligibility = calculate_loan_limit(request.user, sacco)
+            cache.set(cache_key, eligibility, timeout=300)
+
+        return Response(eligibility)
 
 
 class LoanListView(ListAPIView):
@@ -107,7 +178,7 @@ class LoanListView(ListAPIView):
         return queryset
 
 
-class LoanCollectionView(ListCreateAPIView):
+class LoanCollectionView(LoanEligibilityCreateMixin, ListCreateAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_serializer_class(self):
