@@ -5,6 +5,8 @@ from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.utils import timezone
 
+from .storage import KYCDocumentStorage
+
 
 KENYA_COUNTIES = [
     'Baringo',
@@ -308,22 +310,32 @@ class KYCVerification(models.Model):
         help_text='Kenya National ID number.',
     )
     id_front = models.ImageField(
+        storage=KYCDocumentStorage(),
         upload_to='kyc/front/',
         null=True,
         blank=True,
         help_text='Front image of the national ID.',
     )
     id_back = models.ImageField(
+        storage=KYCDocumentStorage(),
         upload_to='kyc/back/',
         null=True,
         blank=True,
         help_text='Back image of the national ID.',
     )
     passport = models.ImageField(
+        storage=KYCDocumentStorage(),
         upload_to='kyc/passport/',
         null=True,
         blank=True,
         help_text='Optional passport image.',
+    )
+    huduma = models.ImageField(
+        storage=KYCDocumentStorage(),
+        upload_to='kyc/huduma/',
+        null=True,
+        blank=True,
+        help_text='Optional Huduma card image.',
     )
     huduma_namba = models.CharField(
         max_length=20,

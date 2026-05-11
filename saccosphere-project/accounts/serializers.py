@@ -1,5 +1,8 @@
 import re
+from pathlib import Path
 
+from django.conf import settings
+from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
 
 from .models import KYCVerification, OTPToken, Sacco, User
@@ -149,8 +152,95 @@ class KYCStatusSerializer(serializers.ModelSerializer):
             'iprs_verified',
             'submitted_at',
             'rejection_reason',
+            'id_front',
+            'id_back',
+            'passport',
         )
         read_only_fields = fields
+
+
+class KYCUploadSerializer(serializers.Serializer):
+    """Validate KYC document upload input."""
+
+    document_type = serializers.ChoiceField(
+        choices=(
+            ('id_front', 'ID front'),
+            ('id_back', 'ID back'),
+            ('passport', 'Passport'),
+            ('huduma', 'Huduma'),
+        ),
+    )
+    file = serializers.FileField()
+
+    def validate_file(self, value):
+        """Validate uploaded KYC document size, type, and dimensions."""
+        max_size = settings.FILE_UPLOAD_MAX_MEMORY_SIZE
+        allowed_extensions = {'jpg', 'jpeg', 'png', 'pdf'}
+        extension = Path(value.name).suffix.lower().lstrip('.')
+
+        if value.size > max_size:
+            raise serializers.ValidationError(
+                'File size must not exceed 5MB.'
+            )
+
+        if extension not in allowed_extensions:
+            raise serializers.ValidationError(
+                'File extension must be jpg, jpeg, png, or pdf.'
+            )
+
+        if extension != 'pdf':
+            self._validate_image_dimensions(value)
+
+        return value
+
+    def _validate_image_dimensions(self, value):
+        """Validate minimum image dimensions for uploaded images."""
+        try:
+            value.seek(0)
+            with Image.open(value) as image:
+                width, height = image.size
+        except (UnidentifiedImageError, OSError) as exc:
+            raise serializers.ValidationError(
+                'Uploaded image is invalid or corrupted.'
+            ) from exc
+        finally:
+            value.seek(0)
+
+        if width < 400 or height < 300:
+            raise serializers.ValidationError(
+                'Image dimensions must be at least 400x300 pixels.'
+            )
+
+
+class AdminKYCReviewSerializer(serializers.Serializer):
+    """Validate admin KYC review decisions."""
+
+    status = serializers.ChoiceField(
+        choices=(
+            (KYCVerification.Status.APPROVED, 'Approved'),
+            (KYCVerification.Status.REJECTED, 'Rejected'),
+        ),
+    )
+    rejection_reason = serializers.CharField(
+        allow_blank=True,
+        required=False,
+    )
+
+    def validate(self, attrs):
+        """Require a rejection reason when rejecting KYC."""
+        if (
+            attrs['status'] == KYCVerification.Status.REJECTED
+            and not attrs.get('rejection_reason')
+        ):
+            raise serializers.ValidationError(
+                {
+                    'rejection_reason': (
+                        'Rejection reason is required when rejecting KYC.'
+                    ),
+                }
+            )
+
+        return attrs
 
 
 class OTPRequestSerializer(serializers.Serializer):

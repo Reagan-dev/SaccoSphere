@@ -2,8 +2,12 @@
 import logging
 import re
 
-import africastalking
 from django.conf import settings
+
+try:
+    import africastalking
+except ImportError:
+    africastalking = None
 
 logger = logging.getLogger('saccosphere.sms')
 
@@ -41,6 +45,11 @@ class ATSMSClient:
 
         api_key = settings.AT_API_KEY
         username = settings.AT_USERNAME
+
+        if africastalking is None:
+            raise ATSMSError(
+                'Africa\'s Talking SDK is not installed.'
+            )
 
         if not api_key or not username:
             raise ATSMSError(

@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate
 from django.core.exceptions import FieldError
 from django.db.models import Count, Q
+from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
@@ -9,7 +10,9 @@ from rest_framework.generics import (
     ListAPIView,
     RetrieveAPIView,
     RetrieveUpdateAPIView,
+    UpdateAPIView,
 )
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -17,9 +20,13 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.response import StandardResponseMixin
 
-from .models import Sacco, User
+from .models import KYCVerification, Sacco, User
 from . import serializers as account_serializers
+from .permissions import IsSaccoAdminOrSuperAdmin
 from .serializers import (
+    AdminKYCReviewSerializer,
+    KYCStatusSerializer,
+    KYCUploadSerializer,
     PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
     SaccoDetailSerializer,
@@ -182,6 +189,164 @@ class PasswordChangeView(StandardResponseMixin, APIView):
         request.user.set_password(serializer.validated_data['new_password'])
         request.user.save(update_fields=['password'])
         return self.ok(None, 'Password changed successfully')
+
+
+class KYCUploadView(APIView):
+    """Upload KYC documents for the authenticated user."""
+
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        """Validate and save a KYC document upload."""
+        serializer = KYCUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        document_type = serializer.validated_data['document_type']
+        uploaded_file = serializer.validated_data['file']
+        kyc, _ = KYCVerification.objects.get_or_create(
+            user=request.user,
+            defaults={'status': KYCVerification.Status.NOT_STARTED},
+        )
+
+        setattr(kyc, document_type, uploaded_file)
+        update_fields = [document_type]
+
+        if kyc.id_front and kyc.id_back:
+            kyc.status = KYCVerification.Status.PENDING
+            kyc.submitted_at = timezone.now()
+            kyc.rejection_reason = ''
+            update_fields.extend([
+                'status',
+                'submitted_at',
+                'rejection_reason',
+            ])
+
+        kyc.save(update_fields=update_fields)
+        response_serializer = KYCStatusSerializer(
+            kyc,
+            context={'request': request},
+        )
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class KYCStatusView(RetrieveAPIView):
+    """Return the authenticated user's KYC status."""
+
+    serializer_class = KYCStatusSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        """Get or create the user's KYC verification record."""
+        kyc, _ = KYCVerification.objects.get_or_create(
+            user=self.request.user,
+            defaults={'status': KYCVerification.Status.NOT_STARTED},
+        )
+        return kyc
+
+
+class AdminKYCQuerysetMixin:
+    """Scope KYC records for super admins and SACCO admins."""
+
+    def get_queryset(self):
+        """Return KYC records visible to the current admin."""
+        queryset = KYCVerification.objects.select_related('user')
+        user = self.request.user
+
+        if user.roles.filter(name='SUPER_ADMIN').exists():
+            return queryset
+
+        admin_sacco_ids = user.roles.filter(
+            name='SACCO_ADMIN',
+            sacco__isnull=False,
+        ).values_list('sacco_id', flat=True)
+
+        return queryset.filter(
+            user__membership__sacco_id__in=admin_sacco_ids,
+        ).distinct()
+
+
+class AdminKYCReviewView(AdminKYCQuerysetMixin, UpdateAPIView):
+    """Approve or reject a member KYC verification."""
+
+    serializer_class = AdminKYCReviewSerializer
+    permission_classes = [IsSaccoAdminOrSuperAdmin]
+    lookup_field = 'id'
+    lookup_url_kwarg = 'kyc_id'
+
+    def patch(self, request, *args, **kwargs):
+        """Partially update a KYC review decision."""
+        return self.partial_update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        """Apply the admin review decision and notify the member."""
+        kyc = self.get_object()
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        review_status = serializer.validated_data['status']
+        rejection_reason = serializer.validated_data.get(
+            'rejection_reason',
+            '',
+        )
+
+        kyc.status = review_status
+        kyc.rejection_reason = rejection_reason
+        kyc.reviewed_by = request.user
+
+        update_fields = ['status', 'rejection_reason', 'reviewed_by']
+        if review_status == KYCVerification.Status.APPROVED:
+            kyc.verified_at = timezone.now()
+            update_fields.append('verified_at')
+
+        kyc.save(update_fields=update_fields)
+        self._notify_member(kyc)
+
+        response_serializer = KYCStatusSerializer(
+            kyc,
+            context={'request': request},
+        )
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_200_OK,
+        )
+
+    def _notify_member(self, kyc):
+        """Notify a member after their KYC review is completed."""
+        try:
+            from notifications.utils import create_notification
+        except ImportError:
+            return
+
+        if kyc.status == KYCVerification.Status.APPROVED:
+            title = 'KYC approved'
+            message = 'Your KYC verification has been approved.'
+        else:
+            title = 'KYC rejected'
+            message = 'Your KYC verification was rejected.'
+
+        create_notification(
+            user=kyc.user,
+            title=title,
+            message=message,
+        )
+
+
+class AdminKYCQueueView(AdminKYCQuerysetMixin, ListAPIView):
+    """List pending KYC verification records for admin review."""
+
+    serializer_class = KYCStatusSerializer
+    permission_classes = [IsSaccoAdminOrSuperAdmin]
+
+    def get_queryset(self):
+        """Return pending KYC records visible to the current admin."""
+        return super().get_queryset().filter(
+            status=KYCVerification.Status.PENDING,
+        )
+
 
 class SaccoListView(StandardResponseMixin, ListAPIView):
     serializer_class = SaccoListSerializer
@@ -587,5 +752,90 @@ class PasswordResetConfirmView(APIView):
             return Response({'error': str(e)}, status=400)
         except Exception as e:
             return Response({'error': 'Internal server error'}, status=500)
+
+
+# ============================================================
+# REVIEW - READ THIS THEN DELETE FROM THIS LINE TO THE END
+# ============================================================
+#
+# accounts/storage.py
+#
+# KYCDocumentStorage is the storage class used by KYC document ImageFields.
+# Right now it inherits Django's FileSystemStorage, so files are saved under
+# the normal MEDIA_ROOT in development. The TODO marks the production upgrade:
+# use django-storages with an S3-compatible private bucket.
+#
+# accounts/models.py
+#
+# KYCVerification now uses KYCDocumentStorage for id_front, id_back, passport,
+# and huduma document uploads. The huduma field was added because the upload
+# API accepts document_type='huduma' and needs a real file field to save into.
+#
+# accounts/serializers.py
+#
+# KYCStatusSerializer returns the member's current KYC status and document
+# URLs. Members can read these fields but cannot set review status directly.
+#
+# KYCUploadSerializer validates multipart upload input. It checks document_type,
+# file size, extension, and minimum image dimensions before the view saves the
+# file. PDFs are allowed but skip image dimension checks.
+#
+# AdminKYCReviewSerializer validates admin review decisions. It only accepts
+# APPROVED or REJECTED, and requires rejection_reason when status is REJECTED.
+#
+# accounts/views.py
+#
+# KYCUploadView lets an authenticated user upload one KYC document at a time.
+# It creates the user's KYC record if missing, saves the file to the matching
+# field, and moves the KYC status to PENDING when id_front and id_back exist.
+#
+# KYCStatusView returns the authenticated user's KYC record. If the user does
+# not have one yet, it creates a NOT_STARTED record and returns it.
+#
+# AdminKYCQueueView lists PENDING KYC records for review. Super admins see all
+# pending records. SACCO admins see pending records only for users who belong
+# to SACCOs they administer.
+#
+# AdminKYCReviewView lets an admin approve or reject a KYC record. It records
+# reviewed_by, sets verified_at when approved, saves rejection_reason when
+# rejected, and creates a notification for the member.
+#
+# accounts/permissions.py
+#
+# IsSaccoAdminOrSuperAdmin now understands user-owned objects such as KYC. A
+# SACCO admin can review KYC only for users who belong to one of that admin's
+# SACCOs. Super admins can review any KYC record.
+#
+# Django/Python concepts you might not know well
+#
+# multipart/form-data is the request format browsers and clients use for file
+# uploads. DRF needs MultiPartParser/FormParser so request.data includes files.
+#
+# ImageField is a Django file field intended for images. In this implementation
+# it also stores PDFs because model validation is handled at the serializer
+# layer before saving.
+#
+# select_related('user') fetches each KYC record and its related user in one
+# database query. That avoids extra queries when serializing admin queues.
+#
+# A lazy import means importing inside a method instead of at the top of the
+# file. AdminKYCReviewView imports create_notification only when a review is
+# completed, which reduces circular import risk.
+#
+# One manual test
+#
+# Log in as a normal user and upload a 400x300 or larger PNG to
+# POST /api/v1/accounts/kyc/upload/ with document_type=id_front, then upload
+# id_back. Call GET /api/v1/accounts/kyc/status/ and confirm status is PENDING
+# and both document URLs are present.
+#
+# Important design decision
+#
+# Upload validation lives in KYCUploadSerializer, while save/review workflow
+# lives in views. That keeps input validation reusable and keeps business state
+# changes close to the API actions that cause them.
+#
+# END OF REVIEW - DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
+# ============================================================
 
 
