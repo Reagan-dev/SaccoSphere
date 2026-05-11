@@ -148,6 +148,19 @@ class IsSaccoAdminOrSuperAdmin(BasePermission):
                 sacco=obj.sacco,
             ).exists()
 
+        if hasattr(obj, 'user'):
+            from saccomembership.models import Membership
+
+            admin_sacco_ids = user.roles.filter(
+                name=Role.SACCO_ADMIN,
+                sacco__isnull=False,
+            ).values_list('sacco_id', flat=True)
+
+            return Membership.objects.filter(
+                user=obj.user,
+                sacco_id__in=admin_sacco_ids,
+            ).exists()
+
         return False
 
 
