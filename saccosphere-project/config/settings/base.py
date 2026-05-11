@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'drf_yasg',
+    'django_celery_beat',
     'accounts',
     'saccomembership',
     'saccomanagement',
@@ -184,7 +185,7 @@ OTP_RESEND_COOLDOWN_SECONDS = 60
 AT_API_KEY = config('AT_API_KEY', default='')
 AT_USERNAME = config('AT_USERNAME', default='sandbox')
 
-REDIS_URL = config('REDIS_URL', default='redis://127.0.0.1:6379/0')
+REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
 if DEBUG:
     CACHES = {
@@ -201,8 +202,18 @@ else:
         },
     }
 
-CELERY_BROKER_URL = REDIS_URL
-CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_BROKER_URL = config(
+    'REDIS_URL',
+    default='redis://localhost:6379/0',
+)
+CELERY_RESULT_BACKEND = config(
+    'REDIS_URL',
+    default='redis://localhost:6379/0',
+)
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Africa/Nairobi'
 
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 
