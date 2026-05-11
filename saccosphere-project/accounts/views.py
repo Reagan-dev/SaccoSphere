@@ -14,11 +14,11 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework import serializers
 
 from config.response import StandardResponseMixin
 
 from .models import Sacco, User
+from . import serializers as account_serializers
 from .serializers import (
     PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
@@ -372,11 +372,11 @@ class OTPSendView(APIView):
 
     @swagger_auto_schema(
         operation_summary='Send OTP code',
-        request_body=serializers.OTPRequestSerializer,
+        request_body=account_serializers.OTPRequestSerializer,
         responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
     )
     def post(self, request):
-        serializer = serializers.OTPRequestSerializer(data=request.data)
+        serializer = account_serializers.OTPRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         phone_number = serializer.validated_data['phone_number']
@@ -422,11 +422,11 @@ class OTPVerifyView(APIView):
 
     @swagger_auto_schema(
         operation_summary='Verify OTP code',
-        request_body=serializers.OTPVerifySerializer,
+        request_body=account_serializers.OTPVerifySerializer,
         responses={200: UserProfileSerializer},
     )
     def post(self, request):
-        serializer = serializers.OTPVerifySerializer(data=request.data)
+        serializer = account_serializers.OTPVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         phone_number = serializer.validated_data['phone_number']
@@ -457,13 +457,13 @@ class OTPResendView(APIView):
 
     @swagger_auto_schema(
         operation_summary='Resend OTP code',
-        request_body=serializers.OTPRequestSerializer,
+        request_body=account_serializers.OTPRequestSerializer,
         responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}},
                   429: {'type': 'object', 'properties': {'error': {'type': 'string'}}},
         }
     )
     def post(self, request):
-        serializer = serializers.OTPRequestSerializer(data=request.data)
+        serializer = account_serializers.OTPRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         phone_number = serializer.validated_data['phone_number']
@@ -526,11 +526,11 @@ class PasswordResetRequestView(APIView):
 
     @swagger_auto_schema(
         operation_summary='Request password reset',
-        request_body=serializers.OTPRequestSerializer,
+        request_body=account_serializers.OTPRequestSerializer,
         responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
     )
     def post(self, request):
-        serializer = serializers.OTPRequestSerializer(data=request.data)
+        serializer = account_serializers.OTPRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         phone_number = serializer.validated_data['phone_number']
@@ -562,11 +562,11 @@ class PasswordResetConfirmView(APIView):
 
     @swagger_auto_schema(
         operation_summary='Confirm password reset',
-        request_body=serializers.PasswordResetConfirmSerializer,
+        request_body=account_serializers.PasswordResetConfirmSerializer,
         responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
     )
     def post(self, request):
-        serializer = serializers.PasswordResetConfirmSerializer(data=request.data)
+        serializer = account_serializers.PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         phone_number = serializer.validated_data['phone_number']

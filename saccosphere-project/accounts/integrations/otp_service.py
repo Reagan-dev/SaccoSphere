@@ -35,6 +35,10 @@ class ATSMSClient:
 
     def __init__(self):
         """Initialize Africa's Talking SMS client with API credentials."""
+        if settings.DEBUG:
+            self.sms = None
+            return
+
         api_key = settings.AT_API_KEY
         username = settings.AT_USERNAME
 
