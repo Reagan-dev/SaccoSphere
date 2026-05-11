@@ -101,27 +101,41 @@ class RepaymentScheduleAdmin(admin.ModelAdmin):
 @admin.register(Guarantor)
 class GuarantorAdmin(admin.ModelAdmin):
     list_display = (
-        'loan',
-        'guarantor',
+        'loan_short_id',
+        'guarantor_email',
         'status',
         'guarantee_amount',
         'requested_at',
-        'responded_at',
     )
-    list_filter = ('status', 'requested_at')
-    search_fields = ('loan__membership__user__email', 'guarantor__email')
+    list_filter = ('status',)
+    search_fields = ('guarantor__email',)
+
+    @admin.display(description='Loan')
+    def loan_short_id(self, obj):
+        """Return a short loan identifier for admin lists."""
+        return str(obj.loan_id)[:8]
+
+    @admin.display(description='Guarantor email')
+    def guarantor_email(self, obj):
+        """Return the guarantor email for admin lists."""
+        return obj.guarantor.email
 
 
 @admin.register(GuaranteeCapacity)
 class GuaranteeCapacityAdmin(admin.ModelAdmin):
     list_display = (
-        'user',
+        'user_email',
         'total_savings',
         'active_guarantees',
         'available_capacity',
         'updated_at',
     )
     search_fields = ('user__email', 'user__first_name', 'user__last_name')
+
+    @admin.display(description='User email')
+    def user_email(self, obj):
+        """Return the capacity owner's email for admin lists."""
+        return obj.user.email
 
 
 @admin.register(Insurance)
