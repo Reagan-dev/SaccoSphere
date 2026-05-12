@@ -140,3 +140,48 @@ class ATSMSClient:
             error_msg = f'Africa\'s Talking SMS error: {str(e)}'
             logger.error(error_msg)
             raise ATSMSError(error_msg) from e
+
+    def send_sms(self, phone_number, message):
+        """
+        Send a plain SMS message.
+
+        Args:
+            phone_number: Phone number to send SMS to.
+            message: Message body.
+
+        Returns:
+            bool: True if SMS sent successfully.
+
+        Raises:
+            ATSMSError: If SMS sending fails.
+        """
+        if settings.DEBUG:
+            logger.info(
+                '[DEBUG MODE] SMS for %s: %s',
+                phone_number,
+                message,
+            )
+            return True
+
+        try:
+            normalized_phone = self._normalize_phone(phone_number)
+        except ATSMSError:
+            logger.exception('Phone normalization failed.')
+            raise
+
+        try:
+            response = self.sms.send(
+                message=message,
+                recipients=[normalized_phone],
+                sender_id='SaccoSphere',
+            )
+            logger.info(
+                'SMS sent successfully to %s. response=%s',
+                normalized_phone,
+                response,
+            )
+            return True
+        except Exception as e:
+            error_msg = f'Africa\'s Talking SMS error: {str(e)}'
+            logger.error(error_msg)
+            raise ATSMSError(error_msg) from e

@@ -16,10 +16,11 @@ def create_notification(
     action_url=None,
     related_object_type=None,
     related_object_id=None,
+    dispatch_async=True,
 ):
     """Create an in-app notification without crashing calling code."""
     try:
-        return Notification.objects.create(
+        notification = Notification.objects.create(
             user=user,
             title=title,
             message=message,
@@ -34,3 +35,30 @@ def create_notification(
             getattr(user, 'id', None),
         )
         return None
+
+    if dispatch_async and category in {
+        Notification.Category.PAYMENT,
+        Notification.Category.LOAN,
+    }:
+        try:
+            from celery import chain
+
+            from .tasks import notify_user_task
+
+            chain(
+                notify_user_task.s(
+                    str(user.id),
+                    title,
+                    message,
+                    category,
+                    action_url=action_url,
+                    create_in_app=False,
+                )
+            ).delay()
+        except Exception:
+            logger.exception(
+                'Failed to dispatch notification delivery for user_id=%s.',
+                getattr(user, 'id', None),
+            )
+
+    return notification
