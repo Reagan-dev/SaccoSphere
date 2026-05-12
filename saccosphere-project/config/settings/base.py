@@ -185,6 +185,22 @@ OTP_RESEND_COOLDOWN_SECONDS = 60
 AT_API_KEY = config('AT_API_KEY', default='')
 AT_USERNAME = config('AT_USERNAME', default='sandbox')
 
+# M-Pesa Daraja Configuration
+MPESA_CONSUMER_KEY = config('MPESA_CONSUMER_KEY', default='')
+MPESA_CONSUMER_SECRET = config('MPESA_CONSUMER_SECRET', default='')
+MPESA_SHORTCODE = config('MPESA_SHORTCODE', default='')
+MPESA_PASSKEY = config('MPESA_PASSKEY', default='')
+MPESA_ENVIRONMENT = config('MPESA_ENVIRONMENT', default='sandbox')
+MPESA_CALLBACK_BASE_URL = config('MPESA_CALLBACK_BASE_URL', default='')
+MPESA_B2C_INITIATOR_NAME = config(
+    'MPESA_B2C_INITIATOR_NAME',
+    default='',
+)
+MPESA_B2C_SECURITY_CREDENTIAL = config(
+    'MPESA_B2C_SECURITY_CREDENTIAL',
+    default='',
+)
+
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
 if DEBUG:

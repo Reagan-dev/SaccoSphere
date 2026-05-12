@@ -3,6 +3,8 @@ from django.urls import path
 from .views import (
     CallbackCreateView,
     MpesaTransactionDetailView,
+    STKPushView,
+    STKStatusView,
     TransactionDetailView,
     TransactionListView,
 )
@@ -11,7 +13,11 @@ from .views import (
 app_name = 'payments'
 
 urlpatterns = [
-    path('transactions/', TransactionListView.as_view(), name='transaction-list'),
+    path(
+        'transactions/',
+        TransactionListView.as_view(),
+        name='transaction-list',
+    ),
     path(
         'transactions/<uuid:id>/',
         TransactionDetailView.as_view(),
@@ -21,6 +27,16 @@ urlpatterns = [
         'mpesa/<uuid:id>/',
         MpesaTransactionDetailView.as_view(),
         name='mpesa-detail',
+    ),
+    path(
+        'mpesa/stk-push/',
+        STKPushView.as_view(),
+        name='mpesa-stk-push',
+    ),
+    path(
+        'mpesa/stk/<str:checkout_request_id>/status/',
+        STKStatusView.as_view(),
+        name='mpesa-stk-status',
     ),
     path('callbacks/', CallbackCreateView.as_view(), name='callback-create'),
 ]
