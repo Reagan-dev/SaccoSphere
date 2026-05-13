@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     GuarantorRequestView,
+    GuarantorRespondView,
     GuarantorSearchView,
     LoanApplyView,
     LoanCollectionView,
@@ -55,5 +56,10 @@ urlpatterns = [
         'loans/<uuid:loan_id>/guarantors/',
         GuarantorRequestView.as_view(),
         name='guarantor-request',
+    ),
+    path(
+        'loans/<uuid:loan_id>/guarantors/<uuid:guarantor_id>/respond/',
+        GuarantorRespondView.as_view(),
+        name='guarantor-respond',
     ),
 ]
