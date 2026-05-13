@@ -20,6 +20,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.response import StandardResponseMixin
 
+from .integrations.iprs_client import IPRSClient, IPRSError
 from .models import KYCVerification, Sacco, User
 from . import serializers as account_serializers
 from .permissions import IsSaccoAdminOrSuperAdmin
@@ -38,6 +39,20 @@ from .serializers import (
 from .otp_utils import create_otp_token, verify_otp, OTPError
 from .integrations.otp_service import ATSMSClient, ATSMSError
 from .throttles import OTPSendThrottle
+
+
+def apply_iprs_result(kyc, result):
+    """Save IPRS verification details on a KYC record."""
+    kyc.id_number = result.get('id_number') or kyc.id_number
+    kyc.iprs_verified = bool(result.get('verified'))
+    kyc.iprs_reference = result.get('iprs_reference') or ''
+    kyc.save(
+        update_fields=[
+            'id_number',
+            'iprs_verified',
+            'iprs_reference',
+        ],
+    )
 
 
 class RegisterView(StandardResponseMixin, CreateAPIView):
@@ -223,12 +238,74 @@ class KYCUploadView(APIView):
             ])
 
         kyc.save(update_fields=update_fields)
+        if kyc.status == KYCVerification.Status.PENDING and kyc.id_number:
+            self._auto_verify_id(kyc)
+
         response_serializer = KYCStatusSerializer(
             kyc,
             context={'request': request},
         )
         return Response(
             response_serializer.data,
+            status=status.HTTP_200_OK,
+        )
+
+    def _auto_verify_id(self, kyc):
+        """Run IPRS during upload without blocking document submission."""
+        try:
+            result = IPRSClient().verify_id(kyc.id_number)
+        except IPRSError:
+            return
+
+        apply_iprs_result(kyc, result)
+
+
+class KYCSubmitIDView(APIView):
+    """Submit a national ID number for IPRS verification."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        id_number = request.data.get('id_number')
+        date_of_birth = request.data.get('date_of_birth')
+
+        if not id_number:
+            return Response(
+                {'id_number': 'This field is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        kyc, _ = KYCVerification.objects.get_or_create(
+            user=request.user,
+            defaults={'status': KYCVerification.Status.NOT_STARTED},
+        )
+
+        try:
+            result = IPRSClient().verify_id(id_number, date_of_birth)
+        except IPRSError:
+            kyc.id_number = id_number
+            kyc.iprs_verified = False
+            kyc.save(update_fields=['id_number', 'iprs_verified'])
+            return Response(
+                {
+                    'iprs_verified': False,
+                    'message': (
+                        'Verification service unavailable. Admin will '
+                        'review manually.'
+                    ),
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        apply_iprs_result(kyc, result)
+        return Response(
+            {
+                'iprs_verified': kyc.iprs_verified,
+                'id_number': kyc.id_number,
+                'name': result.get('name'),
+                'iprs_reference': kyc.iprs_reference,
+                'error': result.get('error'),
+            },
             status=status.HTTP_200_OK,
         )
 
@@ -253,7 +330,10 @@ class AdminKYCQuerysetMixin:
 
     def get_queryset(self):
         """Return KYC records visible to the current admin."""
-        queryset = KYCVerification.objects.select_related('user')
+        queryset = KYCVerification.objects.select_related(
+            'user',
+            'reviewed_by',
+        )
         user = self.request.user
 
         if user.roles.filter(name='SUPER_ADMIN').exists():
@@ -342,10 +422,23 @@ class AdminKYCQueueView(AdminKYCQuerysetMixin, ListAPIView):
     permission_classes = [IsSaccoAdminOrSuperAdmin]
 
     def get_queryset(self):
-        """Return pending KYC records visible to the current admin."""
-        return super().get_queryset().filter(
-            status=KYCVerification.Status.PENDING,
-        )
+        """Return filtered KYC records visible to the current admin."""
+        queryset = super().get_queryset()
+        review_status = self.request.query_params.get('status')
+        search = self.request.query_params.get('search')
+
+        if review_status:
+            queryset = queryset.filter(status=review_status)
+        else:
+            queryset = queryset.filter(status=KYCVerification.Status.PENDING)
+
+        if search:
+            queryset = queryset.filter(
+                Q(user__email__icontains=search)
+                | Q(id_number__icontains=search)
+            )
+
+        return queryset.order_by('-submitted_at', '-created_at')
 
 
 class SaccoListView(StandardResponseMixin, ListAPIView):

@@ -5,6 +5,7 @@ from rest_framework_simplejwt.views import (
 )
 
 from .views import (
+    KYCSubmitIDView,
     KYCStatusView,
     KYCUploadView,
     LoginView,
@@ -35,6 +36,7 @@ urlpatterns = [
     ),
     path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('me/', MeView.as_view(), name='me'),
+    path('kyc/submit-id/', KYCSubmitIDView.as_view(), name='kyc-submit-id'),
     path('kyc/upload/', KYCUploadView.as_view(), name='kyc-upload'),
     path('kyc/status/', KYCStatusView.as_view(), name='kyc-status'),
     path(
