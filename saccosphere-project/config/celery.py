@@ -21,6 +21,7 @@ app.conf.task_queues = (
 )
 app.conf.task_default_queue = 'default'
 app.conf.task_routes = {
+    'payments.tasks.process_stk_callback': {'queue': 'payments'},
     'payments.tasks.*': {'queue': 'payments'},
     'notifications.tasks.*': {'queue': 'notifications'},
     'ledger.tasks.*': {'queue': 'reports'},
