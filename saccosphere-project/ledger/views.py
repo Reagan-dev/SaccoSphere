@@ -1,3 +1,8 @@
+from math import ceil
+
+from django.core.cache import cache
+from django.utils.dateparse import parse_date
+from rest_framework.exceptions import NotFound
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView
 from rest_framework.permissions import IsAuthenticated
@@ -8,8 +13,13 @@ from config.pagination import FinancialPagination
 from saccomembership.models import Membership
 
 from .engines.balance_calculator import get_running_balance
+from .engines.statement_builder import build_statement
 from .models import LedgerEntry
-from .serializers import BalanceSerializer, LedgerEntrySerializer
+from .serializers import (
+    BalanceSerializer,
+    LedgerEntrySerializer,
+    StatementSerializer,
+)
 
 
 class LedgerEntryListView(ListAPIView):
@@ -93,6 +103,99 @@ class BalanceView(APIView):
             ) from exc
 
 
+class StatementView(APIView):
+    """Return a paginated ledger statement for a SACCO membership."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from_date, to_date = self._get_date_range(request)
+        membership = self._get_membership(request)
+        cache_key = f'statement:{membership.id}:{from_date}:{to_date}'
+        statement = cache.get(cache_key)
+
+        if statement is None:
+            statement = build_statement(membership, from_date, to_date)
+            cache.set(cache_key, statement, timeout=300)
+
+        statement = statement.copy()
+        statement['entries'], pagination = self._paginate_entries(
+            statement['entries'],
+            request,
+        )
+        serializer = StatementSerializer(statement)
+        data = serializer.data
+        data['entries_pagination'] = pagination
+
+        return Response(data)
+
+    def _get_date_range(self, request):
+        from_date = self._parse_required_date(request, 'from_date')
+        to_date = self._parse_required_date(request, 'to_date')
+
+        if from_date > to_date:
+            raise ValidationError(
+                {'to_date': 'to_date must be on or after from_date.'}
+            )
+
+        if (to_date - from_date).days > 365:
+            raise ValidationError(
+                {'to_date': 'Statement date range cannot exceed 1 year.'}
+            )
+
+        return from_date, to_date
+
+    def _parse_required_date(self, request, name):
+        raw_value = request.query_params.get(name)
+        if not raw_value:
+            raise ValidationError({name: 'This query param is required.'})
+
+        value = parse_date(raw_value)
+        if value is None:
+            raise ValidationError(
+                {name: 'Use YYYY-MM-DD date format.'}
+            )
+
+        return value
+
+    def _get_membership(self, request):
+        sacco_id = request.query_params.get('sacco_id')
+        if not sacco_id:
+            raise ValidationError({'sacco_id': 'This query param is required.'})
+
+        try:
+            return Membership.objects.select_related('user', 'sacco').get(
+                user=request.user,
+                sacco_id=sacco_id,
+                status=Membership.Status.APPROVED,
+            )
+        except Membership.DoesNotExist as exc:
+            raise NotFound('No approved membership found for this SACCO.') from exc
+
+    def _paginate_entries(self, entries, request):
+        paginator = FinancialPagination()
+        page = paginator.paginate_queryset(entries, request, view=self)
+
+        if page is None:
+            return entries, {
+                'count': len(entries),
+                'total_pages': 1,
+                'current_page': 1,
+                'next': None,
+                'previous': None,
+            }
+
+        page_size = paginator.get_page_size(request)
+        count = paginator.page.paginator.count
+        return page, {
+            'count': count,
+            'total_pages': ceil(count / page_size) if page_size else 1,
+            'current_page': paginator.page.number,
+            'next': paginator.get_next_link(),
+            'previous': paginator.get_previous_link(),
+        }
+
+
 # ============================================================
 # REVIEW - READ THIS THEN DELETE FROM THIS LINE TO THE END
 # ============================================================
@@ -112,6 +215,12 @@ class BalanceView(APIView):
 #   user's approved membership in the requested SACCO.
 # - BalanceView returns the current ledger balance for the logged-in user's
 #   approved membership in the requested SACCO.
+# - build_statement creates a date-range financial statement. It calculates
+#   opening balance, closing balance, credit totals, debit totals, and serializes
+#   the matching ledger entries.
+# - StatementView exposes the statement at /api/v1/ledger/statement/. It checks
+#   date inputs, limits statements to 1 year, caches the full statement for 5
+#   minutes, and paginates entries in the response.
 # - process_stk_callback_task now uses create_ledger_entry for successful
 #   saving deposits, so M-Pesa deposits are recorded in the ledger consistently.
 #
@@ -126,11 +235,18 @@ class BalanceView(APIView):
 #   list endpoints.
 # - ValidationError returns a clean 400 response when required query parameters
 #   like sacco_id are missing.
+# - NotFound returns a clean 404 response when the user does not have an
+#   approved membership in the requested SACCO.
+# - Cache stores the generated statement briefly so repeated downloads or page
+#   changes do not recalculate the same totals.
 #
 # One manual test:
 # - Log in as a member with an approved SACCO membership, complete an M-Pesa
 #   saving deposit callback, then call GET /api/v1/ledger/balance/?sacco_id=<id>
 #   and confirm the balance matches the CREDIT ledger entry amount.
+# - Then call GET /api/v1/ledger/statement/?sacco_id=<id>&from_date=2026-01-01
+#   &to_date=2026-12-31 and confirm opening balance, closing balance, totals,
+#   and entries match the ledger records.
 #
 # Important design decision:
 # - The ledger is treated as the source of truth for balances. Saving.amount can
@@ -138,6 +254,8 @@ class BalanceView(APIView):
 #   calculate from LedgerEntry records.
 # - create_ledger_entry is the intended single entry point for writing ledger
 #   rows because it centralizes reference generation and balance_after logic.
+# - The statement builder returns a plain dictionary instead of a PDF. That
+#   keeps JSON and future PDF generation using the same source data.
 #
 # END OF REVIEW - DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
 # ============================================================
