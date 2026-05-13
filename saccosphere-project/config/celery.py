@@ -3,6 +3,7 @@
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 from django.conf import settings
 from kombu import Queue
 
@@ -31,6 +32,10 @@ app.conf.beat_schedule = {
     'cleanup-expired-otps': {
         'task': 'accounts.tasks.cleanup_expired_otps',
         'schedule': 300.0,
+    },
+    'monthly-sacco-platform-fee-reports': {
+        'task': 'billing.tasks.generate_and_send_monthly_fee_reports',
+        'schedule': crontab(minute=0, hour=0, day_of_month='1'),
     },
 }
 app.conf.task_serializer = 'json'

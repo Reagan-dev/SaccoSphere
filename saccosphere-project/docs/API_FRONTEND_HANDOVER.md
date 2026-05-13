@@ -49,6 +49,18 @@ List endpoints using default pagination return:
 - `502 BAD_GATEWAY`: upstream provider failure (Daraja/Africa's Talking).
 - `503 SERVICE_UNAVAILABLE`: async import queue unavailable.
 
+## Billing Automation (2% Platform Fee)
+1. On successful completed transactions, backend applies a `2%` platform fee.
+2. Fee is stored per transaction and contributes to SACCO monthly billing.
+3. At `00:00` on day `1` of every month, a scheduled task generates invoices for the previous month.
+4. Each invoice includes:
+   - transaction count
+   - total transacted amount
+   - fee rate (`2%`)
+   - amount due
+   - payment account details
+5. Invoice is emailed automatically to SACCO contact email and SACCO admin emails, with CSV and PDF attachments.
+
 ## M-Pesa STK Flow (Text Diagram)
 1. Frontend calls `POST /payments/mpesa/stk-push/`.
 2. Backend creates pending `Transaction` + `MpesaTransaction`.
@@ -108,6 +120,11 @@ List endpoints using default pagination return:
 | POST | `/payments/mpesa/b2c/disburse/` | Yes | SACCO_ADMIN | Start loan disbursement |
 | GET | `/payments/mpesa/b2c/{conversation_id}/status/` | Yes | SACCO_ADMIN | B2C status |
 | GET | `/payments/mpesa/b2c/history/` | Yes | SACCO_ADMIN | B2C history |
+| GET | `/billing/invoices/` | Yes | SACCO_ADMIN/SUPER_ADMIN | List monthly SACCO invoices |
+| GET | `/billing/invoices/{id}/` | Yes | SACCO_ADMIN/SUPER_ADMIN | Invoice detail |
+| POST | `/billing/invoices/{invoice_id}/resend/` | Yes | SACCO_ADMIN/SUPER_ADMIN | Resend invoice email |
+| GET | `/billing/invoices/{invoice_id}/download/?format=csv` | Yes | SACCO_ADMIN/SUPER_ADMIN | Download invoice CSV |
+| GET | `/billing/invoices/{invoice_id}/download/?format=pdf` | Yes | SACCO_ADMIN/SUPER_ADMIN | Download invoice PDF |
 | GET | `/dashboard/portfolio/` | Yes | User | Portfolio summary |
 | GET | `/dashboard/state/` | Yes | User | Dashboard state |
 | GET | `/dashboard/saccos/` | Yes | User | SACCO switcher |
@@ -147,3 +164,5 @@ List endpoints using default pagination return:
 - `VITE_REQUEST_TIMEOUT_MS=30000`
 - `VITE_POLL_IMPORT_INTERVAL_MS=5000`
 - `VITE_POLL_STK_INTERVAL_MS=4000`
+- `VITE_BILLING_INVOICE_FORMAT_DEFAULT=pdf`
+- `VITE_BILLING_AUTO_REFRESH_MS=15000`

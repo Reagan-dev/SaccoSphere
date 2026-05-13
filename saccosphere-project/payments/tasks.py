@@ -168,9 +168,17 @@ def _process_successful_callback(
 
     if mpesa_transaction.related_saving_id:
         _apply_saving_deposit(mpesa_transaction, transaction, amount)
+        _record_platform_fee_for_sacco(
+            transaction,
+            mpesa_transaction.related_saving.membership.sacco,
+        )
 
     if mpesa_transaction.related_loan_id:
         _apply_loan_repayment(mpesa_transaction, transaction, amount)
+        _record_platform_fee_for_sacco(
+            transaction,
+            mpesa_transaction.related_loan.membership.sacco,
+        )
 
     _notify_payment_success(mpesa_transaction, transaction, amount)
 
@@ -257,6 +265,7 @@ def _process_successful_b2c_callback(
     )
 
     _create_loan_disbursement_ledger(mpesa_transaction, transaction, amount)
+    _record_platform_fee_for_sacco(transaction, loan.membership.sacco)
     _notify_disbursement_success(mpesa_transaction, transaction, amount)
 
 
@@ -493,6 +502,21 @@ def _normalize_result_code(result_code):
     except (TypeError, ValueError):
         logger.warning('Invalid M-Pesa result code received: %s.', result_code)
         return -1
+
+
+def _record_platform_fee_for_sacco(transaction, sacco):
+    """Record the 2% platform fee for completed transaction once."""
+    if sacco is None:
+        return
+    try:
+        from billing.services import record_transaction_fee
+
+        record_transaction_fee(transaction, sacco)
+    except Exception:
+        logger.exception(
+            'Failed to record platform fee for transaction_id=%s.',
+            transaction.id,
+        )
 
 
 # ============================================================
