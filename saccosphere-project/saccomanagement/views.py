@@ -15,6 +15,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView, RetrieveAPIView, UpdateAPIView
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -26,7 +27,7 @@ from saccomembership.serializers import MembershipListSerializer
 from services.models import Loan, Saving
 
 from .mixins import SaccoScopedMixin
-from .models import Role
+from .models import ImportJob, Role
 from .serializers import (
     AdminMemberDetailSerializer,
     AdminSaccoStatsSerializer,
@@ -484,6 +485,133 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
 
         serializer = self.get_serializer(loan)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class MemberImportView(SaccoScopedMixin, APIView):
+    """Create an asynchronous SACCO member import job from uploaded file."""
+
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        """Validate uploaded file, create import job, and enqueue task."""
+        response = self._set_sacco_context()
+        if response:
+            return response
+
+        sacco = self.get_sacco_context()
+        if sacco is None:
+            return Response(
+                {'detail': 'SACCO context is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        upload = request.FILES.get('file')
+        if upload is None:
+            return Response(
+                {'detail': 'file is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        filename = upload.name.lower()
+        if not (
+            filename.endswith('.csv')
+            or filename.endswith('.xlsx')
+            or filename.endswith('.xls')
+        ):
+            return Response(
+                {'detail': 'Only .csv, .xlsx, or .xls files are supported.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        job = ImportJob.objects.create(
+            sacco=sacco,
+            imported_by=request.user,
+            file=upload,
+            status=ImportJob.Status.PENDING,
+        )
+
+        from saccomanagement.tasks import run_member_import_task
+
+        try:
+            run_member_import_task.delay(str(job.id))
+        except Exception as exc:
+            job.status = ImportJob.Status.FAILED
+            job.error_summary = [
+                {
+                    'error': (
+                        'Failed to enqueue import task. '
+                        f'{str(exc)}'
+                    ),
+                },
+            ]
+            job.completed_at = timezone.now()
+            job.save(
+                update_fields=[
+                    'status',
+                    'error_summary',
+                    'completed_at',
+                ],
+            )
+            return Response(
+                {
+                    'detail': (
+                        'Import service is currently unavailable. '
+                        'Please retry shortly.'
+                    ),
+                    'job_id': str(job.id),
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response(
+            {
+                'job_id': str(job.id),
+                'message': (
+                    'Import started. Check status at '
+                    f'/management/import/{job.id}/'
+                ),
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class ImportJobStatusView(SaccoScopedMixin, RetrieveAPIView):
+    """Return SACCO-scoped progress and summary for one import job."""
+
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    lookup_field = 'id'
+    lookup_url_kwarg = 'job_id'
+
+    def get(self, request, *args, **kwargs):
+        """Set SACCO context before retrieving import status."""
+        response = self._set_sacco_context()
+        if response:
+            return response
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        """Restrict import jobs to current SACCO admin scope."""
+        queryset = ImportJob.objects.select_related('sacco', 'imported_by')
+        return self.get_sacco_queryset(queryset, sacco_field='sacco')
+
+    def retrieve(self, request, *args, **kwargs):
+        """Return structured import status details for the requested job."""
+        job = self.get_object()
+        return Response(
+            {
+                'job_id': str(job.id),
+                'sacco_id': str(job.sacco_id),
+                'status': job.status,
+                'total_rows': job.total_rows,
+                'success_count': job.success_count,
+                'fail_count': job.fail_count,
+                'error_summary': job.error_summary,
+                'created_at': job.created_at,
+                'completed_at': job.completed_at,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # ============================================================

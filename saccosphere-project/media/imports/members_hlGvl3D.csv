@@ -1,0 +1,2 @@
+first_name,last_name,email,phone,id_number,member_number,savings_amount,savings_type,loan_amount,loan_status
+Jane,Doe,jane.verify@example.com,0712345678,12345678,M001,1000,BOSA,5000,ACTIVE
