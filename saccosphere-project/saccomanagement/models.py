@@ -160,3 +160,50 @@ class RolePermission(models.Model):
 
     def __str__(self):
         return f'{self.role} — {self.resource}'
+
+class ImportJob(models.Model):
+    """Track asynchronous SACCO member bulk-import processing."""
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PROCESSING = 'PROCESSING', 'Processing'
+        COMPLETED = 'COMPLETED', 'Completed'
+        FAILED = 'FAILED', 'Failed'
+        PARTIAL = 'PARTIAL', 'Partial'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    sacco = models.ForeignKey(
+        'accounts.Sacco',
+        on_delete=models.CASCADE,
+        related_name='import_jobs',
+    )
+    imported_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='member_import_jobs',
+    )
+    file = models.FileField(upload_to='imports/')
+    status = models.CharField(
+        max_length=15,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    total_rows = models.PositiveIntegerField(default=0)
+    success_count = models.PositiveIntegerField(default=0)
+    fail_count = models.PositiveIntegerField(default=0)
+    error_summary = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return (
+            f'Import {str(self.id)[:8]} - '
+            f'{self.sacco.name} - {self.status}'
+        )

@@ -9,6 +9,8 @@ from .views import (
     AdminMemberListView,
     AdminSaccoStatsView,
     ApplicationReviewView,
+    ImportJobStatusView,
+    MemberImportView,
 )
 
 
@@ -46,5 +48,15 @@ urlpatterns = [
         'loans/<uuid:id>/status/',
         AdminLoanApprovalView.as_view(),
         name='loan-approval',
+    ),
+    path(
+        'import/',
+        MemberImportView.as_view(),
+        name='member-import',
+    ),
+    path(
+        'import/<uuid:job_id>/',
+        ImportJobStatusView.as_view(),
+        name='member-import-status',
     ),
 ]
