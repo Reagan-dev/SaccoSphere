@@ -11,6 +11,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.permissions import IsSaccoAdmin
 from config.response import StandardResponseMixin
 from services.models import Loan, Saving
 
@@ -93,6 +94,27 @@ class STKPushRequestSerializer(serializers.Serializer):
             )
 
         return attrs
+
+
+class B2CDisbursementSerializer(serializers.Serializer):
+    loan_id = serializers.UUIDField()
+    phone_number = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    remarks = serializers.CharField(
+        default='Loan Disbursement',
+        required=False,
+    )
+
+    def validate_phone_number(self, value):
+        return validate_mpesa_phone(value)
+
+    def validate_amount(self, value):
+        if value <= Decimal('0.00'):
+            raise serializers.ValidationError(
+                'Amount must be greater than zero.'
+            )
+
+        return value
 
 
 class TransactionListView(StandardResponseMixin, ListAPIView):
@@ -330,6 +352,200 @@ class MPesaSTKCallbackView(APIView):
         return body.get('stkCallback') or body.get('StkCallback') or {}
 
 
+class B2CDisbursementView(APIView):
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+
+    def post(self, request):
+        serializer = B2CDisbursementSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        current_sacco = getattr(request, 'current_sacco', None)
+
+        if current_sacco is None:
+            return Response(
+                {'detail': 'SACCO context is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        loan = get_object_or_404(
+            Loan.objects.select_related('membership', 'membership__sacco'),
+            id=data['loan_id'],
+            membership__sacco=current_sacco,
+        )
+
+        if loan.status != Loan.Status.APPROVED:
+            return Response(
+                {'detail': 'Only approved loans can be disbursed.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reference = self._build_reference()
+        remarks = data['remarks']
+        callback_url = DarajaClient()._build_callback_url(
+            '/api/v1/payments/callback/mpesa/b2c/'
+        )
+
+        try:
+            daraja_response = DarajaClient().initiate_b2c(
+                phone_number=data['phone_number'],
+                amount=data['amount'],
+                occasion='Loan Disbursement',
+                remarks=remarks,
+                result_url=callback_url,
+                timeout_url=callback_url,
+            )
+        except DarajaError as exc:
+            return Response(
+                {
+                    'error': exc.message,
+                    'response_code': exc.response_code,
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        conversation_id = daraja_response.get('ConversationID')
+        originator_conversation_id = daraja_response.get(
+            'OriginatorConversationID'
+        )
+
+        with db_transaction.atomic():
+            provider = self._get_mpesa_provider()
+            payment = Transaction.objects.create(
+                provider=provider,
+                user=loan.membership.user,
+                reference=reference,
+                external_reference=conversation_id,
+                transaction_type=Transaction.TransactionType.LOAN_DISBURSEMENT,
+                amount=data['amount'],
+                status=Transaction.Status.PENDING,
+                description=remarks,
+                metadata={'daraja_response': daraja_response},
+            )
+            MpesaTransaction.objects.create(
+                transaction=payment,
+                phone_number=data['phone_number'],
+                conversation_id=conversation_id,
+                originator_conversation_id=originator_conversation_id,
+                transaction_type=MpesaTransaction.TransactionType.B2C,
+                related_loan=loan,
+            )
+            loan.status = Loan.Status.DISBURSEMENT_PENDING
+            loan.save(update_fields=['status', 'updated_at'])
+
+        return Response(
+            {
+                'conversation_id': conversation_id,
+                'message': 'Disbursement initiated.',
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _build_reference(self):
+        return f'SS-B2C-{uuid4().hex[:18].upper()}'
+
+    def _get_mpesa_provider(self):
+        provider, _ = PaymentProvider.objects.get_or_create(
+            name='M-Pesa',
+            defaults={
+                'provider_type': PaymentProvider.ProviderType.MPESA,
+                'is_active': True,
+            },
+        )
+        return provider
+
+
+class B2CCallbackView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not is_safaricom_ip(request):
+            return JsonResponse({'detail': 'Forbidden'}, status=403)
+
+        try:
+            callback_body = json.loads(request.body.decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        request._mpesa_callback_body = callback_body
+        result = (
+            callback_body.get('Result')
+            or callback_body.get('result')
+            or {}
+        )
+        conversation_id = result.get('ConversationID')
+
+        if not conversation_id:
+            return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+        if is_replay_attack(conversation_id):
+            return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+        if not verify_mpesa_signature(request):
+            return JsonResponse({'detail': 'Forbidden'}, status=403)
+
+        result_code = result.get('ResultCode')
+
+        from .tasks import process_b2c_callback_task
+
+        process_b2c_callback_task.delay(
+            conversation_id,
+            result_code,
+            callback_body,
+        )
+
+        return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+
+class B2CStatusView(APIView):
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+
+    def get(self, request, conversation_id):
+        mpesa_transaction = get_object_or_404(
+            self._get_queryset(request),
+            conversation_id=conversation_id,
+        )
+        return Response(self._serialize_b2c(mpesa_transaction), status=200)
+
+    def _get_queryset(self, request):
+        current_sacco = getattr(request, 'current_sacco', None)
+        return MpesaTransaction.objects.select_related(
+            'transaction',
+            'related_loan',
+            'related_loan__membership',
+        ).filter(
+            transaction_type=MpesaTransaction.TransactionType.B2C,
+            related_loan__membership__sacco=current_sacco,
+        )
+
+    def _serialize_b2c(self, mpesa_transaction):
+        return {
+            'conversation_id': mpesa_transaction.conversation_id,
+            'originator_conversation_id': (
+                mpesa_transaction.originator_conversation_id
+            ),
+            'status': mpesa_transaction.transaction.status,
+            'result_code': mpesa_transaction.result_code,
+            'result_description': mpesa_transaction.result_description,
+            'mpesa_receipt_number': mpesa_transaction.mpesa_receipt_number,
+            'callback_received': mpesa_transaction.callback_received,
+            'loan_id': str(mpesa_transaction.related_loan_id),
+            'amount': mpesa_transaction.transaction.amount,
+            'created_at': mpesa_transaction.created_at.isoformat(),
+        }
+
+
+class B2CHistoryView(B2CStatusView):
+    def get(self, request):
+        history = [
+            self._serialize_b2c(mpesa_transaction)
+            for mpesa_transaction in self._get_queryset(request).order_by(
+                '-created_at'
+            )
+        ]
+        return Response(history, status=200)
+
+
 class CallbackCreateView(StandardResponseMixin, CreateAPIView):
     serializer_class = CallbackSerializer
     permission_classes = [AllowAny]
@@ -360,6 +576,12 @@ class CallbackCreateView(StandardResponseMixin, CreateAPIView):
 #   and MpesaTransaction if Safaricom accepts the request.
 # - STKStatusView returns the local pending/completed/failed status for a
 #   CheckoutRequestID and blocks users from seeing someone else's transaction.
+# - B2CDisbursementView lets a SACCO admin start an M-Pesa loan disbursement
+#   for an approved loan in their current SACCO context.
+# - B2CCallbackView receives Safaricom B2C callbacks, applies the same IP,
+#   replay, and signature checks, then sends the work to Celery.
+# - B2CStatusView and B2CHistoryView let SACCO admins inspect B2C
+#   disbursement progress and past disbursements for their SACCO.
 #
 # Django/Python concepts that may be useful:
 # - APIView is a Django REST Framework class for custom endpoint logic.
@@ -370,17 +592,24 @@ class CallbackCreateView(StandardResponseMixin, CreateAPIView):
 #   together or roll back together.
 # - Django cache stores the Daraja access token for 50 minutes so you do not
 #   request a new token on every payment attempt.
+# - request.current_sacco is set by SACCO context middleware and tells a view
+#   which SACCO an admin is currently managing.
 #
 # One manual test:
 # - Log in, get a JWT, then POST to
 #   /api/v1/payments/mpesa/stk-push/ with a valid phone number, amount,
 #   purpose=SAVING_DEPOSIT, sacco_id, and saving_id. Confirm your phone gets
 #   the M-Pesa PIN prompt and the response includes checkout_request_id.
+# - For B2C, log in as a SACCO admin with X-Sacco-ID set, then POST an
+#   approved loan to /api/v1/payments/mpesa/b2c/disburse/. Confirm the response
+#   includes conversation_id and the loan moves to DISBURSEMENT_PENDING.
 #
 # Important design decision:
 # - The endpoint verifies that the saving or loan belongs to the logged-in user
 #   and the supplied SACCO before calling Daraja. This prevents a member from
 #   starting a payment against another member's account.
+# - B2C disbursement is admin-only and scoped to request.current_sacco so one
+#   SACCO admin cannot disburse loans for another SACCO.
 #
 # END OF REVIEW — DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
 # ============================================================

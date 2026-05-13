@@ -126,6 +126,41 @@ class DarajaClient:
 
         return self._post(self._get_stk_query_url, token, payload)
 
+    def initiate_b2c(
+        self,
+        phone_number,
+        amount,
+        occasion,
+        remarks,
+        result_url,
+        timeout_url,
+    ):
+        token = self.get_access_token()
+        payload = {
+            'InitiatorName': settings.MPESA_B2C_INITIATOR_NAME,
+            'SecurityCredential': settings.MPESA_B2C_SECURITY_CREDENTIAL,
+            'CommandID': 'BusinessPayment',
+            'Amount': int(amount),
+            'PartyA': settings.MPESA_SHORTCODE,
+            'PartyB': phone_number,
+            'Remarks': remarks[:100],
+            'QueueTimeOutURL': timeout_url,
+            'ResultURL': result_url,
+            'Occasion': occasion[:100],
+        }
+
+        data = self._post(self._get_b2c_url, token, payload)
+        response_code = str(data.get('ResponseCode'))
+        if response_code != '0':
+            raise DarajaError(
+                data.get('errorMessage')
+                or data.get('ResponseDescription')
+                or 'M-Pesa B2C disbursement failed.',
+                response_code,
+            )
+
+        return data
+
     def _build_callback_url(self, callback_path):
         if callback_path.startswith('/'):
             path = callback_path

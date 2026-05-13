@@ -18,7 +18,7 @@ SAFARICOM_IP_RANGES = [
 
 def verify_mpesa_signature(request):
     payload = getattr(request, '_mpesa_callback_body', request.data)
-    callback = _get_stk_callback(payload)
+    callback = _get_callback_payload(payload)
     received_password = _get_first_value(
         callback,
         'password',
@@ -96,12 +96,18 @@ def _get_client_ip(request):
     return request.META.get('REMOTE_ADDR')
 
 
-def _get_stk_callback(payload):
+def _get_callback_payload(payload):
     if not isinstance(payload, dict):
         return {}
 
     body = payload.get('Body') or payload.get('body') or {}
-    return body.get('stkCallback') or body.get('StkCallback') or {}
+    return (
+        body.get('stkCallback')
+        or body.get('StkCallback')
+        or payload.get('Result')
+        or payload.get('result')
+        or {}
+    )
 
 
 def _get_first_value(data, *keys):
