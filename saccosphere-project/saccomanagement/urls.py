@@ -3,7 +3,13 @@ from django.urls import path
 from accounts.views import AdminKYCQueueView, AdminKYCReviewView
 
 from .role_views import RoleAssignView, RoleRevokeView, UserRolesView
-from .views import AdminMemberListView, AdminLoanApprovalView
+from .views import (
+    AdminLoanApprovalView,
+    AdminMemberDetailView,
+    AdminMemberListView,
+    AdminSaccoStatsView,
+    ApplicationReviewView,
+)
 
 
 app_name = 'saccomanagement'
@@ -19,6 +25,17 @@ urlpatterns = [
     path('roles/', UserRolesView.as_view(), name='user-roles'),
     # Admin views
     path('members/', AdminMemberListView.as_view(), name='member-list'),
+    path(
+        'members/<uuid:membership_id>/',
+        AdminMemberDetailView.as_view(),
+        name='member-detail',
+    ),
+    path('stats/', AdminSaccoStatsView.as_view(), name='sacco-stats'),
+    path(
+        'applications/<uuid:id>/review/',
+        ApplicationReviewView.as_view(),
+        name='application-review',
+    ),
     path('kyc/queue/', AdminKYCQueueView.as_view(), name='kyc-queue'),
     path(
         'kyc/<uuid:kyc_id>/review/',
