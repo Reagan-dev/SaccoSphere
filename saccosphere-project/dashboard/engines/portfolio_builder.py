@@ -1,6 +1,18 @@
 from decimal import Decimal
 
-from django.db.models import Prefetch
+from django.db.models import (
+    CharField,
+    Count,
+    DecimalField,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+)
+from django.db.models.functions import Cast, Coalesce
 
 
 ZERO = Decimal('0.00')
@@ -139,6 +151,61 @@ def get_dashboard_state(user):
         'active_count': active_count,
         'pending_count': pending_count,
     }
+
+
+def get_sacco_switcher_data(user):
+    """
+    Return approved SACCO memberships for the dashboard SACCO switcher.
+    """
+    from notifications.models import Notification
+    from saccomembership.models import Membership
+    from services.models import Loan, Saving
+
+    unread_notifications = Notification.objects.filter(
+        user=user,
+        is_read=False,
+        related_object_type__iexact='Sacco',
+        related_object_id=Cast(OuterRef('sacco_id'), CharField()),
+    ).values('related_object_id').annotate(
+        total=Count('id')
+    ).values('total')[:1]
+
+    memberships = Membership.objects.filter(
+        user=user,
+        status=Membership.Status.APPROVED,
+    ).select_related('sacco').annotate(
+        savings_total=Coalesce(
+            Sum(
+                'saving__amount',
+                filter=Q(saving__status=Saving.Status.ACTIVE),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
+            Value(ZERO),
+            output_field=DecimalField(max_digits=12, decimal_places=2),
+        ),
+        active_loans=Count(
+            'loan',
+            filter=Q(loan__status=Loan.Status.ACTIVE),
+            distinct=True,
+        ),
+        unread_notifications=Coalesce(
+            Subquery(unread_notifications, output_field=IntegerField()),
+            Value(0),
+        ),
+    ).order_by('sacco__name')
+
+    return [
+        {
+            'sacco_id': str(membership.sacco_id),
+            'sacco_name': membership.sacco.name,
+            'sacco_logo_url': _get_sacco_logo_url(membership),
+            'savings_total': membership.savings_total,
+            'active_loans': membership.active_loans,
+            'unread_notifications': membership.unread_notifications,
+            'member_number': membership.member_number,
+        }
+        for membership in memberships
+    ]
 
 
 def _sum_savings_by_type(savings, savings_type_name):
