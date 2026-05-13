@@ -21,6 +21,10 @@ from accounts.models import Sacco, User
 from notifications.utils import create_notification
 from saccomembership.models import Membership
 
+from .engines.guarantor_logic import (
+    calculate_guarantee_capacity,
+    update_guarantee_capacity,
+)
 from .engines.loan_limits import calculate_loan_limit
 from .models import (
     GuaranteeCapacity,
@@ -425,6 +429,13 @@ class GuarantorRequestView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        capacity_data = calculate_guarantee_capacity(guarantor_user)
+        if capacity_data['available_capacity'] < guarantee_amount:
+            return Response(
+                {'detail': 'Guarantor has insufficient capacity.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         with transaction.atomic():
             if Guarantor.objects.filter(
                 loan=loan,
@@ -542,7 +553,7 @@ class GuarantorRespondView(APIView):
                 guarantor.save()
 
                 # Recalculate and update guarantor's capacity.
-                self._update_guarantor_capacity(request.user)
+                update_guarantee_capacity(request.user)
 
                 # Check if all required guarantors are now APPROVED.
                 total_required = (
@@ -582,37 +593,6 @@ class GuarantorRespondView(APIView):
 
         serializer = GuarantorSerializer(guarantor)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
-    def _update_guarantor_capacity(self, user):
-        """Recalculate and save guarantor's capacity."""
-        total_savings = Saving.objects.filter(
-            membership__user=user,
-            status=Saving.Status.ACTIVE,
-        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-
-        active_guarantees = Guarantor.objects.filter(
-            guarantor=user,
-            status__in=[
-                Guarantor.Status.PENDING,
-                Guarantor.Status.APPROVED,
-            ],
-        ).aggregate(total=Sum('guarantee_amount'))['total'] or Decimal('0')
-
-        available_capacity = max(
-            total_savings - active_guarantees,
-            Decimal('0'),
-        )
-
-        capacity, _ = GuaranteeCapacity.objects.get_or_create(user=user)
-        capacity.total_savings = total_savings
-        capacity.active_guarantees = active_guarantees
-        capacity.available_capacity = available_capacity
-        capacity.save(update_fields=[
-            'total_savings',
-            'active_guarantees',
-            'available_capacity',
-            'updated_at',
-        ])
 
     def _notify_sacco_admin_board_review(self, loan):
         """Notify SACCO admin that loan is ready for board review."""
