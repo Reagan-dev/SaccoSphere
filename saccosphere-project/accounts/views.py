@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.response import StandardResponseMixin
+from saccomanagement.odpc_logging import DataAccessMixin
 
 from .integrations.iprs_client import IPRSClient, IPRSError
 from .models import KYCVerification, Sacco, User
@@ -415,11 +416,13 @@ class AdminKYCReviewView(AdminKYCQuerysetMixin, UpdateAPIView):
         )
 
 
-class AdminKYCQueueView(AdminKYCQuerysetMixin, ListAPIView):
+class AdminKYCQueueView(DataAccessMixin, AdminKYCQuerysetMixin, ListAPIView):
     """List pending KYC verification records for admin review."""
 
     serializer_class = KYCStatusSerializer
     permission_classes = [IsSaccoAdminOrSuperAdmin]
+    data_access_type = 'KYC_DOCUMENTS'
+    data_access_reason = 'Admin KYC queue review'
 
     def get_queryset(self):
         """Return filtered KYC records visible to the current admin."""
