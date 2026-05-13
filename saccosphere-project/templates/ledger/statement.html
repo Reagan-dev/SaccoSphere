@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Member Statement</title>
+</head>
+<body style="margin: 0; padding: 0; background: #ffffff; color: #1f2933; font-family: Arial, sans-serif; font-size: 12px;">
+  <div style="padding: 32px;">
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+      <tr>
+        <td style="vertical-align: top;">
+          <div style="font-size: 24px; font-weight: bold; color: #1A3A6B;">SaccoSphere</div>
+          <div style="font-size: 12px; color: #52606d; margin-top: 4px;">Digital SACCO Management Platform</div>
+        </td>
+        <td style="text-align: right; vertical-align: top;">
+          {% if sacco_logo_url %}
+            <img src="{{ sacco_logo_url }}" alt="{{ sacco_name }}" style="height: 48px; max-width: 120px; object-fit: contain; margin-bottom: 8px;">
+          {% endif %}
+          <div style="font-size: 18px; font-weight: bold; color: #1A3A6B;">{{ sacco_name }}</div>
+          <div style="font-size: 14px; color: #1f2933; margin-top: 6px;">Member Statement</div>
+        </td>
+      </tr>
+    </table>
+
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 22px; border: 1px solid #d9e2ec;">
+      <tr>
+        <th colspan="2" style="text-align: left; background: #1A3A6B; color: #ffffff; padding: 9px 10px; font-size: 13px;">Member Information</th>
+      </tr>
+      <tr>
+        <td style="width: 28%; padding: 8px 10px; border-bottom: 1px solid #e4e7eb; color: #52606d;">Member Name</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e4e7eb;">{{ member_name }}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e4e7eb; color: #52606d;">Member Number</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e4e7eb;">{{ member_number|default:"-" }}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e4e7eb; color: #52606d;">SACCO Name</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e4e7eb;">{{ sacco_name }}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e4e7eb; color: #52606d;">Period</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e4e7eb;">{{ from_date }} to {{ to_date }}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 10px; color: #52606d;">Generated At</td>
+        <td style="padding: 8px 10px;">{{ generated_at }}</td>
+      </tr>
+    </table>
+
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+      <tr>
+        <td style="width: 25%; padding: 12px; background: #f5f7fa; border: 1px solid #d9e2ec;">
+          <div style="color: #52606d; font-size: 11px;">Opening Balance</div>
+          <div style="font-size: 16px; margin-top: 5px;">KES {{ opening_balance_display }}</div>
+        </td>
+        <td style="width: 25%; padding: 12px; background: #f5f7fa; border: 1px solid #d9e2ec;">
+          <div style="color: #52606d; font-size: 11px;">Total Credits (+)</div>
+          <div style="font-size: 16px; margin-top: 5px; color: #0f766e;">KES {{ total_credits_display }}</div>
+        </td>
+        <td style="width: 25%; padding: 12px; background: #f5f7fa; border: 1px solid #d9e2ec;">
+          <div style="color: #52606d; font-size: 11px;">Total Debits (-)</div>
+          <div style="font-size: 16px; margin-top: 5px; color: #b42318;">KES {{ total_debits_display }}</div>
+        </td>
+        <td style="width: 25%; padding: 12px; background: #1A3A6B; border: 1px solid #1A3A6B; color: #ffffff;">
+          <div style="font-size: 11px;">Closing Balance</div>
+          <div style="font-size: 17px; margin-top: 5px; font-weight: bold;">KES {{ closing_balance_display }}</div>
+        </td>
+      </tr>
+    </table>
+
+    <table style="width: 100%; border-collapse: collapse; border: 1px solid #d9e2ec;">
+      <thead>
+        <tr style="background: #1A3A6B; color: #ffffff;">
+          <th style="padding: 8px; text-align: left; width: 13%;">Date</th>
+          <th style="padding: 8px; text-align: left; width: 29%;">Description</th>
+          <th style="padding: 8px; text-align: left; width: 18%;">Reference</th>
+          <th style="padding: 8px; text-align: right; width: 13%;">Debit</th>
+          <th style="padding: 8px; text-align: right; width: 13%;">Credit</th>
+          <th style="padding: 8px; text-align: right; width: 14%;">Balance</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in entries %}
+          <tr>
+            <td style="padding: 7px 8px; border-bottom: 1px solid #e4e7eb;">{{ entry.created_at }}</td>
+            <td style="padding: 7px 8px; border-bottom: 1px solid #e4e7eb;">{{ entry.description }}</td>
+            <td style="padding: 7px 8px; border-bottom: 1px solid #e4e7eb;">{{ entry.reference }}</td>
+            <td style="padding: 7px 8px; border-bottom: 1px solid #e4e7eb; text-align: right;">{{ entry.debit_display }}</td>
+            <td style="padding: 7px 8px; border-bottom: 1px solid #e4e7eb; text-align: right;">{{ entry.credit_display }}</td>
+            <td style="padding: 7px 8px; border-bottom: 1px solid #e4e7eb; text-align: right;">KES {{ entry.balance_after_display }}</td>
+          </tr>
+        {% empty %}
+          <tr>
+            <td colspan="6" style="padding: 14px 8px; text-align: center; color: #52606d;">No transactions found for this period.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div style="margin-top: 28px; padding-top: 12px; border-top: 1px solid #d9e2ec; color: #52606d; font-size: 11px; text-align: center;">
+      Generated by SaccoSphere. For queries contact your SACCO.
+    </div>
+  </div>
+</body>
+</html>

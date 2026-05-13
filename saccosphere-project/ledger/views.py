@@ -1,7 +1,9 @@
 from math import ceil
 
 from django.core.cache import cache
+from django.http import HttpResponse
 from django.utils.dateparse import parse_date
+from rest_framework import status
 from rest_framework.exceptions import NotFound
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView
@@ -13,6 +15,7 @@ from config.pagination import FinancialPagination
 from saccomembership.models import Membership
 
 from .engines.balance_calculator import get_running_balance
+from .engines.pdf_generator import generate_statement_pdf
 from .engines.statement_builder import build_statement
 from .models import LedgerEntry
 from .serializers import (
@@ -115,7 +118,12 @@ class StatementView(APIView):
         statement = cache.get(cache_key)
 
         if statement is None:
-            statement = build_statement(membership, from_date, to_date)
+            statement = build_statement(
+                membership,
+                from_date,
+                to_date,
+                requesting_user=request.user,
+            )
             cache.set(cache_key, statement, timeout=300)
 
         statement = statement.copy()
@@ -196,8 +204,40 @@ class StatementView(APIView):
         }
 
 
+class StatementPDFView(StatementView):
+    """Return a PDF ledger statement for a SACCO membership."""
+
+    def get(self, request):
+        from_date, to_date = self._get_date_range(request)
+        membership = self._get_membership(request)
+        statement = build_statement(
+            membership,
+            from_date,
+            to_date,
+            requesting_user=request.user,
+        )
+
+        try:
+            pdf_bytes = generate_statement_pdf(statement)
+        except (ImportError, OSError):
+            return Response(
+                {'message': 'PDF generation temporarily unavailable.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        filename = (
+            f'statement_{membership.member_number or membership.id}_'
+            f'{from_date}_{to_date}.pdf'
+        )
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = (
+            f'attachment; filename="{filename}"'
+        )
+        return response
+
+
 # ============================================================
-# REVIEW - READ THIS THEN DELETE FROM THIS LINE TO THE END
+# REVIEW — READ THIS THEN DELETE FROM THIS LINE TO THE END
 # ============================================================
 #
 # What each class or function does and why:
@@ -221,6 +261,11 @@ class StatementView(APIView):
 # - StatementView exposes the statement at /api/v1/ledger/statement/. It checks
 #   date inputs, limits statements to 1 year, caches the full statement for 5
 #   minutes, and paginates entries in the response.
+# - generate_statement_pdf renders the statement HTML template and asks
+#   WeasyPrint to turn that HTML into PDF bytes.
+# - StatementPDFView exposes /api/v1/ledger/statement/pdf/. It uses the same
+#   validation as StatementView, builds the statement, generates a PDF, and
+#   returns it as a downloadable file.
 # - process_stk_callback_task now uses create_ledger_entry for successful
 #   saving deposits, so M-Pesa deposits are recorded in the ledger consistently.
 #
@@ -239,6 +284,10 @@ class StatementView(APIView):
 #   approved membership in the requested SACCO.
 # - Cache stores the generated statement briefly so repeated downloads or page
 #   changes do not recalculate the same totals.
+# - HttpResponse is used for PDFs because the response body is raw bytes, not
+#   JSON data.
+# - WeasyPrint converts HTML and CSS into a PDF. It needs native system
+#   libraries on the server, not just the Python package.
 #
 # One manual test:
 # - Log in as a member with an approved SACCO membership, complete an M-Pesa
@@ -247,6 +296,8 @@ class StatementView(APIView):
 # - Then call GET /api/v1/ledger/statement/?sacco_id=<id>&from_date=2026-01-01
 #   &to_date=2026-12-31 and confirm opening balance, closing balance, totals,
 #   and entries match the ledger records.
+# - Call GET /api/v1/ledger/statement/pdf/?sacco_id=<id>&from_date=2026-01-01
+#   &to_date=2026-12-31 and confirm the browser downloads a PDF statement.
 #
 # Important design decision:
 # - The ledger is treated as the source of truth for balances. Saving.amount can
@@ -256,6 +307,9 @@ class StatementView(APIView):
 #   rows because it centralizes reference generation and balance_after logic.
 # - The statement builder returns a plain dictionary instead of a PDF. That
 #   keeps JSON and future PDF generation using the same source data.
+# - The PDF template uses inline CSS because WeasyPrint is most reliable when
+#   it can render a self-contained HTML document without JavaScript or external
+#   frontend assets.
 #
-# END OF REVIEW - DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
+# END OF REVIEW — DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
 # ============================================================
