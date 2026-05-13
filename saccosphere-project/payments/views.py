@@ -5,6 +5,8 @@ from uuid import uuid4
 from django.db import transaction as db_transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import serializers, status
 from rest_framework.generics import CreateAPIView, ListAPIView, RetrieveAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -171,6 +173,12 @@ class MpesaTransactionDetailView(StandardResponseMixin, RetrieveAPIView):
 class STKPushView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_description='Initiate M-Pesa STK push for saving or loan repayment.',
+        request_body=STKPushRequestSerializer,
+        responses={201: openapi.Response('Created'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def post(self, request):
         serializer = STKPushRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -279,6 +287,11 @@ class STKPushView(APIView):
 class STKStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_description='Get STK transaction status by checkout request id.',
+        responses={200: openapi.Response('OK'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def get(self, request, checkout_request_id):
         mpesa_transaction = get_object_or_404(
             MpesaTransaction.objects.select_related('transaction'),
@@ -308,6 +321,11 @@ class MPesaSTKCallbackView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    @swagger_auto_schema(
+        operation_description='Receive Safaricom STK callback payload.',
+        responses={200: openapi.Response('Accepted'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def post(self, request):
         if not is_safaricom_ip(request):
             return JsonResponse({'detail': 'Forbidden'}, status=403)
@@ -355,6 +373,12 @@ class MPesaSTKCallbackView(APIView):
 class B2CDisbursementView(APIView):
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
 
+    @swagger_auto_schema(
+        operation_description='Initiate M-Pesa B2C loan disbursement.',
+        request_body=B2CDisbursementSerializer,
+        responses={201: openapi.Response('Created'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def post(self, request):
         serializer = B2CDisbursementSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -458,6 +482,11 @@ class B2CCallbackView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
+    @swagger_auto_schema(
+        operation_description='Receive Safaricom B2C callback payload.',
+        responses={200: openapi.Response('Accepted'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def post(self, request):
         if not is_safaricom_ip(request):
             return JsonResponse({'detail': 'Forbidden'}, status=403)
@@ -500,6 +529,11 @@ class B2CCallbackView(APIView):
 class B2CStatusView(APIView):
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
 
+    @swagger_auto_schema(
+        operation_description='Get B2C disbursement status by conversation id.',
+        responses={200: openapi.Response('OK'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def get(self, request, conversation_id):
         mpesa_transaction = get_object_or_404(
             self._get_queryset(request),
@@ -536,6 +570,11 @@ class B2CStatusView(APIView):
 
 
 class B2CHistoryView(B2CStatusView):
+    @swagger_auto_schema(
+        operation_description='List B2C disbursement history for current SACCO context.',
+        responses={200: openapi.Response('OK'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def get(self, request):
         history = [
             self._serialize_b2c(mpesa_transaction)

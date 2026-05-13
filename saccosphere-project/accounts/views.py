@@ -213,6 +213,12 @@ class KYCUploadView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
+    @swagger_auto_schema(
+        operation_description='Upload a KYC document for the authenticated user.',
+        request_body=KYCUploadSerializer,
+        responses={200: KYCStatusSerializer, 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def post(self, request):
         """Validate and save a KYC document upload."""
         serializer = KYCUploadSerializer(data=request.data)
@@ -266,6 +272,19 @@ class KYCSubmitIDView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_description='Submit national ID details for IPRS verification.',
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['id_number'],
+            properties={
+                'id_number': openapi.Schema(type=openapi.TYPE_STRING),
+                'date_of_birth': openapi.Schema(type=openapi.TYPE_STRING),
+            },
+        ),
+        responses={200: openapi.Response('OK'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def post(self, request):
         id_number = request.data.get('id_number')
         date_of_birth = request.data.get('date_of_birth')
@@ -317,6 +336,14 @@ class KYCStatusView(RetrieveAPIView):
     serializer_class = KYCStatusSerializer
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_description="Get the authenticated user's KYC status.",
+        responses={200: KYCStatusSerializer, 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
+    def get(self, request, *args, **kwargs):
+        return self.retrieve(request, *args, **kwargs)
+
     def get_object(self):
         """Get or create the user's KYC verification record."""
         kyc, _ = KYCVerification.objects.get_or_create(
@@ -358,6 +385,12 @@ class AdminKYCReviewView(AdminKYCQuerysetMixin, UpdateAPIView):
     lookup_field = 'id'
     lookup_url_kwarg = 'kyc_id'
 
+    @swagger_auto_schema(
+        operation_description='Review and approve or reject a member KYC record.',
+        request_body=AdminKYCReviewSerializer,
+        responses={200: KYCStatusSerializer, 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def patch(self, request, *args, **kwargs):
         """Partially update a KYC review decision."""
         return self.partial_update(request, *args, **kwargs)
@@ -423,6 +456,14 @@ class AdminKYCQueueView(DataAccessMixin, AdminKYCQuerysetMixin, ListAPIView):
     permission_classes = [IsSaccoAdminOrSuperAdmin]
     data_access_type = 'KYC_DOCUMENTS'
     data_access_reason = 'Admin KYC queue review'
+
+    @swagger_auto_schema(
+        operation_description='List KYC records pending admin review.',
+        responses={200: KYCStatusSerializer(many=True), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
         """Return filtered KYC records visible to the current admin."""

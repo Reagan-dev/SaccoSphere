@@ -1,6 +1,8 @@
 from decimal import Decimal, InvalidOperation
 
 from django.core.cache import cache
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView
 from rest_framework.permissions import IsAuthenticated
@@ -19,6 +21,11 @@ from .engines.portfolio_builder import (
 class PortfolioView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_description='Get unified member portfolio across SACCO memberships.',
+        responses={200: openapi.Response('OK'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def get(self, request):
         cache_key = f'portfolio:{request.user.id}'
         portfolio = cache.get(cache_key)
@@ -35,6 +42,11 @@ class PortfolioView(APIView):
 class DashboardStateView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_description='Get current dashboard state for authenticated member.',
+        responses={200: openapi.Response('OK'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def get(self, request):
         cache_key = f'dashboard_state:{request.user.id}'
         state = cache.get(cache_key)
@@ -52,6 +64,11 @@ class SACCOSwitcherView(ListAPIView):
     permission_classes = [IsAuthenticated]
     pagination_class = None
 
+    @swagger_auto_schema(
+        operation_description='List SACCO switcher cards for authenticated member.',
+        responses={200: openapi.Response('OK'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def get(self, request):
         return Response(get_sacco_switcher_data(request.user), status=200)
 
@@ -59,6 +76,11 @@ class SACCOSwitcherView(ListAPIView):
 class ActivityFeedView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_description='Get member activity feed entries.',
+        responses={200: openapi.Response('OK'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def get(self, request):
         limit = self._get_limit(request)
         cache_key = f'activity_feed:{request.user.id}:{limit}'
@@ -89,6 +111,11 @@ class ActivityFeedView(APIView):
 class LoanComparisonView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_description='Compare eligible loan options for requested amount and term.',
+        responses={200: openapi.Response('OK'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
     def get(self, request):
         amount = request.query_params.get('amount')
         term = request.query_params.get('term')
