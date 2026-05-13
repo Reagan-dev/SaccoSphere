@@ -4,6 +4,7 @@ from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.generics import (
     CreateAPIView,
@@ -17,6 +18,7 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
 from accounts.models import Sacco, User
+from notifications.utils import create_notification
 from saccomembership.models import Membership
 
 from .engines.loan_limits import calculate_loan_limit
@@ -29,6 +31,7 @@ from .models import (
     Saving,
     SavingsType,
 )
+from .permissions import GuarantorCapacityCheck
 from .serializers import (
     GuarantorSearchResultSerializer,
     GuarantorSerializer,
@@ -140,6 +143,21 @@ class LoanEligibilityCreateMixin:
 class LoanApplyView(LoanEligibilityCreateMixin, CreateAPIView):
     serializer_class = LoanApplySerializer
     permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        """Create loan and dispatch guarantor notifications if required."""
+        loan = serializer.save()
+
+        # If loan type requires guarantors, move to GUARANTORS_PENDING state
+        # and dispatch async task to notify all pending guarantors.
+        if loan.loan_type and loan.loan_type.requires_guarantors:
+            from .tasks import notify_guarantors_task
+
+            loan.status = Loan.Status.GUARANTORS_PENDING
+            loan.save(update_fields=['status', 'updated_at'])
+
+            # Dispatch async task to notify guarantors.
+            notify_guarantors_task.delay(str(loan.id))
 
 
 class LoanEligibilityView(APIView):
@@ -437,6 +455,279 @@ class GuarantorRequestView(APIView):
             return Decimal(str(value))
         except (InvalidOperation, TypeError, ValueError):
             return None
+
+
+class GuarantorRespondView(APIView):
+    """Guarantor approval or decline of a guarantee request."""
+
+    permission_classes = [IsAuthenticated, GuarantorCapacityCheck]
+
+    def post(self, request, loan_id, guarantor_id):
+        """
+        Record guarantor approval or decline.
+
+        APPROVE: Validate capacity, update status, check if all approved,
+        transition loan to BOARD_REVIEW if yes, otherwise remain
+        GUARANTORS_PENDING.
+
+        DECLINE: Update status to DECLINED, reset loan to PENDING,
+        notify applicant.
+
+        Returns:
+            Response: 200 OK with updated guarantor data on success.
+        """
+        guarantor = get_object_or_404(
+            Guarantor.objects.select_related(
+                'loan',
+                'loan__membership__user',
+                'guarantor',
+            ),
+            id=guarantor_id,
+            loan_id=loan_id,
+        )
+
+        # Verify request user is the guarantor.
+        if guarantor.guarantor != request.user:
+            return Response(
+                {'detail': 'You are not this guarantor.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Parse action and optional notes.
+        action = request.data.get('action', '').upper()
+        notes = request.data.get('notes', '')
+
+        if action not in ['APPROVE', 'DECLINE']:
+            return Response(
+                {'detail': 'action must be APPROVE or DECLINE.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        loan = guarantor.loan
+
+        # Verify guarantor status is still PENDING.
+        if guarantor.status != Guarantor.Status.PENDING:
+            return Response(
+                {
+                    'detail': (
+                        f'Guarantor status is already {guarantor.status}.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            if action == 'APPROVE':
+                # Validate guarantor has sufficient capacity.
+                capacity = GuaranteeCapacity.objects.get(
+                    user=request.user,
+                )
+
+                if capacity.available_capacity < guarantor.guarantee_amount:
+                    return Response(
+                        {
+                            'detail': (
+                                'Insufficient guarantee capacity for this '
+                                'amount.'
+                            ),
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Update guarantor status and timestamp.
+                guarantor.status = Guarantor.Status.APPROVED
+                guarantor.responded_at = timezone.now()
+                if notes:
+                    guarantor.notes = notes
+                guarantor.save()
+
+                # Recalculate and update guarantor's capacity.
+                self._update_guarantor_capacity(request.user)
+
+                # Check if all required guarantors are now APPROVED.
+                total_required = (
+                    loan.loan_type.min_guarantors
+                    if loan.loan_type
+                    else 0
+                )
+                approved_count = loan.guarantors.filter(
+                    status=Guarantor.Status.APPROVED,
+                ).count()
+
+                # If all required guarantors approved, move to BOARD_REVIEW.
+                if approved_count >= total_required and total_required > 0:
+                    loan.status = Loan.Status.BOARD_REVIEW
+                    loan.save(update_fields=['status', 'updated_at'])
+
+                    # Notify SACCO admin that loan is ready for review.
+                    self._notify_sacco_admin_board_review(loan)
+
+            elif action == 'DECLINE':
+                # Update guarantor status and timestamp.
+                guarantor.status = Guarantor.Status.DECLINED
+                guarantor.responded_at = timezone.now()
+                if notes:
+                    guarantor.notes = notes
+                guarantor.save()
+
+                # Reset loan status back to PENDING for resubmission.
+                loan.status = Loan.Status.PENDING
+                loan.save(update_fields=['status', 'updated_at'])
+
+                # Notify applicant that a guarantor declined.
+                self._notify_applicant_guarantor_declined(
+                    loan,
+                    guarantor,
+                )
+
+        serializer = GuarantorSerializer(guarantor)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def _update_guarantor_capacity(self, user):
+        """Recalculate and save guarantor's capacity."""
+        total_savings = Saving.objects.filter(
+            membership__user=user,
+            status=Saving.Status.ACTIVE,
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+        active_guarantees = Guarantor.objects.filter(
+            guarantor=user,
+            status__in=[
+                Guarantor.Status.PENDING,
+                Guarantor.Status.APPROVED,
+            ],
+        ).aggregate(total=Sum('guarantee_amount'))['total'] or Decimal('0')
+
+        available_capacity = max(
+            total_savings - active_guarantees,
+            Decimal('0'),
+        )
+
+        capacity, _ = GuaranteeCapacity.objects.get_or_create(user=user)
+        capacity.total_savings = total_savings
+        capacity.active_guarantees = active_guarantees
+        capacity.available_capacity = available_capacity
+        capacity.save(update_fields=[
+            'total_savings',
+            'active_guarantees',
+            'available_capacity',
+            'updated_at',
+        ])
+
+    def _notify_sacco_admin_board_review(self, loan):
+        """Notify SACCO admin that loan is ready for board review."""
+        # Get all SACCO_ADMIN users for this loan's SACCO.
+        from saccomanagement.models import Role
+
+        admin_role = Role.objects.filter(
+            name='SACCO_ADMIN',
+            sacco=loan.membership.sacco,
+        ).first()
+
+        if admin_role:
+            for user in admin_role.users.all():
+                applicant_name = (
+                    f'{loan.membership.user.first_name} '
+                    f'{loan.membership.user.last_name}'
+                )
+                create_notification(
+                    user=user,
+                    title='Loan Ready for Board Review',
+                    message=(
+                        f'Loan of KES {loan.amount:.2f} from {applicant_name} '
+                        f'has all guarantor approvals and is ready for board '
+                        f'review.'
+                    ),
+                    category='LOAN',
+                    action_url=f'/loans/{loan.id}/',
+                    dispatch_async=False,
+                )
+
+    def _notify_applicant_guarantor_declined(self, loan, guarantor):
+        """Notify loan applicant that a guarantor declined."""
+        guarantor_name = (
+            f'{guarantor.guarantor.first_name} '
+            f'{guarantor.guarantor.last_name}'
+        )
+        create_notification(
+            user=loan.membership.user,
+            title='Guarantor Request Declined',
+            message=(
+                f'{guarantor_name} declined to guarantee your loan. '
+                f'Your loan request has been reset to pending. '
+                f'Please request another guarantor.'
+            ),
+            category='LOAN',
+            action_url=f'/loans/{loan.id}/',
+            dispatch_async=False,
+        )
+
+
+# ============================================================
+# REVIEW — GuarantorRespondView documentation
+# ============================================================
+#
+# GuarantorRespondView handles a guarantor's response to a guarantee
+# request. It supports two actions:
+#
+# 1. APPROVE: The guarantor agrees to guarantee the loan.
+#    - Permission check: GuarantorCapacityCheck verifies user has available
+#      guarantee capacity.
+#    - DB updates: Guarantor.status=APPROVED, responded_at=now, notes saved.
+#    - Capacity recalc: Recompute active_guarantees and available_capacity.
+#    - Loan status logic:
+#      If all required guarantors (loan_type.min_guarantors) are now
+#      APPROVED, move loan.status to BOARD_REVIEW and notify SACCO_ADMIN.
+#    - If only some guarantors approved, loan stays in GUARANTORS_PENDING.
+#
+# 2. DECLINE: The guarantor refuses to guarantee the loan.
+#    - DB updates: Guarantor.status=DECLINED, responded_at=now, notes saved.
+#    - Loan reset: Loan.status=PENDING (applicant can request other guarantors).
+#    - Notification: Notify applicant of decline via create_notification.
+#
+# Django concepts used:
+#    - @transaction.atomic(): Ensures all DB updates within the if/elif
+#      succeed or all rollback (consistency).
+#    - get_object_or_404: Raises Http404 if guarantor not found (cleaner
+#      than try/except).
+#    - select_related: Pre-fetch FK objects to avoid N+1 queries.
+#    - GuaranteeCapacity.objects.get_or_create(): Create if doesn't exist.
+#    - Sum aggregation: Calculate total amounts across related records.
+#
+# Manual test:
+# 1. Create 3 users: Alice (member/applicant), Bob and Carol (guarantors).
+# 2. Create a Sacco and memberships for all three.
+# 3. POST /api/v1/services/loans/apply/ as Alice for a loan type with
+#    requires_guarantors=True and min_guarantors=2.
+# 4. POST /api/v1/services/loans/{loan_id}/guarantors/ as Alice to add Bob
+#    and Carol as guarantors (uses GuarantorRequestView).
+# 5. Check DB: Loan.status should be GUARANTORS_PENDING.
+# 6. POST /api/v1/services/loans/{loan_id}/guarantors/{bob_guarantor_id}/respond/
+#    as Bob with {"action": "APPROVE"}.
+#    - Response: Bob's guarantor status=APPROVED, responded_at=now.
+#    - DB: Bob's GuaranteeCapacity updated.
+#    - Loan status: Still GUARANTORS_PENDING (only 1 of 2 approved).
+# 7. POST same endpoint as Carol with {"action": "APPROVE"}.
+#    - Response: Carol's guarantor status=APPROVED, responded_at=now.
+#    - Notification: All SACCO_ADMIN users get notification about board review.
+#    - DB: Loan.status=BOARD_REVIEW (all 2 required guarantors approved).
+# 8. To test DECLINE: Reset the loan and Carol's guarantor to PENDING.
+#    POST endpoint as Carol with {"action": "DECLINE", "notes": "Cannot..."}.
+#    - Response: Carol's status=DECLINED.
+#    - DB: Loan.status=PENDING, Alice gets notification of decline.
+#
+# Design decisions:
+# - Capacity check at POST time (in permission class) ensures guarantor
+#   can't approve if they've lost capacity (other loans approved).
+#   But we also check at approval time for safety.
+# - Loan status reset to PENDING on any decline (not GUARANTORS_PENDING)
+#   lets applicant easily resubmit guarantor requests.
+# - We notify SACCO_ADMIN when ALL required guarantors approve (not after
+#   each approval) to avoid message fatigue.
+# - We don't permanently block guarantors from declining (they can change
+#   their mind if requested again).
+#
+# END OF REVIEW - DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
 
 
 class SavingsBreakdownView(APIView):
