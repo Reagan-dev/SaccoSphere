@@ -303,6 +303,7 @@ def _process_failed_b2c_callback(
 
 def _apply_saving_deposit(mpesa_transaction, transaction, amount):
     from ledger.models import LedgerEntry
+    from ledger.utils import create_ledger_entry
 
     saving = mpesa_transaction.related_saving
     saving.amount += amount
@@ -317,14 +318,16 @@ def _apply_saving_deposit(mpesa_transaction, transaction, amount):
         ]
     )
 
-    LedgerEntry.objects.create(
+    create_ledger_entry(
         membership=saving.membership,
         entry_type=LedgerEntry.EntryType.CREDIT,
         category=LedgerEntry.Category.SAVING_DEPOSIT,
         amount=amount,
-        reference=f'{transaction.reference}-LEDGER',
         description='M-Pesa saving deposit',
-        balance_after=saving.amount,
+        reference=(
+            mpesa_transaction.mpesa_receipt_number
+            or transaction.external_reference
+        ),
         transaction=transaction,
     )
 
