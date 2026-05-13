@@ -4,6 +4,7 @@ from accounts.views import AdminKYCQueueView, AdminKYCReviewView
 
 from .role_views import RoleAssignView, RoleRevokeView, UserRolesView
 from .views import (
+    AuditLogListView,
     AdminLoanApprovalView,
     AdminMemberDetailView,
     AdminMemberListView,
@@ -26,6 +27,7 @@ urlpatterns = [
     ),
     path('roles/', UserRolesView.as_view(), name='user-roles'),
     # Admin views
+    path('audit-logs/', AuditLogListView.as_view(), name='audit-log-list'),
     path('members/', AdminMemberListView.as_view(), name='member-list'),
     path(
         'members/<uuid:membership_id>/',

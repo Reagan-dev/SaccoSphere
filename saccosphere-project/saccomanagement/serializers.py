@@ -2,6 +2,8 @@ from rest_framework import serializers
 
 from saccomembership.models import SaccoApplication, Membership
 
+from .models import SystemAuditLog
+
 
 class AdminMemberUserSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -135,3 +137,24 @@ class ApplicationReviewSerializer(serializers.Serializer):
         allow_blank=True,
         required=False,
     )
+
+
+class SystemAuditLogSerializer(serializers.ModelSerializer):
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+
+    class Meta:
+        model = SystemAuditLog
+        fields = (
+            'id',
+            'user',
+            'user_email',
+            'action',
+            'resource_type',
+            'resource_id',
+            'old_values',
+            'new_values',
+            'ip_address',
+            'user_agent',
+            'created_at',
+        )
+        read_only_fields = fields

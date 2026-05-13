@@ -67,7 +67,11 @@ class IsSaccoAdmin(BasePermission):
 
         Object must have a .sacco attribute.
         """
-        if not hasattr(obj, 'sacco'):
+        if hasattr(obj, 'sacco'):
+            sacco = obj.sacco
+        elif hasattr(obj, 'membership') and hasattr(obj.membership, 'sacco'):
+            sacco = obj.membership.sacco
+        else:
             return False
 
         user = request.user
@@ -77,7 +81,7 @@ class IsSaccoAdmin(BasePermission):
 
         return user.roles.filter(
             name=Role.SACCO_ADMIN,
-            sacco=obj.sacco,
+            sacco=sacco,
         ).exists()
 
 

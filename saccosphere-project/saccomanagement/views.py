@@ -20,18 +20,21 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsSaccoAdmin
+from accounts.permissions import IsSaccoAdmin, IsSuperAdmin
 from payments.models import Transaction
 from saccomembership.models import Membership, SaccoApplication
 from saccomembership.serializers import MembershipListSerializer
 from services.models import Loan, Saving
 
+from .audit_logger import AuditMixin, log_audit
 from .mixins import SaccoScopedMixin
-from .models import ImportJob, Role
+from .models import ImportJob, Role, SystemAuditLog
+from .odpc_logging import DataAccessMixin
 from .serializers import (
     AdminMemberDetailSerializer,
     AdminSaccoStatsSerializer,
     ApplicationReviewSerializer,
+    SystemAuditLogSerializer,
 )
 
 
@@ -89,13 +92,15 @@ class AdminMemberListView(SaccoScopedMixin, ListAPIView):
         return queryset.order_by('-created_at')
 
 
-class AdminMemberDetailView(SaccoScopedMixin, RetrieveAPIView):
+class AdminMemberDetailView(DataAccessMixin, SaccoScopedMixin, RetrieveAPIView):
     """Return one SACCO member with admin dashboard detail."""
 
     serializer_class = AdminMemberDetailSerializer
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
     lookup_field = 'id'
     lookup_url_kwarg = 'membership_id'
+    data_access_type = 'MEMBER_PROFILE'
+    data_access_reason = 'Admin member detail view'
 
     def get(self, request, *args, **kwargs):
         """Set SACCO context before retrieving member detail."""
@@ -178,6 +183,7 @@ class AdminMemberDetailView(SaccoScopedMixin, RetrieveAPIView):
         """Store object before serializer context is built."""
         self.object = self.get_object()
         serializer = self.get_serializer(self.object)
+        self._log_object_access(self.object, request)
         return Response(serializer.data)
 
 
@@ -300,12 +306,13 @@ class AdminSaccoStatsView(SaccoScopedMixin, APIView):
         ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
-class ApplicationReviewView(SaccoScopedMixin, UpdateAPIView):
+class ApplicationReviewView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
     """Approve or reject a SACCO membership application."""
 
     serializer_class = ApplicationReviewSerializer
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
     lookup_field = 'id'
+    audit_resource_type = 'SaccoApplication'
 
     def patch(self, request, *args, **kwargs):
         """Set SACCO context before reviewing an application."""
@@ -323,6 +330,16 @@ class ApplicationReviewView(SaccoScopedMixin, UpdateAPIView):
     def partial_update(self, request, *args, **kwargs):
         """Apply an admin review decision to an application."""
         application = self.get_object()
+        old_values = {
+            'status': application.status,
+            'review_notes': application.review_notes,
+            'reviewed_by_id': str(application.reviewed_by_id)
+            if application.reviewed_by_id
+            else None,
+            'reviewed_at': application.reviewed_at.isoformat()
+            if application.reviewed_at
+            else None,
+        }
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -355,6 +372,21 @@ class ApplicationReviewView(SaccoScopedMixin, UpdateAPIView):
             )
 
         self._notify_applicant(application)
+        log_audit(
+            request.user,
+            'UPDATE',
+            self.audit_resource_type,
+            application.id,
+            old_values=old_values,
+            new_values={
+                'status': application.status,
+                'review_notes': application.review_notes,
+                'reviewed_by_id': str(application.reviewed_by_id),
+                'reviewed_at': application.reviewed_at.isoformat(),
+                'membership_id': str(membership.id) if membership else None,
+            },
+            request=request,
+        )
 
         return Response(
             {
@@ -391,7 +423,7 @@ class ApplicationReviewView(SaccoScopedMixin, UpdateAPIView):
         )
 
 
-class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
+class AdminLoanApprovalView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
     """
     Update loan status (admin approval workflow).
 
@@ -415,6 +447,7 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
     lookup_field = 'id'
+    audit_resource_type = 'Loan'
 
     def patch(self, request, *args, **kwargs):
         """Set SACCO context before processing request."""
@@ -428,16 +461,16 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
         from services.models import Loan
 
         queryset = Loan.objects.all()
-        return self.apply_sacco_scope(
+        return self.get_sacco_queryset(
             queryset,
-            sacco_field='member__sacco',
+            sacco_field='membership__sacco',
         )
 
     def get_serializer(self, *args, **kwargs):
         """Return loan serializer for response."""
-        from services.serializers import LoanSerializer
+        from services.serializers import LoanDetailSerializer
 
-        return LoanSerializer(*args, **kwargs)
+        return LoanDetailSerializer(*args, **kwargs)
 
     def partial_update(self, request, *args, **kwargs):
         """
@@ -447,6 +480,11 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
         Triggers RepaymentSchedule generation on APPROVED.
         """
         loan = self.get_object()
+        old_values = {
+            'status': loan.status,
+            'outstanding_balance': str(loan.outstanding_balance),
+            'updated_at': loan.updated_at.isoformat(),
+        }
         new_status = request.data.get('status')
         notes = request.data.get('notes', '')
 
@@ -479,12 +517,49 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
                 import importlib
                 tasks_module = importlib.import_module('services.tasks')
                 tasks_module.generate_repayment_schedule(loan.id)
-            except ImportError:
+            except (AttributeError, ImportError):
                 # Task may not exist yet, skip silently
                 pass
 
         serializer = self.get_serializer(loan)
+        log_audit(
+            request.user,
+            'UPDATE',
+            self.audit_resource_type,
+            loan.id,
+            old_values=old_values,
+            new_values={
+                'status': loan.status,
+                'outstanding_balance': str(loan.outstanding_balance),
+                'updated_at': loan.updated_at.isoformat(),
+            },
+            request=request,
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AuditLogListView(ListAPIView):
+    """List system audit logs for super admins."""
+
+    serializer_class = SystemAuditLogSerializer
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get_queryset(self):
+        queryset = SystemAuditLog.objects.select_related('user').order_by(
+            '-created_at',
+        )
+        action = self.request.query_params.get('action')
+        resource_type = self.request.query_params.get('resource_type')
+        user = self.request.query_params.get('user')
+
+        if action:
+            queryset = queryset.filter(action=action)
+        if resource_type:
+            queryset = queryset.filter(resource_type=resource_type)
+        if user:
+            queryset = queryset.filter(user__email__icontains=user)
+
+        return queryset
 
 
 class MemberImportView(SaccoScopedMixin, APIView):
@@ -665,6 +740,32 @@ class ImportJobStatusView(SaccoScopedMixin, RetrieveAPIView):
 #      Generates repayment schedule only when approved (not before). Admin notes
 #      provide audit trail of decisions.
 #
+# 5. log_audit (saccomanagement/audit_logger.py)
+#    - Creates a SystemAuditLog row for create, update, and delete actions.
+#    - Captures actor, action, resource type, resource ID, before/after values,
+#      IP address, user agent, and timestamp.
+#    - Wrapped in try/except so audit logging never breaks the business action.
+#
+# 6. AuditMixin
+#    - Reusable mixin for normal DRF create/update/delete flows.
+#    - AdminLoanApprovalView and ApplicationReviewView do custom manual updates,
+#      so they call log_audit directly after successful state changes.
+#
+# 7. create_data_consent_log (saccomanagement/odpc_logging.py)
+#    - Creates a DataConsentLog whenever an admin accesses member personal data.
+#    - This supports ODPC/GDPR accountability by recording who accessed whose
+#      data, what type of data it was, and why.
+#
+# 8. DataAccessMixin
+#    - Reusable mixin for admin read views that expose member personal data.
+#    - AdminMemberDetailView logs one member profile access.
+#    - AdminKYCQueueView logs KYC data access for members shown in the queue.
+#
+# 9. AuditLogListView (GET /api/v1/management/audit-logs/)
+#    - Super-admin-only endpoint for browsing audit logs.
+#    - Supports filters: ?action=, ?resource_type=, ?user=.
+#    - Returns newest audit records first using normal DRF pagination.
+#
 #
 # DJANGO/PYTHON CONCEPTS:
 #
@@ -691,6 +792,13 @@ class ImportJobStatusView(SaccoScopedMixin, RetrieveAPIView):
 # - Mixin: Python class providing reusable methods. Multiple inheritance allows
 #   combining mixins with generic views: class MyView(SaccoScopedMixin, ListAPIView).
 #
+# - Audit log: An append-only record of important system actions. It helps with
+#   security reviews, compliance checks, and incident investigation.
+#
+# - ODPC/GDPR data access logging: A record of access to personal data. The log
+#   does not grant consent by itself; it proves that access happened and records
+#   the purpose.
+#
 #
 # HOW TO TEST MANUALLY:
 #
@@ -712,6 +820,11 @@ class ImportJobStatusView(SaccoScopedMixin, RetrieveAPIView):
 # 9. Call:
 #    PATCH /api/v1/management/loans/<loan_id>/status/ with {"status": "PENDING"}
 #    → should return 400 "Cannot transition" (invalid)
+#
+# 10. Approve a loan and call GET /api/v1/management/audit-logs/ as a super
+#     admin. Confirm an UPDATE log exists for resource_type=Loan.
+# 11. Open a member detail page as a SACCO admin. Confirm a DataConsentLog row
+#     exists with data_type=MEMBER_PROFILE.
 #
 #
 # KEY DESIGN DECISIONS AND WHY:
@@ -744,6 +857,14 @@ class ImportJobStatusView(SaccoScopedMixin, RetrieveAPIView):
 # - Graceful task import: generate_repayment_schedule may not exist yet. Try/except
 #   ImportError means loan approval works even if task is not implemented.
 #   No crashes due to missing dependencies.
+#
+# - Audit logging is non-blocking. If log creation fails, the original admin
+#   action still succeeds. This keeps member operations from failing because of
+#   compliance logging storage issues, while still logging the failure for ops.
+#
+# - Data access logs are written after successful reads only. Failed or blocked
+#   requests are not logged as personal data access because no member data was
+#   returned to the admin.
 #
 # ============================================================
 # END OF REVIEW — DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
