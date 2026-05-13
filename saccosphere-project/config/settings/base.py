@@ -186,6 +186,14 @@ AT_API_KEY = config('AT_API_KEY', default='')
 AT_USERNAME = config('AT_USERNAME', default='sandbox')
 FCM_SERVER_KEY = config('FCM_SERVER_KEY', default='')
 
+# IPRS Configuration
+IPRS_API_KEY = config('IPRS_API_KEY', default='')
+IPRS_API_URL = config(
+    'IPRS_API_URL',
+    default='https://iprs-mock.saccosphere.dev/verify',
+)
+IPRS_MOCK = config('IPRS_MOCK', cast=bool, default=True)
+
 # M-Pesa Daraja Configuration
 MPESA_CONSUMER_KEY = config('MPESA_CONSUMER_KEY', default='')
 MPESA_CONSUMER_SECRET = config('MPESA_CONSUMER_SECRET', default='')
