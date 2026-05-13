@@ -19,7 +19,9 @@ gunicorn==26.0.0
 inflection==0.5.1
 kombu==5.6.2
 packaging==26.2
+pandas==3.0.3
 pillow==12.2.0
+openpyxl==3.1.5
 prompt_toolkit==3.0.52
 psycopg2-binary==2.9.12
 PyJWT==2.12.1
