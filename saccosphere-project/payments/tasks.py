@@ -63,6 +63,63 @@ def process_stk_callback_task(checkout_request_id, result_code, callback_body):
     return True
 
 
+@shared_task(name='payments.tasks.process_b2c_callback')
+def process_b2c_callback_task(conversation_id, result_code, callback_body):
+    with db_transaction.atomic():
+        try:
+            mpesa_transaction = MpesaTransaction.objects.select_for_update(
+            ).select_related(
+                'transaction',
+                'transaction__user',
+                'related_loan',
+                'related_loan__membership',
+            ).get(
+                conversation_id=conversation_id,
+                transaction_type=MpesaTransaction.TransactionType.B2C,
+            )
+        except MpesaTransaction.DoesNotExist:
+            logger.warning(
+                'M-Pesa B2C callback ignored. Transaction not found: %s.',
+                conversation_id,
+            )
+            return False
+
+        transaction = mpesa_transaction.transaction
+        if _callback_already_processed(mpesa_transaction, transaction):
+            logger.info(
+                'M-Pesa B2C callback already processed: %s.',
+                conversation_id,
+            )
+            return True
+
+        result = (
+            callback_body.get('Result')
+            or callback_body.get('result')
+            or {}
+        )
+        normalized_result_code = _normalize_result_code(result_code)
+
+        if normalized_result_code == 0:
+            _process_successful_b2c_callback(
+                mpesa_transaction,
+                transaction,
+                result,
+            )
+        else:
+            _process_failed_b2c_callback(
+                mpesa_transaction,
+                transaction,
+                result,
+                normalized_result_code,
+            )
+
+    logger.info(
+        'M-Pesa B2C callback processed for conversation_id=%s.',
+        conversation_id,
+    )
+    return True
+
+
 def _callback_already_processed(mpesa_transaction, transaction):
     return (
         mpesa_transaction.callback_received
@@ -151,6 +208,99 @@ def _process_failed_callback(
     )
 
 
+def _process_successful_b2c_callback(
+    mpesa_transaction,
+    transaction,
+    result,
+):
+    receipt_number = _get_result_parameter_value(
+        result,
+        'TransactionReceipt',
+    )
+    loan = mpesa_transaction.related_loan
+    amount = transaction.amount
+
+    mpesa_transaction.callback_received = True
+    mpesa_transaction.mpesa_receipt_number = receipt_number
+    mpesa_transaction.result_code = str(result.get('ResultCode'))
+    mpesa_transaction.result_description = result.get('ResultDesc', '')
+    mpesa_transaction.save(
+        update_fields=[
+            'callback_received',
+            'mpesa_receipt_number',
+            'result_code',
+            'result_description',
+            'updated_at',
+        ]
+    )
+
+    transaction.status = Transaction.Status.COMPLETED
+    transaction.external_reference = (
+        receipt_number or mpesa_transaction.conversation_id
+    )
+    transaction.save(
+        update_fields=['status', 'external_reference', 'updated_at']
+    )
+
+    loan.status = loan.Status.ACTIVE
+    loan.disbursed_amount = amount
+    loan.disbursement_date = timezone.localdate()
+    loan.outstanding_balance = amount
+    loan.save(
+        update_fields=[
+            'status',
+            'disbursed_amount',
+            'disbursement_date',
+            'outstanding_balance',
+            'updated_at',
+        ]
+    )
+
+    _create_loan_disbursement_ledger(mpesa_transaction, transaction, amount)
+    _notify_disbursement_success(mpesa_transaction, transaction, amount)
+
+
+def _process_failed_b2c_callback(
+    mpesa_transaction,
+    transaction,
+    result,
+    result_code,
+):
+    loan = mpesa_transaction.related_loan
+    result_description = result.get(
+        'ResultDesc',
+        'M-Pesa loan disbursement failed.',
+    )
+    mpesa_transaction.callback_received = True
+    mpesa_transaction.result_code = str(result_code)
+    mpesa_transaction.result_description = result_description
+    mpesa_transaction.save(
+        update_fields=[
+            'callback_received',
+            'result_code',
+            'result_description',
+            'updated_at',
+        ]
+    )
+
+    transaction.status = Transaction.Status.FAILED
+    transaction.save(update_fields=['status', 'updated_at'])
+
+    loan.status = loan.Status.APPROVED
+    loan.save(update_fields=['status', 'updated_at'])
+
+    _notify_disbursement_failure(
+        mpesa_transaction,
+        transaction,
+        result_description,
+    )
+    logger.info(
+        'M-Pesa B2C callback failed for conversation_id=%s: %s.',
+        mpesa_transaction.conversation_id,
+        result_description,
+    )
+
+
 def _apply_saving_deposit(mpesa_transaction, transaction, amount):
     from ledger.models import LedgerEntry
 
@@ -212,6 +362,26 @@ def _apply_loan_repayment(mpesa_transaction, transaction, amount):
     )
 
 
+def _create_loan_disbursement_ledger(
+    mpesa_transaction,
+    transaction,
+    amount,
+):
+    from ledger.models import LedgerEntry
+
+    loan = mpesa_transaction.related_loan
+    LedgerEntry.objects.create(
+        membership=loan.membership,
+        entry_type=LedgerEntry.EntryType.DEBIT,
+        category=LedgerEntry.Category.LOAN_DISBURSEMENT,
+        amount=amount,
+        reference=f'{transaction.reference}-LEDGER',
+        description='M-Pesa loan disbursement',
+        balance_after=loan.outstanding_balance,
+        transaction=transaction,
+    )
+
+
 def _notify_payment_success(mpesa_transaction, transaction, amount):
     from notifications.models import Notification
     from notifications.utils import create_notification
@@ -246,6 +416,40 @@ def _notify_payment_failure(
     )
 
 
+def _notify_disbursement_success(mpesa_transaction, transaction, amount):
+    from notifications.models import Notification
+    from notifications.utils import create_notification
+
+    create_notification(
+        user=transaction.user,
+        title='Loan disbursed',
+        message=(
+            f'Your loan of KES {amount} has been disbursed to your M-Pesa.'
+        ),
+        category=Notification.Category.LOAN,
+        related_object_type='MpesaTransaction',
+        related_object_id=str(mpesa_transaction.id),
+    )
+
+
+def _notify_disbursement_failure(
+    mpesa_transaction,
+    transaction,
+    result_description,
+):
+    from notifications.models import Notification
+    from notifications.utils import create_notification
+
+    create_notification(
+        user=transaction.user,
+        title='Loan disbursement failed',
+        message=f'Your loan disbursement failed: {result_description}',
+        category=Notification.Category.LOAN,
+        related_object_type='MpesaTransaction',
+        related_object_id=str(mpesa_transaction.id),
+    )
+
+
 def _get_stk_callback(callback_body):
     body = callback_body.get('Body') or callback_body.get('body') or {}
     return body.get('stkCallback') or body.get('StkCallback') or {}
@@ -257,6 +461,17 @@ def _get_metadata_value(stk_callback, name):
 
     for item in items:
         if item.get('Name') == name:
+            return item.get('Value')
+
+    return None
+
+
+def _get_result_parameter_value(result, key):
+    parameters = result.get('ResultParameters') or {}
+    items = parameters.get('ResultParameter') or []
+
+    for item in items:
+        if item.get('Key') == key:
             return item.get('Value')
 
     return None
@@ -293,6 +508,9 @@ def _normalize_result_code(result_code):
 # - process_stk_callback_task updates the local payment records, applies money
 #   to savings or loan instalments, writes a ledger entry, and notifies the
 #   user.
+# - process_b2c_callback_task updates loan disbursement records, activates the
+#   loan on success, resets it for retry on failure, writes the ledger entry,
+#   and notifies the member.
 #
 # Django/Python concepts that may be useful:
 # - authentication_classes = [] disables normal JWT/session authentication for
@@ -309,6 +527,8 @@ def _normalize_result_code(result_code):
 # - Create a pending STK payment, then POST a sample successful Daraja callback
 #   to /api/v1/payments/callback/mpesa/stk/. Confirm the response is 200, the
 #   linked Transaction becomes COMPLETED, and the Saving balance increases.
+# - For B2C, create a pending disbursement and POST a successful B2C callback.
+#   Confirm the linked loan becomes ACTIVE and disbursed_amount is populated.
 #
 # Important design decision:
 # - The callback view returns 200 for unknown or replayed CheckoutRequestIDs.
