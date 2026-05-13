@@ -1,16 +1,11 @@
 from django.urls import path
 
-from .views import (
-    DashboardOverviewView,
-    MemberDashboardView,
-    SaccoDashboardView,
-)
+from .views import DashboardStateView, PortfolioView
 
 
 app_name = 'dashboard'
 
 urlpatterns = [
-    path('', DashboardOverviewView.as_view(), name='overview'),
-    path('member/', MemberDashboardView.as_view(), name='member-dashboard'),
-    path('sacco/', SaccoDashboardView.as_view(), name='sacco-dashboard'),
+    path('portfolio/', PortfolioView.as_view(), name='portfolio'),
+    path('state/', DashboardStateView.as_view(), name='state'),
 ]
