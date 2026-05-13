@@ -34,7 +34,7 @@ INSTALLED_APPS = [
     'accounts',
     'saccomembership',
     'saccomanagement',
-    'services',
+    'services.apps.ServicesConfig',
     'payments',
     'notifications',
     'ledger',
