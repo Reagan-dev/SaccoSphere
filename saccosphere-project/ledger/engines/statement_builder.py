@@ -11,7 +11,7 @@ from ledger.models import LedgerEntry
 ZERO = Decimal('0.00')
 
 
-def build_statement(membership, from_date, to_date):
+def build_statement(membership, from_date, to_date, requesting_user=None):
     """
     Build a member financial statement for a SACCO and date range.
 
@@ -38,7 +38,7 @@ def build_statement(membership, from_date, to_date):
         Sum('amount'),
     )['amount__sum'] or ZERO
 
-    return {
+    statement = {
         'member_name': membership.user.get_full_name(),
         'member_number': membership.member_number,
         'sacco_name': membership.sacco.name,
@@ -53,6 +53,8 @@ def build_statement(membership, from_date, to_date):
         'entries': [_serialize_entry(entry) for entry in entries],
         'currency': 'KES',
     }
+    _record_statement_access(membership, requesting_user)
+    return statement
 
 
 def _serialize_entry(entry):
@@ -76,3 +78,16 @@ def _get_sacco_logo_url(membership):
         return logo.url
     except ValueError:
         return None
+
+
+def _record_statement_access(membership, requesting_user=None):
+    try:
+        from saccomanagement import create_data_consent_log
+    except ImportError:
+        return
+
+    create_data_consent_log(
+        user=requesting_user or membership.user,
+        data_type='MEMBER_STATEMENT',
+        reason='Self-service download',
+    )
