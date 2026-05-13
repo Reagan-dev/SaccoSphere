@@ -1,7 +1,9 @@
+import json
 from decimal import Decimal
 from uuid import uuid4
 
 from django.db import transaction as db_transaction
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import serializers, status
 from rest_framework.generics import CreateAPIView, ListAPIView, RetrieveAPIView
@@ -13,6 +15,11 @@ from config.response import StandardResponseMixin
 from services.models import Loan, Saving
 
 from .integrations.mpesa.daraja import DarajaClient, DarajaError
+from .integrations.mpesa.security import (
+    is_replay_attack,
+    is_safaricom_ip,
+    verify_mpesa_signature,
+)
 from .models import MpesaTransaction, PaymentProvider, Transaction
 from .serializers import (
     CallbackSerializer,
@@ -167,7 +174,7 @@ class STKPushView(APIView):
                 amount=data['amount'],
                 account_reference=reference,
                 description=description,
-                callback_path='/api/v1/payments/callbacks/',
+                callback_path='/api/v1/payments/callback/mpesa/stk/',
             )
         except DarajaError as exc:
             return Response(
@@ -273,6 +280,54 @@ class STKStatusView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class MPesaSTKCallbackView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        if not is_safaricom_ip(request):
+            return JsonResponse({'detail': 'Forbidden'}, status=403)
+
+        try:
+            callback_body = json.loads(request.body.decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        request._mpesa_callback_body = callback_body
+        stk_callback = self._get_stk_callback(callback_body)
+        checkout_request_id = stk_callback.get('CheckoutRequestID')
+
+        if not checkout_request_id:
+            return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+        if is_replay_attack(checkout_request_id):
+            return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+        if not verify_mpesa_signature(request):
+            return JsonResponse({'detail': 'Forbidden'}, status=403)
+
+        if not MpesaTransaction.objects.filter(
+            checkout_request_id=checkout_request_id,
+        ).exists():
+            return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+        result_code = stk_callback.get('ResultCode')
+
+        from .tasks import process_stk_callback_task
+
+        process_stk_callback_task.delay(
+            checkout_request_id,
+            result_code,
+            callback_body,
+        )
+
+        return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+    def _get_stk_callback(self, callback_body):
+        body = callback_body.get('Body') or callback_body.get('body') or {}
+        return body.get('stkCallback') or body.get('StkCallback') or {}
 
 
 class CallbackCreateView(StandardResponseMixin, CreateAPIView):
