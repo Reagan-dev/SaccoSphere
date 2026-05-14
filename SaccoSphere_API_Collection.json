@@ -1,0 +1,1974 @@
+{
+  "info": {
+    "name": "SaccoSphere API",
+    "description": "SaccoSphere API Collection - v1.0.0\n\nBase URL: http://localhost:8000\n\nAuthentication: JWT Bearer Token",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "123456"
+  },
+  "item": [
+    {
+      "name": "Health Endpoints",
+      "item": [
+        {
+          "name": "Health Check (Liveness)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health/",
+              "host": ["{{base_url}}"],
+              "path": ["health", ""]
+            },
+            "description": "Basic liveness check to verify the API is running"
+          },
+          "response": []
+        },
+        {
+          "name": "Readiness Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health/ready/",
+              "host": ["{{base_url}}"],
+              "path": ["health", "ready", ""]
+            },
+            "description": "Checks if the API is ready to accept requests (database and cache)"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Authentication & Accounts",
+      "item": [
+        {
+          "name": "User Registration",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"first_name\": \"John\",\n  \"last_name\": \"Doe\",\n  \"phone_number\": \"+254712345678\",\n  \"password\": \"SecurePass123\",\n  \"password2\": \"SecurePass123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/register/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "register", ""]
+            },
+            "description": "Register a new user account"
+          },
+          "response": []
+        },
+        {
+          "name": "User Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePass123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/login/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "login", ""]
+            },
+            "description": "Authenticate user and receive JWT tokens"
+          },
+          "response": []
+        },
+        {
+          "name": "User Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/logout/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "logout", ""]
+            },
+            "description": "Logout user and blacklist refresh token"
+          },
+          "response": []
+        },
+        {
+          "name": "Get JWT Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePass123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/token/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "token", ""]
+            },
+            "description": "Obtain JWT access and refresh tokens"
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh JWT Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/token/refresh/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "token", "refresh", ""]
+            },
+            "description": "Refresh access token using refresh token"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Current User Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/me/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "me", ""]
+            },
+            "description": "Get authenticated user's profile information"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Current User Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"first_name\": \"Jane\",\n  \"last_name\": \"Smith\",\n  \"phone_number\": \"+254723456789\",\n  \"date_of_birth\": \"1990-01-01\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/me/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "me", ""]
+            },
+            "description": "Update authenticated user's profile information"
+          },
+          "response": []
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"old_password\": \"SecurePass123\",\n  \"new_password\": \"NewSecurePass456\",\n  \"new_password2\": \"NewSecurePass456\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/password/change/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "password", "change", ""]
+            },
+            "description": "Change authenticated user's password"
+          },
+          "response": []
+        },
+        {
+          "name": "Submit KYC ID",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id_number\": \"12345678\",\n  \"date_of_birth\": \"1990-01-01\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/kyc/submit-id/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "kyc", "submit-id", ""]
+            },
+            "description": "Submit national ID number for IPRS verification"
+          },
+          "response": []
+        },
+        {
+          "name": "Upload KYC Document",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "document_type",
+                  "value": "id_front",
+                  "type": "text"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/kyc/upload/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "kyc", "upload", ""]
+            },
+            "description": "Upload KYC document (ID front, ID back, passport, or Huduma)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get KYC Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/kyc/status/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "kyc", "status", ""]
+            },
+            "description": "Get authenticated user's KYC verification status"
+          },
+          "response": []
+        },
+        {
+          "name": "List SACCOs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/saccos/?search=&verified_only=true&ordering=-member_count",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "saccos", ""],
+              "query": [
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "verified_only",
+                  "value": "true"
+                },
+                {
+                  "key": "ordering",
+                  "value": "-member_count"
+                }
+              ]
+            },
+            "description": "List available SACCOs with filtering and search"
+          },
+          "response": []
+        },
+        {
+          "name": "Get SACCO Details",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/saccos/{{sacco_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "saccos", "{{sacco_id}}", ""]
+            },
+            "description": "Get detailed information about a specific SACCO"
+          },
+          "response": []
+        },
+        {
+          "name": "Send OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"purpose\": \"PHONE_VERIFY\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/otp/send/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "otp", "send", ""]
+            },
+            "description": "Send OTP code to user's phone number"
+          },
+          "response": []
+        },
+        {
+          "name": "Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"code\": \"123456\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/otp/verify/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "otp", "verify", ""]
+            },
+            "description": "Verify OTP code and update user's phone number"
+          },
+          "response": []
+        },
+        {
+          "name": "Resend OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"purpose\": \"PHONE_VERIFY\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/otp/resend/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "otp", "resend", ""]
+            },
+            "description": "Resend OTP code (with cooldown period)"
+          },
+          "response": []
+        },
+        {
+          "name": "Request Password Reset",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+254712345678\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/password/reset/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "password", "reset", ""]
+            },
+            "description": "Request password reset via OTP"
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm Password Reset",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"code\": \"123456\",\n  \"new_password\": \"NewSecurePass456\",\n  \"new_password2\": \"NewSecurePass456\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/password/reset/confirm/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "password", "reset", "confirm", ""]
+            },
+            "description": "Confirm password reset with OTP"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "SACCO Membership",
+      "item": [
+        {
+          "name": "List Memberships",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/members/memberships/?status=APPROVED",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "members", "memberships", ""],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "APPROVED"
+                }
+              ]
+            },
+            "description": "List authenticated user's SACCO memberships"
+          },
+          "response": []
+        },
+        {
+          "name": "Apply for Membership",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sacco\": \"{{sacco_id}}\",\n  \"employment_status\": \"Employed\",\n  \"employer_name\": \"Example Company\",\n  \"monthly_income\": 50000.00\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/members/memberships/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "members", "memberships", ""]
+            },
+            "description": "Apply for SACCO membership"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Membership Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/members/memberships/{{membership_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "members", "memberships", "{{membership_id}}", ""]
+            },
+            "description": "Get detailed information about a specific membership"
+          },
+          "response": []
+        },
+        {
+          "name": "Leave Membership",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/members/memberships/{{membership_id}}/leave/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "members", "memberships", "{{membership_id}}", "leave", ""]
+            },
+            "description": "Leave a SACCO membership"
+          },
+          "response": []
+        },
+        {
+          "name": "Get SACCO Custom Fields",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/members/saccos/{{sacco_id}}/fields/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "members", "saccos", "{{sacco_id}}", "fields", ""]
+            },
+            "description": "Get custom field definitions for a SACCO"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "SACCO Management",
+      "item": [
+        {
+          "name": "Assign Role",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"role_name\": \"SACCO_ADMIN\",\n  \"sacco_id\": \"{{sacco_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/roles/assign/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "roles", "assign", ""]
+            },
+            "description": "Assign a role to a user (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Revoke Role",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/roles/{{role_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "roles", "{{role_id}}", ""]
+            },
+            "description": "Revoke a role from a user (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List User Roles",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/roles/?user_id={{user_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "roles", ""],
+              "query": [
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}"
+                }
+              ]
+            },
+            "description": "List all roles for a specific user"
+          },
+          "response": []
+        },
+        {
+          "name": "List Admin Members",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/members/?search=&status=APPROVED",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "members", ""],
+              "query": [
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "status",
+                  "value": "APPROVED"
+                }
+              ]
+            },
+            "description": "List members of the current SACCO (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Admin Member Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/members/{{membership_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "members", "{{membership_id}}", ""]
+            },
+            "description": "Get detailed member information with savings and loans (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get SACCO Statistics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/stats/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "stats", ""]
+            },
+            "description": "Get aggregate dashboard statistics for current SACCO (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Review Application",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"review_notes\": \"Application approved\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/applications/{{application_id}}/review/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "applications", "{{application_id}}", "review", ""]
+            },
+            "description": "Approve or reject a SACCO membership application (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List KYC Queue",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/kyc/queue/?status=PENDING",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "kyc", "queue", ""],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "PENDING"
+                }
+              ]
+            },
+            "description": "List pending KYC verification records for admin review"
+          },
+          "response": []
+        },
+        {
+          "name": "Review KYC",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"rejection_reason\": \"\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/kyc/{{kyc_id}}/review/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "kyc", "{{kyc_id}}", "review", ""]
+            },
+            "description": "Approve or reject a member KYC verification"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Loan Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"notes\": \"Loan approved\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/loans/{{loan_id}}/status/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "loans", "{{loan_id}}", "status", ""]
+            },
+            "description": "Update loan status through approval workflow"
+          },
+          "response": []
+        },
+        {
+          "name": "List Audit Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/audit-logs/?action=UPDATE&resource_type=Loan",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "audit-logs", ""],
+              "query": [
+                {
+                  "key": "action",
+                  "value": "UPDATE"
+                },
+                {
+                  "key": "resource_type",
+                  "value": "Loan"
+                }
+              ]
+            },
+            "description": "List system audit logs (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Import Members",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/import/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "import", ""]
+            },
+            "description": "Create an asynchronous SACCO member import job from uploaded file (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Import Job Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/import/{{job_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "import", "{{job_id}}", ""]
+            },
+            "description": "Get SACCO-scoped progress and summary for one import job"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Services (Loans & Savings)",
+      "item": [
+        {
+          "name": "List Savings Types",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/savings-types/?sacco_id={{sacco_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "savings-types", ""],
+              "query": [
+                {
+                  "key": "sacco_id",
+                  "value": "{{sacco_id}}"
+                }
+              ]
+            },
+            "description": "List savings types"
+          },
+          "response": []
+        },
+        {
+          "name": "List Savings",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/savings/?sacco={{sacco_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "savings", ""],
+              "query": [
+                {
+                  "key": "sacco",
+                  "value": "{{sacco_id}}"
+                }
+              ]
+            },
+            "description": "List authenticated user's savings accounts"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Savings Breakdown",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/savings/breakdown/?sacco_id={{sacco_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "savings", "breakdown", ""],
+              "query": [
+                {
+                  "key": "sacco_id",
+                  "value": "{{sacco_id}}"
+                }
+              ]
+            },
+            "description": "Get savings breakdown by type for a specific SACCO"
+          },
+          "response": []
+        },
+        {
+          "name": "List Loan Types",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loan-types/?sacco_id={{sacco_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loan-types", ""],
+              "query": [
+                {
+                  "key": "sacco_id",
+                  "value": "{{sacco_id}}"
+                }
+              ]
+            },
+            "description": "List available loan types"
+          },
+          "response": []
+        },
+        {
+          "name": "Check Loan Eligibility",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/eligibility/?sacco_id={{sacco_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loans", "eligibility", ""],
+              "query": [
+                {
+                  "key": "sacco_id",
+                  "value": "{{sacco_id}}"
+                }
+              ]
+            },
+            "description": "Check loan eligibility for a SACCO"
+          },
+          "response": []
+        },
+        {
+          "name": "Apply for Loan",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"loan_type\": \"{{loan_type_id}}\",\n  \"amount\": 50000.00,\n  \"term_months\": 12,\n  \"application_notes\": \"Emergency medical expenses\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/apply/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loans", "apply", ""]
+            },
+            "description": "Apply for a loan"
+          },
+          "response": []
+        },
+        {
+          "name": "List Loans",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/list/?status=ACTIVE",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loans", "list", ""],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "ACTIVE"
+                }
+              ]
+            },
+            "description": "List authenticated user's loans"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Loan Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loans", "{{loan_id}}", ""]
+            },
+            "description": "Get detailed information about a specific loan"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Repayment Schedule",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/schedule/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "schedule", ""]
+            },
+            "description": "Get or generate repayment schedule for a loan"
+          },
+          "response": []
+        },
+        {
+          "name": "Search Guarantor",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/guarantors/search/?phone=+254723456789",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "guarantors", "search", ""],
+              "query": [
+                {
+                  "key": "phone",
+                  "value": "+254723456789"
+                }
+              ]
+            },
+            "description": "Search for a possible guarantor for a loan"
+          },
+          "response": []
+        },
+        {
+          "name": "Request Guarantor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"guarantor_user_id\": \"{{guarantor_user_id}}\",\n  \"guarantee_amount\": 25000.00\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/guarantors/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "guarantors", ""]
+            },
+            "description": "Request a member to guarantee a loan"
+          },
+          "response": []
+        },
+        {
+          "name": "Respond to Guarantor Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"APPROVE\",\n  \"notes\": \"I can guarantee this loan\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/guarantors/{{guarantor_id}}/respond/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "guarantors", "{{guarantor_id}}", "respond", ""]
+            },
+            "description": "Approve or decline a guarantor request"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Payments (M-Pesa)",
+      "item": [
+        {
+          "name": "List Transactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/transactions/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payments", "transactions", ""]
+            },
+            "description": "List authenticated user's payment transactions"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Transaction Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/transactions/{{transaction_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payments", "transactions", "{{transaction_id}}", ""]
+            },
+            "description": "Get detailed information about a specific transaction"
+          },
+          "response": []
+        },
+        {
+          "name": "Get M-Pesa Transaction Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/mpesa/{{mpesa_transaction_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payments", "mpesa", "{{mpesa_transaction_id}}", ""]
+            },
+            "description": "Get detailed M-Pesa transaction information"
+          },
+          "response": []
+        },
+        {
+          "name": "Initiate STK Push",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"amount\": 5000.00,\n  \"purpose\": \"SAVING_DEPOSIT\",\n  \"sacco_id\": \"{{sacco_id}}\",\n  \"saving_id\": \"{{saving_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/mpesa/stk-push/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payments", "mpesa", "stk-push", ""]
+            },
+            "description": "Initiate M-Pesa STK push for saving deposit or loan repayment"
+          },
+          "response": []
+        },
+        {
+          "name": "Get STK Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/mpesa/stk/{{checkout_request_id}}/status/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payments", "mpesa", "stk", "{{checkout_request_id}}", "status", ""]
+            },
+            "description": "Get STK transaction status by checkout request ID"
+          },
+          "response": []
+        },
+        {
+          "name": "Initiate B2C Disbursement",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"loan_id\": \"{{loan_id}}\",\n  \"phone_number\": \"+254712345678\",\n  \"amount\": 50000.00,\n  \"remarks\": \"Loan Disbursement\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/mpesa/b2c/disburse/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payments", "mpesa", "b2c", "disburse", ""]
+            },
+            "description": "Initiate M-Pesa B2C loan disbursement (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get B2C Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/mpesa/b2c/{{conversation_id}}/status/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payments", "mpesa", "b2c", "{{conversation_id}}", "status", ""]
+            },
+            "description": "Get B2C disbursement status by conversation ID (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get B2C History",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/mpesa/b2c/history/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payments", "mpesa", "b2c", "history", ""]
+            },
+            "description": "List B2C disbursement history for current SACCO (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Create Callback",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transaction\": \"{{transaction_id}}\",\n  \"provider\": \"{{provider_id}}\",\n  \"raw_payload\": {}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/callbacks/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "payments", "callbacks", ""]
+            },
+            "description": "Create a callback record (testing/debugging)"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Ledger & Statements",
+      "item": [
+        {
+          "name": "List Ledger Entries",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/ledger/entries/?sacco_id={{sacco_id}}&from_date=2024-01-01&to_date=2024-12-31",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ledger", "entries", ""],
+              "query": [
+                {
+                  "key": "sacco_id",
+                  "value": "{{sacco_id}}"
+                },
+                {
+                  "key": "from_date",
+                  "value": "2024-01-01"
+                },
+                {
+                  "key": "to_date",
+                  "value": "2024-12-31"
+                }
+              ]
+            },
+            "description": "List ledger entries for user's membership in a SACCO"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Balance",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/ledger/balance/?sacco_id={{sacco_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ledger", "balance", ""],
+              "query": [
+                {
+                  "key": "sacco_id",
+                  "value": "{{sacco_id}}"
+                }
+              ]
+            },
+            "description": "Get user's current ledger balance in a SACCO"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Statement",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/ledger/statement/?sacco_id={{sacco_id}}&from_date=2024-01-01&to_date=2024-12-31",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ledger", "statement", ""],
+              "query": [
+                {
+                  "key": "sacco_id",
+                  "value": "{{sacco_id}}"
+                },
+                {
+                  "key": "from_date",
+                  "value": "2024-01-01"
+                },
+                {
+                  "key": "to_date",
+                  "value": "2024-12-31"
+                }
+              ]
+            },
+            "description": "Get paginated ledger statement for a SACCO membership"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Statement PDF",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/ledger/statement/pdf/?sacco_id={{sacco_id}}&from_date=2024-01-01&to_date=2024-12-31",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ledger", "statement", "pdf", ""],
+              "query": [
+                {
+                  "key": "sacco_id",
+                  "value": "{{sacco_id}}"
+                },
+                {
+                  "key": "from_date",
+                  "value": "2024-01-01"
+                },
+                {
+                  "key": "to_date",
+                  "value": "2024-12-31"
+                }
+              ]
+            },
+            "description": "Download ledger statement as PDF"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "List Notifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/notifications/?is_read=false",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "notifications", ""],
+              "query": [
+                {
+                  "key": "is_read",
+                  "value": "false"
+                }
+              ]
+            },
+            "description": "List notifications for the authenticated user"
+          },
+          "response": []
+        },
+        {
+          "name": "Mark Notification as Read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/notifications/{{notification_id}}/read/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "notifications", "{{notification_id}}", "read", ""]
+            },
+            "description": "Mark one notification as read"
+          },
+          "response": []
+        },
+        {
+          "name": "Mark All Notifications as Read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/notifications/read-all/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "notifications", "read-all", ""]
+            },
+            "description": "Mark all notifications for the user as read"
+          },
+          "response": []
+        },
+        {
+          "name": "Register Device Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"device_push_token_string\",\n  \"platform\": \"ios\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/notifications/device/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "notifications", "device", ""]
+            },
+            "description": "Register or reactivate a device token for push notifications"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Billing",
+      "item": [
+        {
+          "name": "List Invoices",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/billing/invoices/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "billing", "invoices", ""]
+            },
+            "description": "List monthly invoices visible to current SACCO admin or super admin"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Invoice Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/billing/invoices/{{invoice_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "billing", "invoices", "{{invoice_id}}", ""]
+            },
+            "description": "Retrieve one invoice by ID"
+          },
+          "response": []
+        },
+        {
+          "name": "Resend Invoice",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/billing/invoices/{{invoice_id}}/resend/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "billing", "invoices", "{{invoice_id}}", "resend", ""]
+            },
+            "description": "Resend existing invoice report to SACCO emails/admin recipients"
+          },
+          "response": []
+        },
+        {
+          "name": "Download Invoice",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/billing/invoices/{{invoice_id}}/download/?format=csv",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "billing", "invoices", "{{invoice_id}}", "download", ""],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "csv"
+                }
+              ]
+            },
+            "description": "Download invoice report as CSV or PDF"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "Get Portfolio",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/dashboard/portfolio/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "dashboard", "portfolio", ""]
+            },
+            "description": "Get unified member portfolio across SACCO memberships"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Dashboard State",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/dashboard/state/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "dashboard", "state", ""]
+            },
+            "description": "Get current dashboard state for authenticated member"
+          },
+          "response": []
+        },
+        {
+          "name": "Get SACCO Switcher",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/dashboard/saccos/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "dashboard", "saccos", ""]
+            },
+            "description": "List SACCO switcher cards for authenticated member"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Activity Feed",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/dashboard/activity/?limit=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "dashboard", "activity", ""],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Get member activity feed entries"
+          },
+          "response": []
+        },
+        {
+          "name": "Compare Loans",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/dashboard/loans/compare/?amount=50000&term=12",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "dashboard", "loans", "compare", ""],
+              "query": [
+                {
+                  "key": "amount",
+                  "value": "50000"
+                },
+                {
+                  "key": "term",
+                  "value": "12"
+                }
+              ]
+            },
+            "description": "Compare eligible loan options for requested amount and term"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "refresh_token",
+      "value": ""
+    },
+    {
+      "key": "sacco_id",
+      "value": ""
+    },
+    {
+      "key": "membership_id",
+      "value": ""
+    },
+    {
+      "key": "loan_id",
+      "value": ""
+    },
+    {
+      "key": "user_id",
+      "value": ""
+    },
+    {
+      "key": "transaction_id",
+      "value": ""
+    },
+    {
+      "key": "notification_id",
+      "value": ""
+    },
+    {
+      "key": "invoice_id",
+      "value": ""
+    },
+    {
+      "key": "saving_id",
+      "value": ""
+    },
+    {
+      "key": "loan_type_id",
+      "value": ""
+    },
+    {
+      "key": "guarantor_user_id",
+      "value": ""
+    },
+    {
+      "key": "guarantor_id",
+      "value": ""
+    },
+    {
+      "key": "checkout_request_id",
+      "value": ""
+    },
+    {
+      "key": "conversation_id",
+      "value": ""
+    },
+    {
+      "key": "mpesa_transaction_id",
+      "value": ""
+    },
+    {
+      "key": "role_id",
+      "value": ""
+    },
+    {
+      "key": "kyc_id",
+      "value": ""
+    },
+    {
+      "key": "application_id",
+      "value": ""
+    },
+    {
+      "key": "job_id",
+      "value": ""
+    }
+  ]
+}
