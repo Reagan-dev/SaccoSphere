@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -209,6 +210,10 @@ MPESA_B2C_SECURITY_CREDENTIAL = config(
     'MPESA_B2C_SECURITY_CREDENTIAL',
     default='',
 )
+
+BILLING_ACCOUNT_NAME = os.environ.get('BILLING_ACCOUNT_NAME', '')
+BILLING_ACCOUNT_NUMBER = os.environ.get('BILLING_ACCOUNT_NUMBER', '')
+BILLING_PAYBILL = os.environ.get('BILLING_PAYBILL', '')
 
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 

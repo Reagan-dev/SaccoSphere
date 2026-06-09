@@ -21,6 +21,12 @@ services:
       # Required: set this to your Redis instance URL
       - key: REDIS_URL
         value: YOUR_REDIS_URL
+      - key: BILLING_ACCOUNT_NAME
+        value: YOUR_BILLING_ACCOUNT_NAME
+      - key: BILLING_ACCOUNT_NUMBER
+        value: YOUR_BILLING_ACCOUNT_NUMBER
+      - key: BILLING_PAYBILL
+        value: YOUR_BILLING_PAYBILL
   - type: worker
     name: saccosphere-worker
     runtime: python
@@ -41,6 +47,12 @@ services:
       # Required: set this to your Redis instance URL
       - key: REDIS_URL
         value: YOUR_REDIS_URL
+      - key: BILLING_ACCOUNT_NAME
+        value: YOUR_BILLING_ACCOUNT_NAME
+      - key: BILLING_ACCOUNT_NUMBER
+        value: YOUR_BILLING_ACCOUNT_NUMBER
+      - key: BILLING_PAYBILL
+        value: YOUR_BILLING_PAYBILL
   - type: worker
     name: saccosphere-beat
     runtime: python
@@ -61,6 +73,12 @@ services:
       # Required: set this to your Redis instance URL
       - key: REDIS_URL
         value: YOUR_REDIS_URL
+      - key: BILLING_ACCOUNT_NAME
+        value: YOUR_BILLING_ACCOUNT_NAME
+      - key: BILLING_ACCOUNT_NUMBER
+        value: YOUR_BILLING_ACCOUNT_NUMBER
+      - key: BILLING_PAYBILL
+        value: YOUR_BILLING_PAYBILL
   - type: redis
     name: saccosphere-redis
     plan: free
