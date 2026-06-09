@@ -30,7 +30,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'drf_yasg',
-    # 'django_celery_beat',  # Temporarily disabled for testing
+    'django_celery_beat',
     'accounts',
     'saccomembership',
     'saccomanagement',
@@ -239,6 +239,7 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Nairobi'
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 
