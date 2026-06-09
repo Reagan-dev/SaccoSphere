@@ -18,11 +18,9 @@ services:
         fromDatabase:
           name: saccosphere-db
           property: connectionString
+      # Required: set this to your Redis instance URL
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: saccosphere-redis
-          property: connectionString
+        value: YOUR_REDIS_URL
   - type: worker
     name: saccosphere-worker
     runtime: python
@@ -40,11 +38,9 @@ services:
         fromDatabase:
           name: saccosphere-db
           property: connectionString
+      # Required: set this to your Redis instance URL
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: saccosphere-redis
-          property: connectionString
+        value: YOUR_REDIS_URL
   - type: worker
     name: saccosphere-beat
     runtime: python
@@ -62,11 +58,9 @@ services:
         fromDatabase:
           name: saccosphere-db
           property: connectionString
+      # Required: set this to your Redis instance URL
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: saccosphere-redis
-          property: connectionString
+        value: YOUR_REDIS_URL
   - type: redis
     name: saccosphere-redis
     plan: free
