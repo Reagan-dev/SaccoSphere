@@ -410,7 +410,9 @@ class OTPToken(models.Model):
         User,
         on_delete=models.CASCADE,
         related_name='otp_tokens',
-        help_text='User who owns this OTP token.',
+        null=True,
+        blank=True,
+        help_text='User who owns this OTP token. Null for registration OTPs.',
     )
     phone_number = models.CharField(
         max_length=13,

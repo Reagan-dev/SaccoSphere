@@ -36,7 +36,7 @@ def create_otp_token(user, phone_number, purpose):
     Then creates a new token with expiry time based on OTP_EXPIRY_MINUTES setting.
 
     Args:
-        user: User instance
+        user: User instance or None (for registration OTPs)
         phone_number: Phone number for OTP delivery
         purpose: OTP purpose (PHONE_VERIFY, PASSWORD_RESET, LOGIN)
 
@@ -49,12 +49,15 @@ def create_otp_token(user, phone_number, purpose):
     from accounts.models import OTPToken
 
     try:
-        # Expire existing active tokens for this user+purpose by marking as used
-        OTPToken.objects.filter(
-            user=user,
+        # Expire existing active tokens for this phone+purpose
+        query = OTPToken.objects.filter(
+            phone_number=phone_number,
             purpose=purpose,
             is_used=False,
-        ).update(is_used=True)
+        )
+        if user:
+            query = query.filter(user=user)
+        query.update(is_used=True)
 
         # Generate code and expiry time
         code = generate_otp_code()
@@ -73,8 +76,9 @@ def create_otp_token(user, phone_number, purpose):
             attempts=0,
         )
 
+        user_email = user.email if user else 'anonymous'
         logger.info(
-            f'OTP token created for user {user.email} '
+            f'OTP token created for {user_email} '
             f'(phone={phone_number}, purpose={purpose})'
         )
         return token

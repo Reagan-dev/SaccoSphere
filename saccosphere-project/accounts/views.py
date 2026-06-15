@@ -684,20 +684,21 @@ class OTPSendView(APIView):
         phone_number = serializer.validated_data['phone_number']
         purpose = serializer.validated_data['purpose']
         
-        # Find user for phone verification or password reset
+        # Find user if purpose requires it
         user = None
-        if purpose in ['PHONE_VERIFY', 'PASSWORD_RESET']:
+        if purpose in ['PASSWORD_RESET', 'LOGIN']:
             try:
                 user = User.objects.get(phone_number=phone_number)
             except User.DoesNotExist:
-                # For password reset, don't reveal if phone exists
-                if purpose == 'PASSWORD_RESET':
-                    return Response({'message': 'OTP sent. Check your phone.'}, status=200)
-                else:
-                    return Response({'error': 'Phone number not found'}, status=400)
-        
-        if not user:
-            return Response({'error': 'User not found'}, status=400)
+                # For password reset and login, don't reveal if phone exists
+                return Response({'message': 'OTP sent. Check your phone.'}, status=200)
+        elif purpose == 'PHONE_VERIFY':
+            # For registration, allow any phone number
+            try:
+                user = User.objects.get(phone_number=phone_number)
+            except User.DoesNotExist:
+                # Phone doesn't exist yet (registration case) - that's OK
+                user = None
         
         try:
             # Create OTP token
@@ -725,7 +726,7 @@ class OTPVerifyView(APIView):
     @swagger_auto_schema(
         operation_summary='Verify OTP code',
         request_body=account_serializers.OTPVerifySerializer,
-        responses={200: UserProfileSerializer},
+        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
     )
     def post(self, request):
         serializer = account_serializers.OTPVerifySerializer(data=request.data)
@@ -737,14 +738,19 @@ class OTPVerifyView(APIView):
         try:
             token = verify_otp(phone_number, code, 'PHONE_VERIFY')
             
-            # Update user's phone number
-            user = token.user
-            user.phone_number = phone_number
-            user.save(update_fields=['phone_number'])
-            
-            # Return user data
-            user_serializer = UserProfileSerializer(user)
-            return Response(user_serializer.data, status=200)
+            # If user exists (existing phone verification), update their phone
+            if token.user:
+                user = token.user
+                user.phone_number = phone_number
+                user.save(update_fields=['phone_number'])
+                user_serializer = UserProfileSerializer(user)
+                return Response(user_serializer.data, status=200)
+            else:
+                # For registration, just confirm OTP was verified
+                return Response(
+                    {'message': 'Phone number verified. Proceed with registration.'},
+                    status=200
+                )
             
         except OTPError as e:
             return Response({'error': str(e)}, status=400)
