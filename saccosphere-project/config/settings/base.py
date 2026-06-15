@@ -309,5 +309,10 @@ LOGGING = {
             'level': 'WARNING',
             'propagate': False,
         },
+        'saccosphere.sms': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }
