@@ -17,6 +17,7 @@ from .views import (
     PasswordChangeView,
     PasswordResetRequestView,
     PasswordResetConfirmView,
+    PublicStatsView,
     RegisterView,
     SaccoDetailView,
     SaccoListView,
@@ -44,6 +45,7 @@ urlpatterns = [
         PasswordChangeView.as_view(),
         name='password-change',
     ),
+    path('public-stats/', PublicStatsView.as_view(), name='public-stats'),
     path('saccos/', SaccoListView.as_view(), name='sacco-list'),
     path('saccos/<uuid:id>/', SaccoDetailView.as_view(), name='sacco-detail'),
     # OTP endpoints
