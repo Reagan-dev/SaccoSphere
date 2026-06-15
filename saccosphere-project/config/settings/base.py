@@ -23,11 +23,7 @@ SECRET_KEY = config(
 )
 DEBUG = config('DEBUG', default=False, cast=_cast_debug)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='', cast=Csv())
-CORS_ALLOWED_ORIGINS = [
-    origin
-    for origin in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
-    if origin
-]
+CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='', cast=Csv())
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -211,7 +207,7 @@ MPESA_CONSUMER_SECRET = config('MPESA_CONSUMER_SECRET', default='')
 MPESA_SHORTCODE = config('MPESA_SHORTCODE', default='')
 MPESA_PASSKEY = config('MPESA_PASSKEY', default='')
 MPESA_ENVIRONMENT = config('MPESA_ENVIRONMENT', default='sandbox')
-MPESA_CALLBACK_BASE_URL = os.environ.get('MPESA_CALLBACK_BASE_URL', '')
+MPESA_CALLBACK_BASE_URL = config('MPESA_CALLBACK_BASE_URL', default='')
 MPESA_B2C_INITIATOR_NAME = config(
     'MPESA_B2C_INITIATOR_NAME',
     default='',
@@ -221,9 +217,9 @@ MPESA_B2C_SECURITY_CREDENTIAL = config(
     default='',
 )
 
-BILLING_ACCOUNT_NAME = os.environ.get('BILLING_ACCOUNT_NAME', '')
-BILLING_ACCOUNT_NUMBER = os.environ.get('BILLING_ACCOUNT_NUMBER', '')
-BILLING_PAYBILL = os.environ.get('BILLING_PAYBILL', '')
+BILLING_ACCOUNT_NAME = config('BILLING_ACCOUNT_NAME', default='')
+BILLING_ACCOUNT_NUMBER = config('BILLING_ACCOUNT_NUMBER', default='')
+BILLING_PAYBILL = config('BILLING_PAYBILL', default='')
 
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
