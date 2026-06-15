@@ -1,9 +1,12 @@
 import base64
+import logging
 
 import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.utils import timezone
+
+logger = logging.getLogger('saccosphere.payments')
 
 
 class DarajaError(Exception):
@@ -48,31 +51,55 @@ class DarajaClient:
     def get_access_token(self):
         token = cache.get('mpesa_access_token')
         if token:
+            logger.debug('M-Pesa access token retrieved from cache.')
             return token
+
+        self._require_settings(
+            'MPESA_CONSUMER_KEY',
+            'MPESA_CONSUMER_SECRET',
+        )
 
         auth_value = f'{self.consumer_key}:{self.consumer_secret}'
         encoded_auth = base64.b64encode(auth_value.encode()).decode()
         headers = {'Authorization': f'Basic {encoded_auth}'}
 
+        logger.debug(
+            'Requesting new M-Pesa access token from: %s',
+            self._get_auth_url,
+        )
+
         try:
-            response = requests.post(
+            response = requests.get(
                 self._get_auth_url,
                 headers=headers,
                 timeout=30,
             )
             response.raise_for_status()
         except requests.RequestException as exc:
+            logger.error(
+                'Failed to get M-Pesa access token: %s',
+                exc,
+                exc_info=True,
+            )
             raise DarajaError('Failed to get M-Pesa access token.') from exc
 
-        data = response.json()
+        data = self._parse_json_response(
+            response,
+            'M-Pesa access token response was not valid JSON.',
+        )
         token = data.get('access_token')
         if not token:
+            logger.error(
+                'M-Pesa access token response did not include token: %s',
+                data,
+            )
             raise DarajaError(
                 'M-Pesa access token response did not include a token.',
                 data.get('errorCode'),
             )
 
         cache.set('mpesa_access_token', token, timeout=50 * 60)
+        logger.debug('M-Pesa access token cached for 50 minutes.')
         return token
 
     def initiate_stk_push(
@@ -83,6 +110,13 @@ class DarajaClient:
         description,
         callback_path,
     ):
+        self._require_settings(
+            'MPESA_CONSUMER_KEY',
+            'MPESA_CONSUMER_SECRET',
+            'MPESA_SHORTCODE',
+            'MPESA_PASSKEY',
+            'MPESA_CALLBACK_BASE_URL',
+        )
         token = self.get_access_token()
         timestamp = self._generate_timestamp()
         password = self._generate_password(timestamp)
@@ -101,6 +135,15 @@ class DarajaClient:
             'TransactionDesc': description,
         }
 
+        logger.debug(
+            'Initiating M-Pesa STK push: phone=%s, amount=%s, '
+            'callback_url=%s, timestamp=%s',
+            phone_number,
+            amount,
+            callback_url,
+            timestamp,
+        )
+
         data = self._post(self._get_stk_url, token, payload)
         response_code = data.get('ResponseCode')
         if response_code != '0':
@@ -114,6 +157,12 @@ class DarajaClient:
         return data
 
     def query_stk_status(self, checkout_request_id):
+        self._require_settings(
+            'MPESA_CONSUMER_KEY',
+            'MPESA_CONSUMER_SECRET',
+            'MPESA_SHORTCODE',
+            'MPESA_PASSKEY',
+        )
         token = self.get_access_token()
         timestamp = self._generate_timestamp()
         password = self._generate_password(timestamp)
@@ -135,6 +184,13 @@ class DarajaClient:
         result_url,
         timeout_url,
     ):
+        self._require_settings(
+            'MPESA_CONSUMER_KEY',
+            'MPESA_CONSUMER_SECRET',
+            'MPESA_SHORTCODE',
+            'MPESA_B2C_INITIATOR_NAME',
+            'MPESA_B2C_SECURITY_CREDENTIAL',
+        )
         token = self.get_access_token()
         payload = {
             'InitiatorName': settings.MPESA_B2C_INITIATOR_NAME,
@@ -188,6 +244,12 @@ class DarajaClient:
             'Content-Type': 'application/json',
         }
 
+        logger.debug(
+            'M-Pesa API request: POST %s, payload keys: %s',
+            url,
+            list(payload.keys()),
+        )
+
         try:
             response = requests.post(
                 url,
@@ -196,7 +258,63 @@ class DarajaClient:
                 timeout=30,
             )
             response.raise_for_status()
+        except requests.exceptions.Timeout as exc:
+            logger.error(
+                'M-Pesa API timeout: %s',
+                exc,
+                exc_info=True,
+            )
+            raise DarajaError(
+                'M-Pesa request timed out. Please try again.',
+            ) from exc
+        except requests.exceptions.ConnectionError as exc:
+            logger.error(
+                'M-Pesa connection error: %s',
+                exc,
+                exc_info=True,
+            )
+            raise DarajaError(
+                'Failed to connect to M-Pesa API. Check your internet connection.',
+            ) from exc
+        except requests.exceptions.HTTPError as exc:
+            response_text = getattr(exc.response, 'text', '')
+            logger.error(
+                'M-Pesa HTTP error %s at %s: %s',
+                exc.response.status_code,
+                url,
+                response_text,
+                exc_info=True,
+            )
+            raise DarajaError(
+                f'M-Pesa API returned error {exc.response.status_code}.',
+                exc.response.status_code,
+            ) from exc
         except requests.RequestException as exc:
+            logger.error(
+                'M-Pesa request error: %s',
+                exc,
+                exc_info=True,
+            )
             raise DarajaError('M-Pesa request failed.') from exc
 
-        return response.json()
+        return self._parse_json_response(
+            response,
+            'M-Pesa response was not valid JSON.',
+        )
+
+    def _parse_json_response(self, response, message):
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise DarajaError(message) from exc
+
+    def _require_settings(self, *setting_names):
+        missing = [
+            setting_name
+            for setting_name in setting_names
+            if not str(getattr(settings, setting_name, '')).strip()
+        ]
+        if missing:
+            raise DarajaError(
+                'M-Pesa configuration is missing: ' + ', '.join(missing)
+            )
