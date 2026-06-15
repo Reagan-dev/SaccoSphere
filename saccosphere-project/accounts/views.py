@@ -42,6 +42,31 @@ from .integrations.otp_service import ATSMSClient, ATSMSError
 from .throttles import OTPSendThrottle
 
 
+class PublicStatsView(APIView):
+    """Return public platform counters used by the frontend."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        from saccomembership.models import Membership
+
+        total_saccos = Sacco.objects.filter(
+            is_active=True,
+            is_publicly_listed=True,
+        ).count()
+        total_members_on_app = Membership.objects.filter(
+            status=Membership.Status.APPROVED,
+        ).count()
+
+        return Response(
+            {
+                'total_saccos': total_saccos,
+                'total_members_on_app': total_members_on_app,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 def get_user_by_phone_number(phone_number):
     """Return the newest user for a phone number without failing on duplicates."""
     return (
