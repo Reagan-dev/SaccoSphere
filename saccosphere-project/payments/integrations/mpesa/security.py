@@ -1,3 +1,51 @@
+"""
+M-Pesa Daraja Security Module
+
+Handles M-Pesa callback verification including:
+- IP allowlisting (Safaricom IP ranges)
+- Replay attack detection
+- Signature verification (when present)
+
+Expected M-Pesa Callback Structures:
+
+STK Push Callback (M-Pesa Online Checkout):
+{
+  "Body": {
+    "stkCallback": {
+      "MerchantRequestID": "...",
+      "CheckoutRequestID": "...",
+      "ResultCode": 0,
+      "ResultDesc": "The service request has been accepted successfully.",
+      "CallbackMetadata": {
+        "Item": [
+          {"Name": "Amount", "Value": 1.00},
+          {"Name": "MpesaReceiptNumber", "Value": "LHG31AL60V"},
+          {"Name": "TransactionDate", "Value": 20191219102115},
+          {"Name": "PhoneNumber", "Value": 254708374149}
+        ]
+      }
+    }
+  }
+}
+
+B2C (Loan Disbursement) Callback:
+{
+  "Result": {
+    "ResultType": 0,
+    "ResultCode": 0,
+    "ResultDesc": "The service request has been accepted successfully.",
+    "OriginatorConversationID": "...",
+    "ConversationID": "...",
+    "TransactionID": "..."
+  }
+}
+
+Security Checks:
+1. IP Allowlisting: Requests from Safaricom IPs only
+2. Replay Detection: Cache-based check for duplicate callbacks
+3. Signature Verification: Only verified if password/timestamp present
+   (typically not present in callback response, only in request)
+"""
 import base64
 import hmac
 import ipaddress
@@ -17,6 +65,16 @@ SAFARICOM_IP_RANGES = [
 
 
 def verify_mpesa_signature(request):
+    """
+    Verify M-Pesa callback signature.
+    
+    Note: M-Pesa STK/B2C callbacks don't include password/timestamp fields.
+    These are only used in the request phase. For callbacks, signature 
+    verification relies on IP allowlisting and replay attack detection.
+    
+    Returns True if signature is valid or if callback lacks signature fields
+    (which is normal for M-Pesa callbacks in development/sandbox).
+    """
     payload = getattr(request, '_mpesa_callback_body', request.data)
     callback = _get_callback_payload(payload)
     received_password = _get_first_value(
@@ -30,10 +88,17 @@ def verify_mpesa_signature(request):
         'Timestamp',
     )
 
+    # M-Pesa callbacks don't typically include password/timestamp in response
     if not received_password or not timestamp:
-        logger.warning('M-Pesa callback signature fields are missing.')
-        return False
+        logger.debug(
+            'M-Pesa callback lacks signature fields (normal for callbacks). '
+            'Relying on IP verification and replay detection instead. '
+            'Callback keys: %s',
+            list(callback.keys()) if isinstance(callback, dict) else 'N/A',
+        )
+        return True
 
+    # If signature fields are present, verify them
     raw_password = (
         f'{settings.MPESA_SHORTCODE}{settings.MPESA_PASSKEY}{timestamp}'
     )
@@ -45,8 +110,10 @@ def verify_mpesa_signature(request):
 
     if not signature_matches:
         logger.warning('M-Pesa callback signature verification failed.')
-
-    return signature_matches
+        return False
+    
+    logger.debug('M-Pesa callback signature verified successfully.')
+    return True
 
 
 def is_safaricom_ip(request):
@@ -98,16 +165,42 @@ def _get_client_ip(request):
 
 def _get_callback_payload(payload):
     if not isinstance(payload, dict):
+        logger.debug('Callback payload is not a dict: %s', type(payload))
         return {}
 
     body = payload.get('Body') or payload.get('body') or {}
-    return (
+    
+    # Try to extract callback from nested structures
+    stk_callback = (
         body.get('stkCallback')
         or body.get('StkCallback')
-        or payload.get('Result')
-        or payload.get('result')
-        or {}
     )
+    
+    if stk_callback:
+        logger.debug('Extracted STK callback from Body')
+        return stk_callback
+    
+    # Try B2C structure
+    result = payload.get('Result') or payload.get('result')
+    if result:
+        logger.debug('Extracted Result callback (B2C)')
+        return result
+    
+    # If no nested structure found, check if Body itself is the callback
+    if body:
+        logger.debug('Using Body as callback (no nesting)')
+        return body
+    
+    # Last resort: check if payload itself has callback fields
+    if payload.get('password') or payload.get('Password') or payload.get('timestamp') or payload.get('Timestamp'):
+        logger.debug('Callback fields found at top level of payload')
+        return payload
+    
+    logger.debug(
+        'Could not extract callback from payload. Payload structure: %s',
+        list(payload.keys()),
+    )
+    return {}
 
 
 def _get_first_value(data, *keys):
