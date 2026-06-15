@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 from pathlib import Path
 
@@ -13,11 +14,11 @@ SECRET_KEY = config(
 )
 DEBUG = config('DEBUG', default=False, cast=bool)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='', cast=Csv())
-CORS_ALLOWED_ORIGINS = config(
-    'CORS_ALLOWED_ORIGINS',
-    default='',
-    cast=Csv(),
-)
+CORS_ALLOWED_ORIGINS = [
+    origin
+    for origin in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
+    if origin
+]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -30,7 +31,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'drf_yasg',
-    # 'django_celery_beat',  # Temporarily disabled for testing
+    'django_celery_beat',
     'accounts',
     'saccomembership',
     'saccomanagement',
@@ -53,6 +54,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'saccomanagement.middleware.SaccoContextMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
 
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -145,7 +147,7 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
@@ -200,7 +202,7 @@ MPESA_CONSUMER_SECRET = config('MPESA_CONSUMER_SECRET', default='')
 MPESA_SHORTCODE = config('MPESA_SHORTCODE', default='')
 MPESA_PASSKEY = config('MPESA_PASSKEY', default='')
 MPESA_ENVIRONMENT = config('MPESA_ENVIRONMENT', default='sandbox')
-MPESA_CALLBACK_BASE_URL = config('MPESA_CALLBACK_BASE_URL', default='')
+MPESA_CALLBACK_BASE_URL = os.environ.get('MPESA_CALLBACK_BASE_URL', '')
 MPESA_B2C_INITIATOR_NAME = config(
     'MPESA_B2C_INITIATOR_NAME',
     default='',
@@ -209,6 +211,10 @@ MPESA_B2C_SECURITY_CREDENTIAL = config(
     'MPESA_B2C_SECURITY_CREDENTIAL',
     default='',
 )
+
+BILLING_ACCOUNT_NAME = os.environ.get('BILLING_ACCOUNT_NAME', '')
+BILLING_ACCOUNT_NUMBER = os.environ.get('BILLING_ACCOUNT_NUMBER', '')
+BILLING_PAYBILL = os.environ.get('BILLING_PAYBILL', '')
 
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
@@ -239,6 +245,7 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Nairobi'
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 
