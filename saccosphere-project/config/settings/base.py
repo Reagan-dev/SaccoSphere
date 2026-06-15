@@ -4,6 +4,8 @@ from pathlib import Path
 
 import dj_database_url
 from decouple import Csv, config
+from corsheaders.defaults import default_headers
+
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -24,6 +26,10 @@ SECRET_KEY = config(
 DEBUG = config('DEBUG', default=False, cast=_cast_debug)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='', cast=Csv())
 CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='', cast=Csv())
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'x-request-id',
+]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -301,11 +307,6 @@ LOGGING = {
         'saccosphere.security': {
             'handlers': ['console', 'file'],
             'level': 'WARNING',
-            'propagate': False,
-        },
-        'saccosphere.sms': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
             'propagate': False,
         },
     },
