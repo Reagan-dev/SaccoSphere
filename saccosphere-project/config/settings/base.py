@@ -8,11 +8,20 @@ from decouple import Csv, config
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+
+def _cast_debug(value):
+    normalized = str(value).strip().lower()
+    if normalized in {'1', 'yes', 'true', 'on', 'y', 't'}:
+        return True
+    if normalized in {'0', 'no', 'false', 'off', 'n', 'f', '', 'release'}:
+        return False
+    raise ValueError('Invalid truth value: ' + str(value))
+
 SECRET_KEY = config(
     'SECRET_KEY',
     default='django-insecure-development-only-change-me',
 )
-DEBUG = config('DEBUG', default=False, cast=bool)
+DEBUG = config('DEBUG', default=False, cast=_cast_debug)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='', cast=Csv())
 CORS_ALLOWED_ORIGINS = [
     origin
