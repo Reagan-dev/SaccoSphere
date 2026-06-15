@@ -42,6 +42,15 @@ from .integrations.otp_service import ATSMSClient, ATSMSError
 from .throttles import OTPSendThrottle
 
 
+def get_user_by_phone_number(phone_number):
+    """Return the newest user for a phone number without failing on duplicates."""
+    return (
+        User.objects.filter(phone_number=phone_number)
+        .order_by('-date_joined')
+        .first()
+    )
+
+
 def apply_iprs_result(kyc, result):
     """Save IPRS verification details on a KYC record."""
     kyc.id_number = result.get('id_number') or kyc.id_number
@@ -687,18 +696,13 @@ class OTPSendView(APIView):
         # Find user if purpose requires it
         user = None
         if purpose in ['PASSWORD_RESET', 'LOGIN']:
-            try:
-                user = User.objects.get(phone_number=phone_number)
-            except User.DoesNotExist:
+            user = get_user_by_phone_number(phone_number)
+            if user is None:
                 # For password reset and login, don't reveal if phone exists
                 return Response({'message': 'OTP sent. Check your phone.'}, status=200)
         elif purpose == 'PHONE_VERIFY':
             # For registration, allow any phone number
-            try:
-                user = User.objects.get(phone_number=phone_number)
-            except User.DoesNotExist:
-                # Phone doesn't exist yet (registration case) - that's OK
-                user = None
+            user = get_user_by_phone_number(phone_number)
         
         try:
             # Create OTP token
@@ -805,7 +809,9 @@ class OTPResendView(APIView):
         
         # Invalidate old token and create new one
         try:
-            user = User.objects.get(phone_number=phone_number)
+            user = get_user_by_phone_number(phone_number)
+            if user is None:
+                return Response({'error': 'User not found'}, status=400)
             
             # Mark old tokens as used
             OTPToken.objects.filter(
@@ -826,8 +832,6 @@ class OTPResendView(APIView):
             else:
                 return Response({'error': 'Failed to send OTP'}, status=502)
                 
-        except User.DoesNotExist:
-            return Response({'error': 'User not found'}, status=400)
         except ATSMSError as e:
             return Response({'error': str(e)}, status=502)
         except Exception as e:
@@ -851,7 +855,9 @@ class PasswordResetRequestView(APIView):
         
         # Always return 200 (don't reveal if phone exists)
         try:
-            user = User.objects.get(phone_number=phone_number)
+            user = get_user_by_phone_number(phone_number)
+            if user is None:
+                return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
             token = create_otp_token(user, phone_number, 'PASSWORD_RESET')
             
             # Send SMS
@@ -863,9 +869,6 @@ class PasswordResetRequestView(APIView):
             else:
                 return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
                 
-        except User.DoesNotExist:
-            # Don't reveal if phone exists
-            return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
         except Exception as e:
             return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
 

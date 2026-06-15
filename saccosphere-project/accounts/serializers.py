@@ -57,10 +57,17 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         password = attrs.get('password')
         password2 = attrs.get('password2')
+        phone_number = attrs.get('phone_number')
 
         if password != password2:
             raise serializers.ValidationError(
                 {'password2': 'Passwords do not match.'}
+            )
+
+        validate_kenyan_phone_number(phone_number)
+        if User.objects.filter(phone_number=phone_number).exists():
+            raise serializers.ValidationError(
+                {'phone_number': 'A user with this phone number already exists.'}
             )
 
         validate_password_strength(password)
