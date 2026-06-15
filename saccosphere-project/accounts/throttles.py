@@ -29,4 +29,7 @@ class OTPSendThrottle(AnonRateThrottle):
         """
         Raise Throttled exception with custom message.
         """
-        raise Throttled('Too many OTP requests. Please try again later.')
+        raise Throttled(
+            wait=None,
+            detail='Too many OTP requests. Please try again later.'
+        )
