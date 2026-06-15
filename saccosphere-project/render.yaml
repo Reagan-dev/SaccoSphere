@@ -14,15 +14,26 @@ services:
         value: false
       - key: ALLOWED_HOSTS
         value: .onrender.com
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://your-frontend-domain.com
+      - key: CSRF_TRUSTED_ORIGINS
+        value: https://your-frontend-domain.com
       - key: DATABASE_URL
         fromDatabase:
           name: saccosphere-db
           property: connectionString
+      # Required: set this to your Redis instance URL
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: saccosphere-redis
-          property: connectionString
+        value: YOUR_REDIS_URL
+      - key: BILLING_ACCOUNT_NAME
+        value: YOUR_BILLING_ACCOUNT_NAME
+      - key: BILLING_ACCOUNT_NUMBER
+        value: YOUR_BILLING_ACCOUNT_NUMBER
+      - key: BILLING_PAYBILL
+        value: YOUR_BILLING_PAYBILL
+      # Required: set to your live domain before deploying
+      - key: MPESA_CALLBACK_BASE_URL
+        value: https://your-app-domain.com
   - type: worker
     name: saccosphere-worker
     runtime: python
@@ -40,11 +51,18 @@ services:
         fromDatabase:
           name: saccosphere-db
           property: connectionString
+      # Required: set this to your Redis instance URL
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: saccosphere-redis
-          property: connectionString
+        value: YOUR_REDIS_URL
+      - key: BILLING_ACCOUNT_NAME
+        value: YOUR_BILLING_ACCOUNT_NAME
+      - key: BILLING_ACCOUNT_NUMBER
+        value: YOUR_BILLING_ACCOUNT_NUMBER
+      - key: BILLING_PAYBILL
+        value: YOUR_BILLING_PAYBILL
+      # Required: set to your live domain before deploying
+      - key: MPESA_CALLBACK_BASE_URL
+        value: https://your-app-domain.com
   - type: worker
     name: saccosphere-beat
     runtime: python
@@ -62,11 +80,18 @@ services:
         fromDatabase:
           name: saccosphere-db
           property: connectionString
+      # Required: set this to your Redis instance URL
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: saccosphere-redis
-          property: connectionString
+        value: YOUR_REDIS_URL
+      - key: BILLING_ACCOUNT_NAME
+        value: YOUR_BILLING_ACCOUNT_NAME
+      - key: BILLING_ACCOUNT_NUMBER
+        value: YOUR_BILLING_ACCOUNT_NUMBER
+      - key: BILLING_PAYBILL
+        value: YOUR_BILLING_PAYBILL
+      # Required: set to your live domain before deploying
+      - key: MPESA_CALLBACK_BASE_URL
+        value: https://your-app-domain.com
   - type: redis
     name: saccosphere-redis
     plan: free
