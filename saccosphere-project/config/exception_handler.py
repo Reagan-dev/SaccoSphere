@@ -12,6 +12,9 @@ from rest_framework.exceptions import (
 )
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
+import logging
+
+logger = logging.getLogger('saccosphere.api')
 
 
 ERROR_CODE_BY_STATUS = {
@@ -73,6 +76,8 @@ def custom_exception_handler(exc, context):
     if response is None:
         status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
         errors = None
+        # Log the unhandled exception
+        logger.exception(f'Unhandled exception: {exc}')
     else:
         status_code = response.status_code
         errors = _normalize_errors(response.data)

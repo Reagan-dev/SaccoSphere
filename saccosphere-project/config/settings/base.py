@@ -314,5 +314,10 @@ LOGGING = {
             'level': 'INFO',
             'propagate': False,
         },
+        'saccosphere.api': {
+            'handlers': ['console', 'file'],
+            'level': 'ERROR',
+            'propagate': False,
+        },
     },
 }

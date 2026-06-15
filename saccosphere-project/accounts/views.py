@@ -714,8 +714,14 @@ class OTPSendView(APIView):
                 return Response({'error': 'Failed to send OTP'}, status=502)
                 
         except ATSMSError as e:
+            import logging
+            logger = logging.getLogger('saccosphere.sms')
+            logger.error(f'ATSMSError: {str(e)}')
             return Response({'error': str(e)}, status=502)
         except Exception as e:
+            import logging
+            logger = logging.getLogger('saccosphere.sms')
+            logger.exception(f'OTPSendView error: {str(e)}')
             return Response({'error': 'Internal server error'}, status=500)
 
 
