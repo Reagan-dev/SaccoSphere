@@ -271,17 +271,7 @@ class Sacco(models.Model):
     def __str__(self):
         return self.name
 
-    @property
-    def member_count(self):
-        try:
-            from saccomembership.models import Membership
-        except ImportError:
-            return 0
-
-        return Membership.objects.filter(
-            sacco=self,
-            status='APPROVED',
-        ).count()
+   
 
 
 class KYCVerification(models.Model):

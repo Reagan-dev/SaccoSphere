@@ -68,8 +68,6 @@ class UserAdmin(DjangoUserAdmin):
             },
         ),
     )
-
-
 @admin.register(Sacco)
 class SaccoAdmin(admin.ModelAdmin):
     list_display = (
@@ -83,6 +81,12 @@ class SaccoAdmin(admin.ModelAdmin):
     )
     list_filter = ('sector', 'county', 'is_verified', 'membership_type')
     search_fields = ('name', 'registration_number')
+
+    # Add this 👇
+    def member_count(self, obj):
+        return obj.membership_set.filter(status='APPROVED').count()
+    
+    member_count.short_description = 'Members'
 
 
 @admin.register(KYCVerification)
