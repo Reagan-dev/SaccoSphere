@@ -40,14 +40,24 @@ class Migration(migrations.Migration):
         ),
         migrations.AlterField(
             model_name='user',
-            name='id',
-            field=models.UUIDField(default=uuid.uuid4, editable=False, help_text='Unique user identifier.', primary_key=True, serialize=False),
-        ),
-        migrations.AlterField(
-            model_name='user',
             name='username',
             field=models.CharField(blank=True, help_text='Optional legacy username. Email is used for login.', max_length=150, null=True),
         ),
+
+        # ---- Safe BigInt → UUID conversion (replaces AlterField on id) ----
+        migrations.RunSQL(
+            sql="""
+                ALTER TABLE accounts_user ADD COLUMN new_id uuid;
+                UPDATE accounts_user SET new_id = gen_random_uuid();
+                ALTER TABLE accounts_user ALTER COLUMN new_id SET NOT NULL;
+                ALTER TABLE accounts_user DROP CONSTRAINT accounts_user_pkey;
+                ALTER TABLE accounts_user DROP COLUMN id;
+                ALTER TABLE accounts_user RENAME COLUMN new_id TO id;
+                ALTER TABLE accounts_user ADD PRIMARY KEY (id);
+            """,
+            reverse_sql=migrations.RunSQL.noop,
+        ),
+
         migrations.CreateModel(
             name='KYCVerification',
             fields=[
@@ -67,9 +77,7 @@ class Migration(migrations.Migration):
                 ('reviewed_by', models.ForeignKey(blank=True, help_text='Staff user who reviewed this KYC record.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='kyc_reviews', to=settings.AUTH_USER_MODEL)),
                 ('user', models.OneToOneField(help_text='User whose identity is being verified.', on_delete=django.db.models.deletion.CASCADE, related_name='kyc', to=settings.AUTH_USER_MODEL)),
             ],
-            options={
-                'ordering': ['-created_at'],
-            },
+            options={'ordering': ['-created_at']},
         ),
         migrations.CreateModel(
             name='OTPToken',
@@ -84,9 +92,7 @@ class Migration(migrations.Migration):
                 ('created_at', models.DateTimeField(auto_now_add=True, help_text='Date and time this OTP was created.')),
                 ('user', models.ForeignKey(help_text='User who owns this OTP token.', on_delete=django.db.models.deletion.CASCADE, related_name='otp_tokens', to=settings.AUTH_USER_MODEL)),
             ],
-            options={
-                'ordering': ['-created_at'],
-            },
+            options={'ordering': ['-created_at']},
         ),
         migrations.CreateModel(
             name='Sacco',
@@ -128,8 +134,6 @@ class Migration(migrations.Migration):
                 ('timestamp', models.DateTimeField(auto_now_add=True, help_text='Date and time the consent was recorded.')),
                 ('user', models.ForeignKey(help_text='User who gave or denied consent.', on_delete=django.db.models.deletion.CASCADE, related_name='consents', to=settings.AUTH_USER_MODEL)),
             ],
-            options={
-                'ordering': ['-timestamp'],
-            },
+            options={'ordering': ['-timestamp']},
         ),
     ]
