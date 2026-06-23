@@ -44,16 +44,49 @@ class Migration(migrations.Migration):
             field=models.CharField(blank=True, help_text='Optional legacy username. Email is used for login.', max_length=150, null=True),
         ),
 
-        # ---- Safe BigInt → UUID conversion (replaces AlterField on id) ----
+        # ---- Safe BigInt → UUID conversion ----
         migrations.RunSQL(
             sql="""
+                -- Drop foreign keys that depend on accounts_user primary key
+                ALTER TABLE accounts_user_groups
+                    DROP CONSTRAINT accounts_user_groups_user_id_52b62117_fk_accounts_user_id;
+                ALTER TABLE accounts_user_user_permissions
+                    DROP CONSTRAINT accounts_user_user_p_user_id_e4f0a161_fk_accounts_;
+
+                -- Add new UUID column and populate it
                 ALTER TABLE accounts_user ADD COLUMN new_id uuid;
                 UPDATE accounts_user SET new_id = gen_random_uuid();
                 ALTER TABLE accounts_user ALTER COLUMN new_id SET NOT NULL;
+
+                -- Drop old primary key and id column
                 ALTER TABLE accounts_user DROP CONSTRAINT accounts_user_pkey;
                 ALTER TABLE accounts_user DROP COLUMN id;
+
+                -- Rename new column to id and make it primary key
                 ALTER TABLE accounts_user RENAME COLUMN new_id TO id;
                 ALTER TABLE accounts_user ADD PRIMARY KEY (id);
+
+                -- Handle accounts_user_groups foreign key
+                ALTER TABLE accounts_user_groups ADD COLUMN new_user_id uuid;
+                UPDATE accounts_user_groups g
+                    SET new_user_id = u.id
+                    FROM accounts_user u
+                    WHERE g.user_id::text = u.id::text;
+                ALTER TABLE accounts_user_groups DROP COLUMN user_id;
+                ALTER TABLE accounts_user_groups RENAME COLUMN new_user_id TO user_id;
+                ALTER TABLE accounts_user_groups ADD CONSTRAINT accounts_user_groups_user_id_fk
+                    FOREIGN KEY (user_id) REFERENCES accounts_user(id) ON DELETE CASCADE;
+
+                -- Handle accounts_user_user_permissions foreign key
+                ALTER TABLE accounts_user_user_permissions ADD COLUMN new_user_id uuid;
+                UPDATE accounts_user_user_permissions p
+                    SET new_user_id = u.id
+                    FROM accounts_user u
+                    WHERE p.user_id::text = u.id::text;
+                ALTER TABLE accounts_user_user_permissions DROP COLUMN user_id;
+                ALTER TABLE accounts_user_user_permissions RENAME COLUMN new_user_id TO user_id;
+                ALTER TABLE accounts_user_user_permissions ADD CONSTRAINT accounts_user_user_permissions_user_id_fk
+                    FOREIGN KEY (user_id) REFERENCES accounts_user(id) ON DELETE CASCADE;
             """,
             reverse_sql=migrations.RunSQL.noop,
         ),
@@ -102,7 +135,7 @@ class Migration(migrations.Migration):
                 ('registration_number', models.CharField(blank=True, help_text='Official cooperative registration number.', max_length=50, null=True, unique=True)),
                 ('description', models.TextField(blank=True, help_text='Short public description of the SACCO.', null=True)),
                 ('logo', models.ImageField(blank=True, help_text='Optional SACCO logo.', null=True, upload_to='sacco_logos/')),
-                ('sector', models.CharField(choices=[('EDUCATION', 'Education'), ('HEALTHCARE', 'Healthcare'), ('AGRICULTURE', 'Agriculture'), ('TRANSPORT', 'Transport'), ('GOVERNMENT', 'Government'), ('TECHNOLOGY', 'Technology'), ('FINANCE', 'Finance'), ('RETAIL', 'Retail'), ('OTHER', 'Other')], help_text='Main sector served by the SACCO.', max_length=50)),
+                ('sector', models.CharField(choices=[('EDUCATION', 'Education'), ('HEALTHCARE', 'Healthcare'), ('AGRICULTURE', 'Agriculture'), ('TRANSPORT', 'Transport'), ('GOVERNMENT', 'Government'), ('TECHNOLOGY', 'Technology'), ('FINANCE', 'Finance'), ('RETAIL', 'Retail'), ('OTHER', 'Other')], help_text='Main sector served by the SACCO.', max_width=50)),
                 ('county', models.CharField(help_text='Kenya county where the SACCO is based.', max_length=50)),
                 ('membership_type', models.CharField(choices=[('OPEN', 'Open'), ('CLOSED', 'Closed'), ('STAFF_ONLY', 'Staff only')], default='OPEN', help_text='Controls who can join this SACCO.', max_length=20)),
                 ('is_publicly_listed', models.BooleanField(default=True, help_text='Whether the SACCO is visible in public listings.')),
