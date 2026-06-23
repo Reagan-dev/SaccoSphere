@@ -91,6 +91,7 @@ class Migration(migrations.Migration):
             reverse_sql=migrations.RunSQL.noop,
         ),
 
+        # ---- KYCVerification without FK fields ----
         migrations.CreateModel(
             name='KYCVerification',
             fields=[
@@ -107,11 +108,26 @@ class Migration(migrations.Migration):
                 ('verified_at', models.DateTimeField(blank=True, help_text='Date and time the KYC was approved.', null=True)),
                 ('submitted_at', models.DateTimeField(blank=True, help_text='Date and time the user submitted KYC documents.', null=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True, help_text='Date and time this KYC record was created.')),
-                ('reviewed_by', models.ForeignKey(blank=True, help_text='Staff user who reviewed this KYC record.', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='kyc_reviews', to=settings.AUTH_USER_MODEL)),
-                ('user', models.OneToOneField(help_text='User whose identity is being verified.', on_delete=django.db.models.deletion.CASCADE, related_name='kyc', to=settings.AUTH_USER_MODEL)),
+                # FK fields added below via RunSQL to avoid bigint vs uuid mismatch
             ],
             options={'ordering': ['-created_at']},
         ),
+
+        # Add KYCVerification FK columns as UUID directly
+        migrations.RunSQL(
+            sql="""
+                ALTER TABLE accounts_kycverification
+                    ADD COLUMN user_id uuid NOT NULL REFERENCES accounts_user(id) ON DELETE CASCADE;
+                ALTER TABLE accounts_kycverification
+                    ADD COLUMN reviewed_by_id uuid REFERENCES accounts_user(id) ON DELETE SET NULL;
+            """,
+            reverse_sql="""
+                ALTER TABLE accounts_kycverification DROP COLUMN user_id;
+                ALTER TABLE accounts_kycverification DROP COLUMN reviewed_by_id;
+            """,
+        ),
+
+        # ---- OTPToken without FK field ----
         migrations.CreateModel(
             name='OTPToken',
             fields=[
@@ -123,10 +139,23 @@ class Migration(migrations.Migration):
                 ('attempts', models.PositiveSmallIntegerField(default=0, help_text='Number of failed verification attempts.')),
                 ('expires_at', models.DateTimeField(db_index=True, help_text='Date and time this OTP expires.')),
                 ('created_at', models.DateTimeField(auto_now_add=True, help_text='Date and time this OTP was created.')),
-                ('user', models.ForeignKey(help_text='User who owns this OTP token.', on_delete=django.db.models.deletion.CASCADE, related_name='otp_tokens', to=settings.AUTH_USER_MODEL)),
+                # FK field added below via RunSQL
             ],
             options={'ordering': ['-created_at']},
         ),
+
+        # Add OTPToken FK column as UUID directly
+        migrations.RunSQL(
+            sql="""
+                ALTER TABLE accounts_otptoken
+                    ADD COLUMN user_id uuid REFERENCES accounts_user(id) ON DELETE CASCADE;
+            """,
+            reverse_sql="""
+                ALTER TABLE accounts_otptoken DROP COLUMN user_id;
+            """,
+        ),
+
+        # ---- Sacco has no FK to User, safe to create normally ----
         migrations.CreateModel(
             name='Sacco',
             fields=[
@@ -155,6 +184,8 @@ class Migration(migrations.Migration):
                 'indexes': [models.Index(fields=['sector', 'county'], name='accounts_sa_sector_556eda_idx')],
             },
         ),
+
+        # ---- UserConsent without FK field ----
         migrations.CreateModel(
             name='UserConsent',
             fields=[
@@ -165,8 +196,19 @@ class Migration(migrations.Migration):
                 ('ip_address', models.GenericIPAddressField(blank=True, help_text='IP address used when consent was recorded.', null=True)),
                 ('user_agent', models.CharField(blank=True, help_text='Browser or client user agent.', max_length=255, null=True)),
                 ('timestamp', models.DateTimeField(auto_now_add=True, help_text='Date and time the consent was recorded.')),
-                ('user', models.ForeignKey(help_text='User who gave or denied consent.', on_delete=django.db.models.deletion.CASCADE, related_name='consents', to=settings.AUTH_USER_MODEL)),
+                # FK field added below via RunSQL
             ],
             options={'ordering': ['-timestamp']},
+        ),
+
+        # Add UserConsent FK column as UUID directly
+        migrations.RunSQL(
+            sql="""
+                ALTER TABLE accounts_userconsent
+                    ADD COLUMN user_id uuid NOT NULL REFERENCES accounts_user(id) ON DELETE CASCADE;
+            """,
+            reverse_sql="""
+                ALTER TABLE accounts_userconsent DROP COLUMN user_id;
+            """,
         ),
     ]
