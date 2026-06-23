@@ -265,57 +265,32 @@ LOGGING = {
     'disable_existing_loggers': False,
     'formatters': {
         'verbose': {
-            'format': (
-                '%(asctime)s %(levelname)s %(name)s '
-                '[%(correlation_id)s] %(message)s'
-            ),
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
         },
         'simple': {
-            'format': '%(levelname)s %(name)s %(message)s',
-        },
-    },
-    'filters': {
-        'correlation_id': {
-            '()': 'config.logging_filters.CorrelationIdFilter',
+            'format': '{levelname} {message}',
+            'style': '{',
         },
     },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
-            'formatter': 'simple',
-        },
-        'file': {
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': BASE_DIR / 'logs' / 'saccosphere.log',
-            'maxBytes': 1024 * 1024 * 5,
-            'backupCount': 5,
             'formatter': 'verbose',
-            'filters': ['correlation_id'],
         },
     },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
     'loggers': {
-        'saccosphere.requests': {
-            'handlers': ['console', 'file'],
+        'django': {
+            'handlers': ['console'],
             'level': 'INFO',
             'propagate': False,
         },
-        'saccosphere.payments': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-            'propagate': False,
-        },
-        'saccosphere.security': {
-            'handlers': ['console', 'file'],
-            'level': 'WARNING',
-            'propagate': False,
-        },
-        'saccosphere.sms': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-            'propagate': False,
-        },
-        'saccosphere.api': {
-            'handlers': ['console', 'file'],
+        'django.request': {
+            'handlers': ['console'],
             'level': 'ERROR',
             'propagate': False,
         },
