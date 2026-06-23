@@ -135,7 +135,7 @@ class Migration(migrations.Migration):
                 ('registration_number', models.CharField(blank=True, help_text='Official cooperative registration number.', max_length=50, null=True, unique=True)),
                 ('description', models.TextField(blank=True, help_text='Short public description of the SACCO.', null=True)),
                 ('logo', models.ImageField(blank=True, help_text='Optional SACCO logo.', null=True, upload_to='sacco_logos/')),
-                ('sector', models.CharField(choices=[('EDUCATION', 'Education'), ('HEALTHCARE', 'Healthcare'), ('AGRICULTURE', 'Agriculture'), ('TRANSPORT', 'Transport'), ('GOVERNMENT', 'Government'), ('TECHNOLOGY', 'Technology'), ('FINANCE', 'Finance'), ('RETAIL', 'Retail'), ('OTHER', 'Other')], help_text='Main sector served by the SACCO.', max_width=50)),
+                ('sector', models.CharField(choices=[('EDUCATION', 'Education'), ('HEALTHCARE', 'Healthcare'), ('AGRICULTURE', 'Agriculture'), ('TRANSPORT', 'Transport'), ('GOVERNMENT', 'Government'), ('TECHNOLOGY', 'Technology'), ('FINANCE', 'Finance'), ('RETAIL', 'Retail'), ('OTHER', 'Other')], help_text='Main sector served by the SACCO.', max_length=50)),
                 ('county', models.CharField(help_text='Kenya county where the SACCO is based.', max_length=50)),
                 ('membership_type', models.CharField(choices=[('OPEN', 'Open'), ('CLOSED', 'Closed'), ('STAFF_ONLY', 'Staff only')], default='OPEN', help_text='Controls who can join this SACCO.', max_length=20)),
                 ('is_publicly_listed', models.BooleanField(default=True, help_text='Whether the SACCO is visible in public listings.')),
