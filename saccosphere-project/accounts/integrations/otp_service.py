@@ -74,20 +74,16 @@ class ATSMSClient:
             ATSMSError: If phone number is invalid
         """
         # Remove all non-digit characters
-        cleaned = re.sub(r'\D', '', phone_number)
-
-        # Handle different input formats
-        if cleaned.startswith('254'):
-            # Already in 254XXXXXXXXX format
-            return cleaned
-        elif cleaned.startswith('0') and len(cleaned) == 10:
-            # Local format (0XXXXXXXXX) — prepend 254 without 0
-            return f'254{cleaned[1:]}'
-        else:
-            raise ATSMSError(
-                f'Invalid phone number format: {phone_number}. '
-                'Expected +254XXXXXXXXX or 0XXXXXXXXX format.'
-            )
+        clean_num = ''.join(c for c in phone_number if c.isdigit())
+    
+        # If the user input was 254... (12 digits) or 07... (10 digits)
+        if len(clean_num) == 12 and clean_num.startswith('254'):
+            return f'+{clean_num}'
+        elif len(clean_num) == 9 and clean_num.startswith('7'): # 07... stripped
+            return f'+254{clean_num}'
+    
+        # Fallback: if it's already 13 digits starting with 254 but no plus
+        return f'+{clean_num}'
 
     def send_otp(self, phone_number, code, purpose):
         """
