@@ -731,7 +731,8 @@ class OTPSendView(APIView):
         
         try:
             # Create OTP token
-            token = create_otp_token(user, phone_number, purpose)
+            formatted_phone = format_phone_number(phone_number)
+            token = create_otp_token(user, formatted_phone, purpose)
             formatted_phone = format_phone_number(phone_number)
             # Send SMS
             client = ATSMSClient()
@@ -848,7 +849,7 @@ class OTPResendView(APIView):
             ).update(is_used=True)
             
             # Create new token
-            token = create_otp_token(user, phone_number, purpose)
+            token = create_otp_token(user, formatted_phone, purpose)
             
             # Send SMS
             client = ATSMSClient()
@@ -885,7 +886,8 @@ class PasswordResetRequestView(APIView):
             user = get_user_by_phone_number(phone_number)
             if user is None:
                 return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
-            token = create_otp_token(user, phone_number, 'PASSWORD_RESET')
+            formatted_phone = format_phone_number(phone_number)
+            token = create_otp_token(user, formatted_phone, 'PASSWORD_RESET')
             
             # Send SMS
             client = ATSMSClient()
