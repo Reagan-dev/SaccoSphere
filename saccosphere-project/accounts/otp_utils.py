@@ -8,6 +8,14 @@ from django.utils import timezone
 
 logger = logging.getLogger('saccosphere.otp')
 
+def format_phone_number(phone_number):
+    """Ensures phone number is in international format +254..."""
+    phone_number = phone_number.strip()
+    if not phone_number.startswith('+'):
+        if phone_number.startswith('0'):
+            return f'+254{phone_number[1:]}'
+        return f'+{phone_number}'
+    return phone_number
 
 class OTPError(Exception):
     """OTP verification error."""
