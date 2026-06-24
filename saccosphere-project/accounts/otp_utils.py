@@ -125,10 +125,11 @@ def verify_otp(phone_number, code, purpose):
         OTPError: If token not found, expired, or incorrect
     """
     from accounts.models import OTPToken
+    formatted_phone = format_phone_number(phone_number)
 
     # Find token
     token = OTPToken.objects.filter(
-        phone_number=phone_number,
+        phone_number=formatted_phone,
         purpose=purpose,
         is_used=False,
         expires_at__gt=timezone.now(),

@@ -717,10 +717,11 @@ class OTPSendView(APIView):
         
         phone_number = serializer.validated_data['phone_number']
         purpose = serializer.validated_data['purpose']
+        formatted_phone = format_phone_number(phone_number)
         
         # Find user if purpose requires it
         user = None
-        if purpose in ['PASSWORD_RESET', 'LOGIN']:
+        if purpose in ['PASSWORD_RESET', 'LOGIN',]:
             user = get_user_by_phone_number(phone_number)
             if user is None:
                 # For password reset and login, don't reveal if phone exists
@@ -731,9 +732,8 @@ class OTPSendView(APIView):
         
         try:
             # Create OTP token
-            formatted_phone = format_phone_number(phone_number)
+        
             token = create_otp_token(user, formatted_phone, purpose)
-            formatted_phone = format_phone_number(phone_number)
             # Send SMS
             client = ATSMSClient()
             result = client.send_otp(formatted_phone, token.code, purpose)
