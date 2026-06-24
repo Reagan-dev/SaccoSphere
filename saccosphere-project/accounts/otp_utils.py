@@ -62,10 +62,13 @@ def create_otp_token(user, phone_number, purpose):
     """
     from accounts.models import OTPToken
 
+    # Normalize the phone number before database operations
+    formatted_phone = format_phone_number(phone_number)
+
     try:
-        # Expire existing active tokens for this phone+purpose
+        # Expire existing active tokens for this normalized phone+purpose
         query = OTPToken.objects.filter(
-            phone_number=phone_number,
+            phone_number=formatted_phone,
             purpose=purpose,
             is_used=False,
         )
@@ -79,10 +82,10 @@ def create_otp_token(user, phone_number, purpose):
             minutes=settings.OTP_EXPIRY_MINUTES
         )
 
-        # Create new token
+        # Create new token using the normalized phone number
         token = OTPToken.objects.create(
             user=user,
-            phone_number=phone_number,
+            phone_number=formatted_phone,
             code=code,
             purpose=purpose,
             expires_at=expires_at,
@@ -93,7 +96,7 @@ def create_otp_token(user, phone_number, purpose):
         user_email = user.email if user else 'anonymous'
         logger.info(
             f'OTP token created for {user_email} '
-            f'(phone={phone_number}, purpose={purpose})'
+            f'(phone={formatted_phone}, purpose={purpose})'
         )
         return token
     except Exception as e:

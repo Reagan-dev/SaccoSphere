@@ -768,10 +768,11 @@ class OTPVerifyView(APIView):
         serializer.is_valid(raise_exception=True)
         
         phone_number = serializer.validated_data['phone_number']
+        formatted_phone = format_phone_number(phone_number)
         code = serializer.validated_data['code']
         
         try:
-            token = verify_otp(phone_number, code, 'PHONE_VERIFY')
+            token = verify_otp(formatted_phone, code, 'PHONE_VERIFY')
             
             # If user exists (existing phone verification), update their phone
             if token.user:
@@ -810,6 +811,7 @@ class OTPResendView(APIView):
         serializer.is_valid(raise_exception=True)
         
         phone_number = serializer.validated_data['phone_number']
+        formatted_phone = format_phone_number(phone_number)
         purpose = serializer.validated_data['purpose']
         
         # Check cooldown
@@ -818,7 +820,7 @@ class OTPResendView(APIView):
         from accounts.models import OTPToken
         
         recent_token = OTPToken.objects.filter(
-            phone_number=phone_number
+            phone_number=formatted_phone
         ).order_by('-created_at').first()
         
         if recent_token:
@@ -840,7 +842,7 @@ class OTPResendView(APIView):
             
             # Mark old tokens as used
             OTPToken.objects.filter(
-                phone_number=phone_number,
+                phone_number=formatted_phone,
                 purpose=purpose,
                 is_used=False
             ).update(is_used=True)
@@ -850,7 +852,7 @@ class OTPResendView(APIView):
             
             # Send SMS
             client = ATSMSClient()
-            result = client.send_otp(phone_number, token.code, purpose)
+            result = client.send_otp(formatted_phone, token.code, purpose)
             
             if result:
                 return Response({'message': 'OTP sent. Check your phone.'}, status=200)
