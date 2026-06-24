@@ -42,3 +42,4 @@ vine==5.1.0
 wcwidth==0.7.0
 WeasyPrint==68.1
 whitenoise==6.12.0
+africastalking==0.1.7
