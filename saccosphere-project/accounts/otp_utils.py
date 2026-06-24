@@ -9,13 +9,19 @@ from django.utils import timezone
 logger = logging.getLogger('saccosphere.otp')
 
 def format_phone_number(phone_number):
-    """Ensures phone number is in international format +254..."""
-    phone_number = phone_number.strip()
-    if not phone_number.startswith('+'):
-        if phone_number.startswith('0'):
-            return f'+254{phone_number[1:]}'
-        return f'+{phone_number}'
-    return phone_number
+    """Ensure the number is in strict +254 format."""
+    # Remove all non-numeric characters first (except the plus)
+    # This strips accidental spaces or other symbols
+    clean_num = ''.join(c for c in phone_number if c.isdigit())
+    
+    # If the user input was 254... (12 digits) or 07... (10 digits)
+    if len(clean_num) == 12 and clean_num.startswith('254'):
+        return f'+{clean_num}'
+    elif len(clean_num) == 9 and clean_num.startswith('7'): # 07... stripped
+        return f'+254{clean_num}'
+    
+    # Fallback: if it's already 13 digits starting with 254 but no plus
+    return f'+{clean_num}'
 
 class OTPError(Exception):
     """OTP verification error."""
