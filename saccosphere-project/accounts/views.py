@@ -37,7 +37,7 @@ from .serializers import (
     UserProfileSerializer,
     UserRegistrationSerializer,
 )
-from .otp_utils import create_otp_token, verify_otp, OTPError
+from .otp_utils import create_otp_token, verify_otp, OTPError, format_phone_number
 from .integrations.otp_service import ATSMSClient, ATSMSError
 from .throttles import OTPSendThrottle
 
@@ -732,10 +732,10 @@ class OTPSendView(APIView):
         try:
             # Create OTP token
             token = create_otp_token(user, phone_number, purpose)
-            
+            formatted_phone = format_phone_number(phone_number)
             # Send SMS
             client = ATSMSClient()
-            result = client.send_otp(phone_number, token.code, purpose)
+            result = client.send_otp(formatted_phone, token.code, purpose)
             
             if result:
                 return Response({'message': 'OTP sent. Check your phone.'}, status=200)
@@ -1014,5 +1014,3 @@ class PasswordResetConfirmView(APIView):
 #
 # END OF REVIEW - DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
 # ============================================================
-
-
