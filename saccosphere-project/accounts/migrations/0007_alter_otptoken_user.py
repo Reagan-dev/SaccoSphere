@@ -8,8 +8,8 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('accounts', '0005_kyc_document_storage_and_huduma'),
-    ]
+    ('accounts', '0006_create_otptoken'),
+]
 
     operations = [
         migrations.AlterField(
