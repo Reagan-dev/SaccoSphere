@@ -6,6 +6,10 @@ from guarantor.external_views import (
     ExternalGuarantorAdminReviewView,
 )
 
+from .dashboard_views import (
+    ContributionsDashboardView,
+    DisbursementsDashboardView,
+)
 from .role_views import RoleAssignView, RoleRevokeView, UserRolesView
 from .views import (
     AuditLogListView,
@@ -32,6 +36,16 @@ urlpatterns = [
     path('roles/', UserRolesView.as_view(), name='user-roles'),
     # Admin views
     path('audit-logs/', AuditLogListView.as_view(), name='audit-log-list'),
+    path(
+        'dashboard/disbursements/',
+        DisbursementsDashboardView.as_view(),
+        name='dashboard-disbursements',
+    ),
+    path(
+        'dashboard/contributions/',
+        ContributionsDashboardView.as_view(),
+        name='dashboard-contributions',
+    ),
     path('members/', AdminMemberListView.as_view(), name='member-list'),
     path(
         'members/<uuid:membership_id>/',
