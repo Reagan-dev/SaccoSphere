@@ -1,6 +1,7 @@
 from decimal import Decimal
 from uuid import uuid4
 
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.utils import timezone
@@ -139,6 +140,32 @@ class User(AbstractUser):
 
     def __str__(self):
         return f'{self.first_name} {self.last_name} <{self.email}>'
+
+
+class UserDevice(models.Model):
+    class Platform(models.TextChoices):
+        IOS = 'ios', 'iOS'
+        ANDROID = 'android', 'Android'
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='devices',
+    )
+    device_id = models.CharField(max_length=100)
+    device_name = models.CharField(max_length=100, null=True, blank=True)
+    platform = models.CharField(max_length=20, choices=Platform.choices)
+    push_token = models.CharField(max_length=200, null=True, blank=True)
+    biometric_enabled = models.BooleanField(default=False)
+    last_seen = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ['user', 'device_id']
+
+    def __str__(self):
+        device_name = self.device_name or self.device_id
+        return f'{self.user.email} - {device_name} ({self.platform})'
 
 
 class Sacco(models.Model):
