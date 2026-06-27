@@ -6,8 +6,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsSuperAdmin, IsSaccoAdmin
+from accounts.permissions import IsSaccoAdminOrSuperAdmin, IsSuperAdmin
 from accounts.models import User, Sacco
+
+from saccomembership.models import Membership
 
 from .models import Role
 from .role_serializers import RoleSerializer
@@ -132,21 +134,22 @@ class RoleRevokeView(APIView):
 class UserRolesView(ListAPIView):
     """
     List all roles for a specific user.
-    
+
     GET /api/v1/management/roles/?user_id=<uuid>
-    
-    Accessible to SUPER_ADMIN and SACCO_ADMIN users.
+
+    SACCO admins can only query roles for users in their SACCO.
+    SUPER_ADMIN users can query roles for any user.
     """
 
     serializer_class = RoleSerializer
-    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    permission_classes = [IsAuthenticated, IsSaccoAdminOrSuperAdmin]
 
-    def get_queryset(self):
-        user_id = self.request.query_params.get('user_id')
+    def list(self, request, *args, **kwargs):
+        user_id = request.query_params.get('user_id')
 
         if not user_id:
             raise ValidationError(
-                {'user_id': 'Query parameter user_id is required.'}
+                {'user_id': 'Query parameter user_id is required.'},
             )
 
         try:
@@ -154,7 +157,57 @@ class UserRolesView(ListAPIView):
         except User.DoesNotExist:
             raise ValidationError({'user_id': 'User not found.'})
 
-        return Role.objects.filter(user=target_user)
+        if not self._is_super_admin(request.user):
+            if not self._target_user_in_admin_sacco(request.user, target_user):
+                return Response(
+                    {
+                        'detail': (
+                            'You can only view roles for members of '
+                            'your SACCO.'
+                        ),
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        return super().list(request, *args, **kwargs)
+
+    def get_queryset(self):
+        user_id = self.request.query_params.get('user_id')
+        return Role.objects.filter(user_id=user_id).select_related(
+            'sacco',
+            'user',
+        )
+
+    def _is_super_admin(self, user):
+        return (
+            user.is_staff
+            or Role.objects.filter(
+                user=user,
+                name=Role.SUPER_ADMIN,
+            ).exists()
+        )
+
+    def _target_user_in_admin_sacco(self, admin_user, target_user):
+        admin_sacco_ids = Role.objects.filter(
+            user=admin_user,
+            name=Role.SACCO_ADMIN,
+            sacco__isnull=False,
+        ).values_list('sacco_id', flat=True)
+
+        if not admin_sacco_ids:
+            return False
+
+        has_membership = Membership.objects.filter(
+            user=target_user,
+            sacco_id__in=admin_sacco_ids,
+        ).exists()
+        if has_membership:
+            return True
+
+        return Role.objects.filter(
+            user=target_user,
+            sacco_id__in=admin_sacco_ids,
+        ).exists()
 
 
 # ============================================================
