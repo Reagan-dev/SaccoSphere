@@ -408,6 +408,37 @@ class RepaymentSchedule(models.Model):
         )
 
 
+class ReminderLog(models.Model):
+    class ReminderType(models.TextChoices):
+        THREE_DAY = 'THREE_DAY', 'Three day'
+        ONE_DAY = 'ONE_DAY', 'One day'
+        OVERDUE = 'OVERDUE', 'Overdue'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    schedule_item = models.ForeignKey(
+        RepaymentSchedule,
+        on_delete=models.CASCADE,
+        related_name='reminder_logs',
+    )
+    reminder_type = models.CharField(
+        max_length=20,
+        choices=ReminderType.choices,
+    )
+    sent_at = models.DateTimeField(auto_now_add=True)
+    notification_created = models.BooleanField()
+    sms_sent = models.BooleanField()
+
+    class Meta:
+        unique_together = ['schedule_item', 'reminder_type']
+
+    def __str__(self):
+        return f'{self.schedule_item_id} - {self.reminder_type}'
+
+
 class Guarantor(models.Model):
     class Status(models.TextChoices):
         PENDING = 'PENDING', 'Pending'
