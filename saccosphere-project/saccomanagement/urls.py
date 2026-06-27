@@ -11,6 +11,7 @@ from .dashboard_views import (
     ContributionsDashboardView,
     DisbursementsDashboardView,
 )
+from .import_views import MemberImportCreateView, MemberImportStatusView
 from .reports_views import SaccoReportView
 from .role_views import RoleAssignView, RoleRevokeView, UserRolesView
 from .settings_views import SaccoSettingsView
@@ -20,8 +21,6 @@ from .views import (
     AdminMemberListView,
     AdminSaccoStatsView,
     ApplicationReviewView,
-    ImportJobStatusView,
-    MemberImportView,
 )
 
 
@@ -90,12 +89,12 @@ urlpatterns = [
     ),
     path(
         'import/',
-        MemberImportView.as_view(),
+        MemberImportCreateView.as_view(),
         name='member-import',
     ),
     path(
         'import/<uuid:job_id>/',
-        ImportJobStatusView.as_view(),
+        MemberImportStatusView.as_view(),
         name='member-import-status',
     ),
 ]
