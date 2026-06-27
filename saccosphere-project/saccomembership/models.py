@@ -189,6 +189,51 @@ class SaccoApplication(models.Model):
         return f'{self.user.email} → {self.sacco.name} ({self.status})'
 
 
+class MembershipDocument(models.Model):
+    class DocumentType(models.TextChoices):
+        NATIONAL_ID_FRONT = 'NATIONAL_ID_FRONT', 'National ID front'
+        NATIONAL_ID_BACK = 'NATIONAL_ID_BACK', 'National ID back'
+        PASSPORT = 'PASSPORT', 'Passport'
+        PASSPORT_PHOTO = 'PASSPORT_PHOTO', 'Passport photo'
+        LATEST_PAYSLIP = 'LATEST_PAYSLIP', 'Latest payslip'
+        BANK_STATEMENT_3M = (
+            'BANK_STATEMENT_3M',
+            'Bank statement - 3 months',
+        )
+        MPESA_STATEMENT_3M = (
+            'MPESA_STATEMENT_3M',
+            'M-Pesa statement - 3 months',
+        )
+        OTHER = 'OTHER', 'Other'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    application = models.ForeignKey(
+        SaccoApplication,
+        on_delete=models.CASCADE,
+        related_name='membership_documents',
+    )
+    document_type = models.CharField(
+        max_length=30,
+        choices=DocumentType.choices,
+    )
+    file = models.FileField(upload_to='membership_docs/')
+    file_name = models.CharField(max_length=100, blank=True)
+    file_size_bytes = models.PositiveIntegerField(default=0)
+    notes = models.CharField(max_length=200, null=True, blank=True)
+    is_verified = models.BooleanField(default=False)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['document_type']
+
+    def __str__(self):
+        return f'{self.application_id} - {self.document_type}'
+
+
 # ============================================================
 # REVIEW — READ THIS THEN DELETE FROM THIS LINE TO THE END
 # ============================================================

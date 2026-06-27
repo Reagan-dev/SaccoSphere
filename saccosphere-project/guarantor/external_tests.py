@@ -87,7 +87,7 @@ class ExternalGuarantorAdminReviewTest(APITestCase):
         response = self.client.patch(
             reverse(
                 'management:external-guarantor-review',
-                kwargs={'pk': external_guarantor.pk},
+                kwargs={'id': external_guarantor.id},
             ),
             {'action': 'APPROVE'},
             format='json',
@@ -111,7 +111,7 @@ class ExternalGuarantorAdminReviewTest(APITestCase):
         response = self.client.patch(
             reverse(
                 'management:external-guarantor-review',
-                kwargs={'pk': external_guarantor.pk},
+                kwargs={'id': external_guarantor.id},
             ),
             {'action': 'APPROVE'},
             format='json',
@@ -133,7 +133,7 @@ class ExternalGuarantorAdminReviewTest(APITestCase):
         response = self.client.patch(
             reverse(
                 'management:external-guarantor-review',
-                kwargs={'pk': external_guarantor.pk},
+                kwargs={'id': external_guarantor.id},
             ),
             {'action': 'APPROVE'},
             format='json',

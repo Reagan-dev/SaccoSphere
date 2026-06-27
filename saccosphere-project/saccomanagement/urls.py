@@ -61,7 +61,7 @@ urlpatterns = [
         name='external-guarantor-list',
     ),
     path(
-        'external-guarantors/<int:pk>/review/',
+        'external-guarantors/<uuid:id>/review/',
         ExternalGuarantorAdminReviewView.as_view(),
         name='external-guarantor-review',
     ),

@@ -297,7 +297,7 @@ class ExternalGuarantorAdminListView(ListAPIView):
 class ExternalGuarantorAdminReviewView(APIView):
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
 
-    def patch(self, request, pk):
+    def patch(self, request, id):
         serializer = ExternalGuarantorAdminReviewSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -308,7 +308,7 @@ class ExternalGuarantorAdminReviewView(APIView):
                 'sacco',
                 'reviewed_by',
             ),
-            pk=pk,
+            id=id,
             sacco=get_admin_sacco(request),
         )
         action = serializer.validated_data['action']
