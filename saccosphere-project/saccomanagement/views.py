@@ -21,6 +21,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsSaccoAdmin, IsSuperAdmin
+from guarantor.utils import check_loan_guarantors_complete
 from payments.models import Transaction
 from saccomembership.models import Membership, SaccoApplication
 from saccomembership.serializers import MembershipListSerializer
@@ -504,6 +505,14 @@ class AdminLoanApprovalView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
                     f'to {new_status}.'
                 }
             )
+
+        if new_status == Loan.Status.APPROVED:
+            is_complete, reason = check_loan_guarantors_complete(loan)
+            if not is_complete:
+                return Response(
+                    {'detail': reason},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         # Update status and notes
         loan.status = new_status

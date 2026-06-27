@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from rest_framework import serializers
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import CreateAPIView, ListAPIView
@@ -9,6 +10,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.permissions import IsSaccoAdmin
 from notifications.models import Notification
 from notifications.utils import create_notification
 from saccomanagement.models import Role
@@ -21,6 +23,40 @@ from .external_serializers import (
 )
 from .models import ExternalGuarantor
 from .utils import generate_response_token, send_guarantor_sms
+
+
+def get_admin_sacco(request):
+    current_sacco = getattr(request, 'current_sacco', None)
+    if current_sacco is not None:
+        return current_sacco
+
+    sacco_id = request.headers.get('X-Sacco-ID')
+    admin_roles = Role.objects.filter(
+        user=request.user,
+        name=Role.SACCO_ADMIN,
+        sacco__isnull=False,
+    ).select_related('sacco')
+
+    if sacco_id:
+        role = admin_roles.filter(sacco_id=sacco_id).first()
+    else:
+        role = admin_roles.first()
+
+    if role is None:
+        raise PermissionDenied(
+            'You do not have permission to manage this SACCO.'
+        )
+
+    return role.sacco
+
+
+class ExternalGuarantorAdminReviewSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=('APPROVE', 'REJECT'))
+    admin_notes = serializers.CharField(
+        max_length=500,
+        required=False,
+        allow_blank=True,
+    )
 
 
 class ExternalGuarantorCreateView(CreateAPIView):
@@ -229,6 +265,129 @@ class ExternalGuarantorRespondView(APIView):
         create_notification(
             user=external_guarantor.requested_by,
             title='External Guarantor Response',
+            message=message,
+            category=Notification.Category.GUARANTOR,
+            related_object_type='ExternalGuarantor',
+            related_object_id=str(external_guarantor.id),
+            dispatch_async=False,
+        )
+
+
+class ExternalGuarantorAdminListView(ListAPIView):
+    serializer_class = ExternalGuarantorDetailSerializer
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+
+    def get_queryset(self):
+        queryset = ExternalGuarantor.objects.filter(
+            sacco=get_admin_sacco(self.request),
+        ).select_related(
+            'loan',
+            'requested_by',
+            'sacco',
+            'reviewed_by',
+        )
+        status_filter = self.request.query_params.get('status')
+
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        return queryset
+
+
+class ExternalGuarantorAdminReviewView(APIView):
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+
+    def patch(self, request, pk):
+        serializer = ExternalGuarantorAdminReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        external_guarantor = get_object_or_404(
+            ExternalGuarantor.objects.select_related(
+                'loan',
+                'requested_by',
+                'sacco',
+                'reviewed_by',
+            ),
+            pk=pk,
+            sacco=get_admin_sacco(request),
+        )
+        action = serializer.validated_data['action']
+        admin_notes = serializer.validated_data.get('admin_notes', '')
+
+        if (
+            action == 'APPROVE'
+            and external_guarantor.status != ExternalGuarantor.Status.ACCEPTED
+        ):
+            return Response(
+                {
+                    'detail': (
+                        'Only accepted external guarantors can be approved.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if action == 'APPROVE':
+            self._approve(external_guarantor, admin_notes, request.user)
+        else:
+            self._reject(external_guarantor, admin_notes, request.user)
+
+        external_guarantor.refresh_from_db()
+        response_serializer = ExternalGuarantorDetailSerializer(
+            external_guarantor,
+            context={'request': request},
+        )
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+    def _approve(self, external_guarantor, admin_notes, user):
+        external_guarantor.status = (
+            ExternalGuarantor.Status.APPROVED_BY_ADMIN
+        )
+        external_guarantor.reviewed_by = user
+        external_guarantor.reviewed_at = timezone.now()
+        external_guarantor.admin_notes = admin_notes
+        external_guarantor.save(update_fields=[
+            'status',
+            'reviewed_by',
+            'reviewed_at',
+            'admin_notes',
+            'updated_at',
+        ])
+        self._notify_applicant(
+            external_guarantor,
+            (
+                f'{external_guarantor.full_name}\'s guarantee has been '
+                f'approved by {external_guarantor.sacco.name}. '
+                'Your loan application can now proceed.'
+            ),
+        )
+
+    def _reject(self, external_guarantor, admin_notes, user):
+        external_guarantor.status = (
+            ExternalGuarantor.Status.REJECTED_BY_ADMIN
+        )
+        external_guarantor.reviewed_by = user
+        external_guarantor.reviewed_at = timezone.now()
+        external_guarantor.admin_notes = admin_notes
+        external_guarantor.save(update_fields=[
+            'status',
+            'reviewed_by',
+            'reviewed_at',
+            'admin_notes',
+            'updated_at',
+        ])
+        self._notify_applicant(
+            external_guarantor,
+            (
+                f'{external_guarantor.full_name}\'s guarantee was not '
+                'approved. Please add another guarantor.'
+            ),
+        )
+
+    def _notify_applicant(self, external_guarantor, message):
+        create_notification(
+            user=external_guarantor.requested_by,
+            title='External Guarantor Review',
             message=message,
             category=Notification.Category.GUARANTOR,
             related_object_type='ExternalGuarantor',
