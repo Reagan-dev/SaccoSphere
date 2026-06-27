@@ -262,3 +262,74 @@ class MemberImportJob(models.Model):
             f'MemberImport {str(self.id)[:8]} - '
             f'{self.sacco.name} - {self.status}'
         )
+
+
+class ComplianceFlag(models.Model):
+    """
+    Platform compliance and health flags for SACCOs.
+
+    Used by Super Admin to track SACCO health status and operational issues.
+    """
+
+    class Severity(models.TextChoices):
+        LOW = 'LOW', 'Low'
+        MEDIUM = 'MEDIUM', 'Medium'
+        HIGH = 'HIGH', 'High'
+        CRITICAL = 'CRITICAL', 'Critical'
+
+    class FlagType(models.TextChoices):
+        API_ISSUE = 'API_ISSUE', 'API Issue'
+        PAYMENT_FAILURE = 'PAYMENT_FAILURE', 'Payment Failure'
+        DATA_DISCREPANCY = 'DATA_DISCREPANCY', 'Data Discrepancy'
+        REGULATORY = 'REGULATORY', 'Regulatory'
+        SECURITY = 'SECURITY', 'Security'
+        PERFORMANCE = 'PERFORMANCE', 'Performance'
+
+    class Status(models.TextChoices):
+        OPEN = 'OPEN', 'Open'
+        INVESTIGATING = 'INVESTIGATING', 'Investigating'
+        RESOLVED = 'RESOLVED', 'Resolved'
+        IGNORED = 'IGNORED', 'Ignored'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    sacco = models.ForeignKey(
+        'accounts.Sacco',
+        on_delete=models.CASCADE,
+        related_name='compliance_flags',
+    )
+    flag_type = models.CharField(
+        max_length=30,
+        choices=FlagType.choices,
+    )
+    severity = models.CharField(
+        max_length=20,
+        choices=Severity.choices,
+        default=Severity.MEDIUM,
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.OPEN,
+    )
+    description = models.TextField()
+    metadata = models.JSONField(default=dict)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='resolved_flags',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-severity', '-created_at']
+
+    def __str__(self):
+        return f'{self.sacco.name} — {self.flag_type} — {self.severity}'
