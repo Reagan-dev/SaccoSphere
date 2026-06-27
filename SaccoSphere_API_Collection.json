@@ -941,6 +941,220 @@
             "description": "Get SACCO-scoped progress and summary for one import job"
           },
           "response": []
+        },
+        {
+          "name": "Get Disbursements Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dashboard/disbursements/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "dashboard", "disbursements", ""]
+            },
+            "description": "Get disbursements dashboard data (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Contributions Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dashboard/contributions/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "dashboard", "contributions", ""]
+            },
+            "description": "Get contributions dashboard data (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List External Guarantors",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/external-guarantors/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "external-guarantors", ""]
+            },
+            "description": "List external guarantor requests (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Review External Guarantor",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"review_notes\": \"Guarantor verified\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/external-guarantors/{{id}}/review/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "external-guarantors", "{{id}}", "review", ""]
+            },
+            "description": "Approve or reject external guarantor request (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List Loan Approvals",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/loans/approvals/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "loans", "approvals", ""]
+            },
+            "description": "List pending loans requiring SACCO admin approval"
+          },
+          "response": []
+        },
+        {
+          "name": "Get SACCO Reports",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/reports/?type=loans&from_date=2024-01-01&to_date=2024-12-31",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "reports", ""],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "loans"
+                },
+                {
+                  "key": "from_date",
+                  "value": "2024-01-01"
+                },
+                {
+                  "key": "to_date",
+                  "value": "2024-12-31"
+                }
+              ]
+            },
+            "description": "Get SACCO-scoped reports (loans, contributions, members)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get SACCO Settings",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/settings/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "settings", ""]
+            },
+            "description": "Get SACCO-specific configuration settings"
+          },
+          "response": []
+        },
+        {
+          "name": "Update SACCO Settings",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"min_loan_amount\": 1000.00,\n  \"max_loan_amount\": 500000.00,\n  \"loan_multiplier\": 3,\n  \"requires_guarantor\": true,\n  \"guarantor_type_allowed\": \"BOTH\",\n  \"registration_fee\": 500.00,\n  \"monthly_contribution_amount\": 1000.00\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/settings/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "settings", ""]
+            },
+            "description": "Update SACCO-specific configuration settings"
+          },
+          "response": []
         }
       ]
     },
@@ -1879,6 +2093,154 @@
               ]
             },
             "description": "Compare eligible loan options for requested amount and term"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Super Admin Dashboard",
+      "item": [
+        {
+          "name": "Get System Overview",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/superadmin/overview/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "superadmin", "overview", ""]
+            },
+            "description": "Get platform-wide overview statistics (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Revenue Chart",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/superadmin/revenue-chart/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "superadmin", "revenue-chart", ""]
+            },
+            "description": "Get last 12 months of revenue breakdown (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Top SACCOs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/superadmin/top-saccos/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "superadmin", "top-saccos", ""]
+            },
+            "description": "Get top 10 SACCOs by transaction volume (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Platform Alerts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/superadmin/alerts/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "superadmin", "alerts", ""]
+            },
+            "description": "Get all open compliance flags (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Live Transaction Feed",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/superadmin/transactions/live/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "superadmin", "transactions", "live", ""]
+            },
+            "description": "Get last 50 M-Pesa transactions (SUPER_ADMIN only, 10s cache)"
+          },
+          "response": []
+        },
+        {
+          "name": "List All SACCOs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/superadmin/saccos/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "superadmin", "saccos", ""]
+            },
+            "description": "List all SACCOs with health status (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List All Members",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/superadmin/members/?sacco_id=&search=",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "superadmin", "members", ""],
+              "query": [
+                {
+                  "key": "sacco_id",
+                  "value": ""
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "List all members with pagination (SUPER_ADMIN only)"
           },
           "response": []
         }
