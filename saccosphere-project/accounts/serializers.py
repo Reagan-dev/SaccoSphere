@@ -5,7 +5,7 @@ from django.conf import settings
 from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
 
-from .models import KYCVerification, OTPToken, Sacco, User
+from .models import KYCVerification, OTPToken, Sacco, User, UserDevice
 from .role_utils import get_sacco_admin_id
 
 
@@ -103,6 +103,7 @@ class GoogleAuthSerializer(serializers.Serializer):
 
 class UserProfileSerializer(serializers.ModelSerializer):
     sacco_id = serializers.SerializerMethodField()
+    biometric_login_enabled = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -116,11 +117,69 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'date_of_birth',
             'date_joined',
             'sacco_id',
+            'biometric_login_enabled',
         )
-        read_only_fields = ('id', 'email', 'date_joined', 'sacco_id')
+        read_only_fields = (
+            'id',
+            'email',
+            'date_joined',
+            'sacco_id',
+            'biometric_login_enabled',
+        )
 
     def get_sacco_id(self, obj):
         return get_sacco_admin_id(obj)
+
+    def get_biometric_login_enabled(self, obj):
+        return obj.devices.filter(biometric_enabled=True).exists()
+
+
+class UserDeviceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserDevice
+        fields = (
+            'id',
+            'user',
+            'device_id',
+            'device_name',
+            'platform',
+            'push_token',
+            'biometric_enabled',
+            'last_seen',
+            'created_at',
+        )
+        read_only_fields = fields
+
+
+class DeviceListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserDevice
+        fields = (
+            'device_id',
+            'device_name',
+            'platform',
+            'biometric_enabled',
+            'last_seen',
+        )
+        read_only_fields = fields
+
+
+class DeviceRegistrationSerializer(serializers.Serializer):
+    device_id = serializers.CharField(max_length=100)
+    device_name = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+    )
+    platform = serializers.ChoiceField(choices=UserDevice.Platform.choices)
+    push_token = serializers.CharField(
+        max_length=200,
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+    )
+    biometric_enabled = serializers.BooleanField(default=False)
 
 
 class SaccoListSerializer(serializers.ModelSerializer):

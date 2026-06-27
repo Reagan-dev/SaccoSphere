@@ -4,6 +4,11 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
 
+from .biometric_views import (
+    DeviceListView,
+    DeviceRegistrationView,
+    RevokeDeviceView,
+)
 from .oauth_views import GoogleOAuthCallbackView
 from .views import (
     KYCSubmitIDView,
@@ -43,6 +48,17 @@ urlpatterns = [
     ),
     path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('me/', MeView.as_view(), name='me'),
+    path(
+        'device/register/',
+        DeviceRegistrationView.as_view(),
+        name='device-register',
+    ),
+    path('devices/', DeviceListView.as_view(), name='device-list'),
+    path(
+        'device/<str:device_id>/',
+        RevokeDeviceView.as_view(),
+        name='device-revoke',
+    ),
     path('kyc/submit-id/', KYCSubmitIDView.as_view(), name='kyc-submit-id'),
     path('kyc/upload/', KYCUploadView.as_view(), name='kyc-upload'),
     path('kyc/status/', KYCStatusView.as_view(), name='kyc-status'),
