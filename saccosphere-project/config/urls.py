@@ -28,6 +28,7 @@ api_v1_patterns = [
     path('saccomanagement/', include('saccomanagement.urls')),
     path('services/', include('services.urls')),
     path('payments/', include('payments.urls')),
+    path('guarantors/', include('guarantor.urls')),
     path('notifications/', include('notifications.urls')),
     path('ledger/', include('ledger.urls')),
     path('dashboard/', include('dashboard.urls')),

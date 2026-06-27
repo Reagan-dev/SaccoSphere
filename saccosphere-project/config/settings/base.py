@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'drf_yasg',
     'django_celery_beat',
     'accounts',
+    'guarantor',
     'saccomembership',
     'saccomanagement',
     'services.apps.ServicesConfig',
@@ -218,6 +219,10 @@ MPESA_SHORTCODE = config('MPESA_SHORTCODE', default='')
 MPESA_PASSKEY = config('MPESA_PASSKEY', default='')
 MPESA_ENVIRONMENT = config('MPESA_ENVIRONMENT', default='sandbox')
 MPESA_CALLBACK_BASE_URL = config('MPESA_CALLBACK_BASE_URL', default='')
+GUARANTOR_RESPONSE_BASE_URL = config(
+    'GUARANTOR_RESPONSE_BASE_URL',
+    default=MPESA_CALLBACK_BASE_URL,
+)
 MPESA_B2C_INITIATOR_NAME = config(
     'MPESA_B2C_INITIATOR_NAME',
     default='',
