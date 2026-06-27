@@ -54,6 +54,7 @@ class AuditLoggingTestCase(TestCase):
             max_term_months=24,
             min_amount=Decimal('1000.00'),
             max_amount=Decimal('100000.00'),
+            requires_guarantors=False,
             is_active=True,
         )
         self.client.force_authenticate(user=self.admin)

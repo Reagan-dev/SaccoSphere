@@ -2,6 +2,7 @@ import logging
 import secrets
 
 from django.conf import settings
+from django.db.models import Sum
 
 from accounts.integrations.otp_service import ATSMSClient, ATSMSError
 
@@ -61,3 +62,48 @@ def send_guarantor_sms(external_guarantor):
         external_guarantor.id,
     )
     return True
+
+
+def check_loan_guarantors_complete(loan):
+    pending_external_statuses = [
+        loan.external_guarantors.model.Status.PENDING_SMS,
+        loan.external_guarantors.model.Status.SMS_SENT,
+        loan.external_guarantors.model.Status.ACCEPTED,
+    ]
+    has_pending_external = loan.external_guarantors.filter(
+        status__in=pending_external_statuses,
+    ).exists()
+
+    if has_pending_external:
+        return False, 'Loan has external guarantors pending admin review.'
+
+    requires_guarantors = getattr(
+        loan.loan_type,
+        'requires_guarantors',
+        getattr(loan.loan_type, 'requires_guarantor', False),
+    )
+
+    if not requires_guarantors:
+        return True, 'Guarantors complete.'
+
+    from services.models import Guarantor
+
+    internal_guaranteed = loan.guarantors.filter(
+        status=Guarantor.Status.APPROVED,
+    ).aggregate(total=Sum('guarantee_amount'))['total'] or 0
+    external_guaranteed = loan.external_guarantors.filter(
+        status=loan.external_guarantors.model.Status.APPROVED_BY_ADMIN,
+    ).aggregate(total=Sum('guarantee_amount'))['total'] or 0
+    total_guaranteed = internal_guaranteed + external_guaranteed
+
+    if total_guaranteed < loan.amount:
+        deficit = loan.amount - total_guaranteed
+        return (
+            False,
+            (
+                'Insufficient guarantee coverage. '
+                f'Need KES {deficit:,.0f} more in guarantees.'
+            ),
+        )
+
+    return True, 'Guarantors complete.'

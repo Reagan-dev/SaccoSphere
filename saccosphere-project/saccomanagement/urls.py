@@ -1,6 +1,10 @@
 from django.urls import path
 
 from accounts.views import AdminKYCQueueView, AdminKYCReviewView
+from guarantor.external_views import (
+    ExternalGuarantorAdminListView,
+    ExternalGuarantorAdminReviewView,
+)
 
 from .role_views import RoleAssignView, RoleRevokeView, UserRolesView
 from .views import (
@@ -50,6 +54,16 @@ urlpatterns = [
         'loans/<uuid:id>/status/',
         AdminLoanApprovalView.as_view(),
         name='loan-approval',
+    ),
+    path(
+        'external-guarantors/',
+        ExternalGuarantorAdminListView.as_view(),
+        name='external-guarantor-list',
+    ),
+    path(
+        'external-guarantors/<int:pk>/review/',
+        ExternalGuarantorAdminReviewView.as_view(),
+        name='external-guarantor-review',
     ),
     path(
         'import/',

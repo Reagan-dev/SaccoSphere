@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsSaccoAdmin
 from config.response import StandardResponseMixin
+from guarantor.utils import check_loan_guarantors_complete
 from services.models import Loan, Saving
 
 from .integrations.mpesa.daraja import DarajaClient, DarajaError
@@ -464,6 +465,13 @@ class B2CDisbursementView(APIView):
         if loan.status != Loan.Status.APPROVED:
             return Response(
                 {'detail': 'Only approved loans can be disbursed.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        is_complete, reason = check_loan_guarantors_complete(loan)
+        if not is_complete:
+            return Response(
+                {'detail': reason},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
