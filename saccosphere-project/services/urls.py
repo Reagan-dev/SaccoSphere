@@ -1,6 +1,8 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from guarantor.external_views import ExternalGuarantorCollectionView
+
 from .views import (
     GuarantorRequestView,
     GuarantorRespondView,
@@ -61,5 +63,10 @@ urlpatterns = [
         'loans/<uuid:loan_id>/guarantors/<uuid:guarantor_id>/respond/',
         GuarantorRespondView.as_view(),
         name='guarantor-respond',
+    ),
+    path(
+        'loans/<uuid:loan_id>/external-guarantors/',
+        ExternalGuarantorCollectionView.as_view(),
+        name='external-guarantor-collection',
     ),
 ]

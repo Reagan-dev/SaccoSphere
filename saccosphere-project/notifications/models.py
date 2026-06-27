@@ -9,6 +9,7 @@ class Notification(models.Model):
         LOAN = 'LOAN', 'Loan'
         PAYMENT = 'PAYMENT', 'Payment'
         ALERT = 'ALERT', 'Alert'
+        GUARANTOR = 'GUARANTOR', 'Guarantor'
         DIVIDEND = 'DIVIDEND', 'Dividend'
         SYSTEM = 'SYSTEM', 'System'
 

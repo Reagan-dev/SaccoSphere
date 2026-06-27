@@ -1,0 +1,237 @@
+from datetime import timedelta
+
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.generics import CreateAPIView, ListAPIView
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from notifications.models import Notification
+from notifications.utils import create_notification
+from saccomanagement.models import Role
+from services.models import Loan
+
+from .external_serializers import (
+    ExternalGuarantorCreateSerializer,
+    ExternalGuarantorDetailSerializer,
+    ExternalGuarantorResponseSerializer,
+)
+from .models import ExternalGuarantor
+from .utils import generate_response_token, send_guarantor_sms
+
+
+class ExternalGuarantorCreateView(CreateAPIView):
+    serializer_class = ExternalGuarantorCreateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer(self, *args, **kwargs):
+        data = kwargs.get('data')
+        if data is not None:
+            copied_data = data.copy()
+            copied_data['loan_id'] = self.kwargs['loan_id']
+            kwargs['data'] = copied_data
+        return super().get_serializer(*args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        external_guarantor = serializer.save(
+            response_token=generate_response_token(),
+            response_token_expires_at=timezone.now() + timedelta(hours=48),
+            status=ExternalGuarantor.Status.PENDING_SMS,
+        )
+
+        sms_sent = send_guarantor_sms(external_guarantor)
+        if sms_sent:
+            external_guarantor.status = ExternalGuarantor.Status.SMS_SENT
+            external_guarantor.save(update_fields=['status', 'updated_at'])
+            self._notify_applicant_sms_sent(external_guarantor)
+            external_guarantor.refresh_from_db()
+
+        response_serializer = ExternalGuarantorDetailSerializer(
+            external_guarantor,
+            context=self.get_serializer_context(),
+        )
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _notify_applicant_sms_sent(self, external_guarantor):
+        create_notification(
+            user=external_guarantor.requested_by,
+            title='Guarantor SMS Sent',
+            message=(
+                f'{external_guarantor.full_name} has been sent an SMS to '
+                'approve your guarantee request.'
+            ),
+            category=Notification.Category.GUARANTOR,
+            related_object_type='ExternalGuarantor',
+            related_object_id=str(external_guarantor.id),
+            dispatch_async=False,
+        )
+
+
+class ExternalGuarantorListView(ListAPIView):
+    serializer_class = ExternalGuarantorDetailSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        loan = self._get_authorized_loan()
+        return ExternalGuarantor.objects.filter(loan=loan).select_related(
+            'loan',
+            'requested_by',
+            'sacco',
+            'reviewed_by',
+        )
+
+    def _get_authorized_loan(self):
+        loan = get_object_or_404(
+            Loan.objects.select_related(
+                'membership',
+                'membership__user',
+                'membership__sacco',
+            ),
+            id=self.kwargs['loan_id'],
+        )
+
+        user = self.request.user
+        if loan.membership.user == user:
+            return loan
+
+        is_admin = Role.objects.filter(
+            user=user,
+            sacco=loan.membership.sacco,
+            name=Role.SACCO_ADMIN,
+        ).exists()
+        is_super_admin = Role.objects.filter(
+            user=user,
+            name=Role.SUPER_ADMIN,
+        ).exists()
+
+        if is_admin or is_super_admin:
+            return loan
+
+        raise PermissionDenied(
+            'You do not have permission to view these guarantors.'
+        )
+
+
+class ExternalGuarantorCollectionView(
+    ExternalGuarantorCreateView,
+    ExternalGuarantorListView,
+):
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return ExternalGuarantorCreateSerializer
+        return ExternalGuarantorDetailSerializer
+
+    def get(self, request, *args, **kwargs):
+        return ExternalGuarantorListView.get(self, request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        return ExternalGuarantorCreateView.post(
+            self,
+            request,
+            *args,
+            **kwargs,
+        )
+
+
+class ExternalGuarantorRespondView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, response_token):
+        serializer = ExternalGuarantorResponseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        external_guarantor = self._get_external_guarantor(response_token)
+        action = serializer.validated_data['action']
+        notes = serializer.validated_data.get('notes', '')
+
+        if action == 'ACCEPT':
+            self._accept(external_guarantor, notes)
+        else:
+            self._decline(external_guarantor, notes)
+
+        return Response(
+            {'message': 'Thank you. Your response has been recorded.'},
+            status=status.HTTP_200_OK,
+        )
+
+    def _get_external_guarantor(self, response_token):
+        try:
+            external_guarantor = ExternalGuarantor.objects.select_related(
+                'loan',
+                'requested_by',
+            ).get(response_token=response_token)
+        except ExternalGuarantor.DoesNotExist:
+            raise PermissionDenied('Invalid guarantor response token.')
+
+        if external_guarantor.response_token_expires_at <= timezone.now():
+            raise PermissionDenied('Guarantor response token has expired.')
+
+        if external_guarantor.status != ExternalGuarantor.Status.SMS_SENT:
+            raise PermissionDenied(
+                'This guarantor request has already been responded to.'
+            )
+
+        return external_guarantor
+
+    def _accept(self, external_guarantor, notes):
+        external_guarantor.status = ExternalGuarantor.Status.ACCEPTED
+        external_guarantor.guarantor_response = (
+            ExternalGuarantor.GuarantorResponse.ACCEPTED
+        )
+        external_guarantor.guarantor_response_notes = notes
+        external_guarantor.guarantor_responded_at = timezone.now()
+        external_guarantor.save(update_fields=[
+            'status',
+            'guarantor_response',
+            'guarantor_response_notes',
+            'guarantor_responded_at',
+            'updated_at',
+        ])
+        self._notify_applicant(
+            external_guarantor,
+            (
+                f'{external_guarantor.full_name} has accepted your guarantee '
+                'request. It is now under admin review.'
+            ),
+        )
+
+    def _decline(self, external_guarantor, notes):
+        external_guarantor.status = ExternalGuarantor.Status.DECLINED
+        external_guarantor.guarantor_response = (
+            ExternalGuarantor.GuarantorResponse.DECLINED
+        )
+        external_guarantor.guarantor_response_notes = notes
+        external_guarantor.guarantor_responded_at = timezone.now()
+        external_guarantor.save(update_fields=[
+            'status',
+            'guarantor_response',
+            'guarantor_response_notes',
+            'guarantor_responded_at',
+            'updated_at',
+        ])
+        self._notify_applicant(
+            external_guarantor,
+            (
+                f'{external_guarantor.full_name} has declined your guarantee '
+                'request.'
+            ),
+        )
+
+    def _notify_applicant(self, external_guarantor, message):
+        create_notification(
+            user=external_guarantor.requested_by,
+            title='External Guarantor Response',
+            message=message,
+            category=Notification.Category.GUARANTOR,
+            related_object_type='ExternalGuarantor',
+            related_object_id=str(external_guarantor.id),
+            dispatch_async=False,
+        )
