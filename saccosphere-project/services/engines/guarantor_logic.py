@@ -29,6 +29,8 @@ def calculate_guarantee_capacity(user):
             loan__status__in=[
                 Loan.Status.ACTIVE,
                 Loan.Status.DISBURSEMENT_PENDING,
+                Loan.Status.PENDING_APPROVAL,
+                Loan.Status.UNDER_REVIEW,
                 Loan.Status.BOARD_REVIEW,
             ],
         ).aggregate(Sum('guarantee_amount'))['guarantee_amount__sum']

@@ -6,14 +6,16 @@ from guarantor.external_views import (
     ExternalGuarantorAdminReviewView,
 )
 
+from .admin_views import AdminLoanApprovalView, LoanApprovalListView
 from .dashboard_views import (
     ContributionsDashboardView,
     DisbursementsDashboardView,
 )
+from .reports_views import SaccoReportView
 from .role_views import RoleAssignView, RoleRevokeView, UserRolesView
+from .settings_views import SaccoSettingsView
 from .views import (
     AuditLogListView,
-    AdminLoanApprovalView,
     AdminMemberDetailView,
     AdminMemberListView,
     AdminSaccoStatsView,
@@ -65,10 +67,17 @@ urlpatterns = [
         name='kyc-review',
     ),
     path(
+        'loans/approvals/',
+        LoanApprovalListView.as_view(),
+        name='loan-approval-list',
+    ),
+    path(
         'loans/<uuid:id>/status/',
         AdminLoanApprovalView.as_view(),
         name='loan-approval',
     ),
+    path('reports/', SaccoReportView.as_view(), name='sacco-reports'),
+    path('settings/', SaccoSettingsView.as_view(), name='sacco-settings'),
     path(
         'external-guarantors/',
         ExternalGuarantorAdminListView.as_view(),

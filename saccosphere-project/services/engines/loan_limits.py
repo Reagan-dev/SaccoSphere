@@ -12,6 +12,14 @@ from services.models import Loan, Saving
 ZERO = Decimal('0')
 
 
+def _get_loan_multiplier(sacco):
+    """Return loan multiplier from SaccoSettings or the SACCO default."""
+    settings = getattr(sacco, 'settings', None)
+    if settings is not None:
+        return Decimal(settings.loan_multiplier)
+    return Decimal(sacco.loan_multiplier)
+
+
 def calculate_loan_limit(user, sacco):
     """
     Calculate how much a member can borrow from a specific SACCO.
@@ -72,7 +80,7 @@ def calculate_loan_limit(user, sacco):
             'max_amount': ZERO,
         }
 
-    gross_limit = total_savings * Decimal(sacco.loan_multiplier)
+    gross_limit = total_savings * _get_loan_multiplier(sacco)
 
     active_loans = Loan.objects.select_related(
         'membership',

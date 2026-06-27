@@ -5,6 +5,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework import serializers
 
+from accounts.models import SaccoSettings
 from saccomembership.models import SaccoApplication, Membership
 from services.models import RepaymentSchedule, Saving, SavingsType
 
@@ -198,6 +199,25 @@ class ApplicationReviewSerializer(serializers.Serializer):
         allow_blank=True,
         required=False,
     )
+
+
+class SaccoSettingsSerializer(serializers.ModelSerializer):
+    sacco_id = serializers.UUIDField(source='sacco.id', read_only=True)
+
+    class Meta:
+        model = SaccoSettings
+        fields = (
+            'sacco_id',
+            'min_loan_amount',
+            'max_loan_amount',
+            'loan_multiplier',
+            'requires_guarantor',
+            'guarantor_type_allowed',
+            'registration_fee',
+            'monthly_contribution_amount',
+            'updated_at',
+        )
+        read_only_fields = ('sacco_id', 'updated_at')
 
 
 class SystemAuditLogSerializer(serializers.ModelSerializer):

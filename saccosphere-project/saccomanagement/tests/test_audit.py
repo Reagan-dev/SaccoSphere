@@ -68,7 +68,7 @@ class AuditLoggingTestCase(TestCase):
             interest_rate=Decimal('12.00'),
             term_months=12,
             outstanding_balance=Decimal('0.00'),
-            status=Loan.Status.BOARD_REVIEW,
+            status=Loan.Status.UNDER_REVIEW,
         )
 
         response = self.client.patch(
@@ -82,7 +82,7 @@ class AuditLoggingTestCase(TestCase):
         self.assertTrue(
             SystemAuditLog.objects.filter(
                 user=self.admin,
-                action='UPDATE',
+                action='LOAN_APPROVED',
                 resource_type='Loan',
                 resource_id=str(loan.id),
             ).exists()

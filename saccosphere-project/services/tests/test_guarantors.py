@@ -343,7 +343,7 @@ class GuarantorWorkflowTestCase(TestCase):
 
         # Now loan should be BOARD_REVIEW (all 2 required approved)
         self.loan.refresh_from_db()
-        self.assertEqual(self.loan.status, Loan.Status.BOARD_REVIEW)
+        self.assertEqual(self.loan.status, Loan.Status.PENDING_APPROVAL)
 
     def test_decline_resets_loan_to_pending(self):
         """

@@ -298,7 +298,60 @@ class Sacco(models.Model):
     def __str__(self):
         return self.name
 
-   
+
+class SaccoSettings(models.Model):
+    """SACCO-specific configuration overrides for loans and membership."""
+
+    class GuarantorTypeAllowed(models.TextChoices):
+        MEMBER_ONLY = 'MEMBER_ONLY', 'Member only'
+        EXTERNAL_ONLY = 'EXTERNAL_ONLY', 'External only'
+        BOTH = 'BOTH', 'Both'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    sacco = models.OneToOneField(
+        Sacco,
+        on_delete=models.CASCADE,
+        related_name='settings',
+    )
+    min_loan_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('1000.00'),
+    )
+    max_loan_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('500000.00'),
+    )
+    loan_multiplier = models.PositiveSmallIntegerField(default=3)
+    requires_guarantor = models.BooleanField(default=True)
+    guarantor_type_allowed = models.CharField(
+        max_length=20,
+        choices=GuarantorTypeAllowed.choices,
+        default=GuarantorTypeAllowed.BOTH,
+    )
+    registration_fee = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+    )
+    monthly_contribution_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['sacco__name']
+
+    def __str__(self):
+        return f'Settings — {self.sacco.name}'
 
 
 class KYCVerification(models.Model):
