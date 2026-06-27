@@ -6,6 +6,7 @@ from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
 
 from .models import KYCVerification, OTPToken, Sacco, User
+from .role_utils import get_sacco_admin_id
 
 
 KENYAN_PHONE_REGEX = re.compile(r'^\+?254(?:7|1)\d{8}$')
@@ -92,7 +93,17 @@ class UserLoginSerializer(serializers.Serializer):
     password = serializers.CharField(required=True, write_only=True)
 
 
+class GoogleAuthSerializer(serializers.Serializer):
+    id_token = serializers.CharField(required=True)
+    flow = serializers.ChoiceField(
+        choices=('login', 'signup'),
+        default='login',
+    )
+
+
 class UserProfileSerializer(serializers.ModelSerializer):
+    sacco_id = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = (
@@ -104,8 +115,12 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'profile_picture',
             'date_of_birth',
             'date_joined',
+            'sacco_id',
         )
-        read_only_fields = ('id', 'email', 'date_joined')
+        read_only_fields = ('id', 'email', 'date_joined', 'sacco_id')
+
+    def get_sacco_id(self, obj):
+        return get_sacco_admin_id(obj)
 
 
 class SaccoListSerializer(serializers.ModelSerializer):
