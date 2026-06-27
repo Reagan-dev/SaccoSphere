@@ -1,4 +1,5 @@
 from datetime import timedelta
+from uuid import uuid4
 
 from django.conf import settings
 from django.db import models
@@ -12,6 +13,12 @@ def default_response_token_expires_at():
 
 
 class ExternalGuarantor(models.Model):
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+
     class EmploymentStatus(models.TextChoices):
         EMPLOYED = 'EMPLOYED', 'Employed'
         SELF_EMPLOYED = 'SELF_EMPLOYED', 'Self employed'

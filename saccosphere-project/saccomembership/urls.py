@@ -1,5 +1,9 @@
 from django.urls import path
 
+from .membership_doc_views import (
+    MembershipDocumentCollectionView,
+    MembershipDocumentDeleteView,
+)
 from .views import (
     MembershipDetailView,
     MembershipLeaveView,
@@ -30,5 +34,15 @@ urlpatterns = [
         'saccos/<uuid:sacco_id>/fields/',
         SaccoFieldsView.as_view(),
         name='sacco-fields',
+    ),
+    path(
+        'applications/<uuid:application_id>/documents/',
+        MembershipDocumentCollectionView.as_view(),
+        name='membership-document-collection',
+    ),
+    path(
+        'applications/<uuid:application_id>/documents/<uuid:id>/',
+        MembershipDocumentDeleteView.as_view(),
+        name='membership-document-delete',
     ),
 ]

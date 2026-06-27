@@ -23,6 +23,9 @@ from rest_framework.views import APIView
 from accounts.permissions import IsSaccoAdmin, IsSuperAdmin
 from guarantor.utils import check_loan_guarantors_complete
 from payments.models import Transaction
+from saccomembership.membership_doc_serializers import (
+    MembershipDocumentDetailSerializer,
+)
 from saccomembership.models import Membership, SaccoApplication
 from saccomembership.serializers import MembershipListSerializer
 from services.models import Loan, Saving
@@ -322,9 +325,25 @@ class ApplicationReviewView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
             return response
         return super().patch(request, *args, **kwargs)
 
+    def get(self, request, *args, **kwargs):
+        """Return one SACCO application with uploaded documents."""
+        response = self._set_sacco_context()
+        if response:
+            return response
+
+        application = self.get_object()
+        return Response(
+            self._serialize_review_response(application, request),
+            status=status.HTTP_200_OK,
+        )
+
     def get_queryset(self):
         """Get applications scoped to the current SACCO."""
-        queryset = SaccoApplication.objects.select_related('user', 'sacco')
+        queryset = SaccoApplication.objects.select_related(
+            'user',
+            'sacco',
+            'reviewed_by',
+        ).prefetch_related('membership_documents')
         return self.get_sacco_queryset(queryset, sacco_field='sacco')
 
     @transaction.atomic
@@ -389,15 +408,40 @@ class ApplicationReviewView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
             request=request,
         )
 
-        return Response(
-            {
-                'id': str(application.id),
-                'status': application.status,
-                'review_notes': application.review_notes,
-                'membership_id': str(membership.id) if membership else None,
-            },
-            status=status.HTTP_200_OK,
+        data = self._serialize_review_response(application, request)
+        data['membership_id'] = str(membership.id) if membership else None
+        return Response(data, status=status.HTTP_200_OK)
+
+    def _serialize_review_response(self, application, request):
+        documents = application.membership_documents.all()
+        document_serializer = MembershipDocumentDetailSerializer(
+            documents,
+            many=True,
+            context={'request': request},
         )
+        return {
+            'id': str(application.id),
+            'user_id': str(application.user_id),
+            'sacco_id': str(application.sacco_id),
+            'application_type': application.application_type,
+            'employment_status': application.employment_status,
+            'employer_name': application.employer_name,
+            'monthly_income': application.monthly_income,
+            'additional_docs': application.additional_docs,
+            'registration_fee_paid': application.registration_fee_paid,
+            'status': application.status,
+            'reviewed_by_id': (
+                str(application.reviewed_by_id)
+                if application.reviewed_by_id
+                else None
+            ),
+            'review_notes': application.review_notes,
+            'submitted_at': application.submitted_at,
+            'reviewed_at': application.reviewed_at,
+            'created_at': application.created_at,
+            'updated_at': application.updated_at,
+            'membership_documents': document_serializer.data,
+        }
 
     def _notify_applicant(self, application):
         """Notify an applicant that their SACCO application was reviewed."""
