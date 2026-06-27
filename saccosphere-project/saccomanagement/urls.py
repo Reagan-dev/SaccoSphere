@@ -15,6 +15,15 @@ from .import_views import MemberImportCreateView, MemberImportStatusView
 from .reports_views import SaccoReportView
 from .role_views import RoleAssignView, RoleRevokeView, UserRolesView
 from .settings_views import SaccoSettingsView
+from .superadmin_views import (
+    AllMembersListView,
+    AllSaccosListView,
+    LiveTransactionFeedView,
+    PlatformAlertsView,
+    PlatformRevenueChartView,
+    SystemOverviewView,
+    TopSaccosView,
+)
 from .views import (
     AuditLogListView,
     AdminMemberDetailView,
@@ -96,5 +105,41 @@ urlpatterns = [
         'import/<uuid:job_id>/',
         MemberImportStatusView.as_view(),
         name='member-import-status',
+    ),
+    # Super Admin views
+    path(
+        'superadmin/overview/',
+        SystemOverviewView.as_view(),
+        name='superadmin-overview',
+    ),
+    path(
+        'superadmin/revenue-chart/',
+        PlatformRevenueChartView.as_view(),
+        name='superadmin-revenue-chart',
+    ),
+    path(
+        'superadmin/top-saccos/',
+        TopSaccosView.as_view(),
+        name='superadmin-top-saccos',
+    ),
+    path(
+        'superadmin/alerts/',
+        PlatformAlertsView.as_view(),
+        name='superadmin-alerts',
+    ),
+    path(
+        'superadmin/transactions/live/',
+        LiveTransactionFeedView.as_view(),
+        name='superadmin-live-transactions',
+    ),
+    path(
+        'superadmin/saccos/',
+        AllSaccosListView.as_view(),
+        name='superadmin-saccos',
+    ),
+    path(
+        'superadmin/members/',
+        AllMembersListView.as_view(),
+        name='superadmin-members',
     ),
 ]
