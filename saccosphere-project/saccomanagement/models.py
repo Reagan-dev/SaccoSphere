@@ -207,3 +207,58 @@ class ImportJob(models.Model):
             f'Import {str(self.id)[:8]} - '
             f'{self.sacco.name} - {self.status}'
         )
+
+
+class MemberImportJob(models.Model):
+    """Track synchronous SACCO member CSV/Excel import jobs."""
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PROCESSING = 'PROCESSING', 'Processing'
+        COMPLETED = 'COMPLETED', 'Completed'
+        FAILED = 'FAILED', 'Failed'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    sacco = models.ForeignKey(
+        'accounts.Sacco',
+        on_delete=models.CASCADE,
+        related_name='member_import_jobs',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='created_member_import_jobs',
+    )
+    file_name = models.CharField(max_length=100)
+    status = models.CharField(
+        max_length=15,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    total_rows = models.PositiveIntegerField(default=0)
+    processed_rows = models.PositiveIntegerField(default=0)
+    success_rows = models.PositiveIntegerField(default=0)
+    error_rows = models.PositiveIntegerField(default=0)
+    errors = models.JSONField(default=list)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    @property
+    def progress_pct(self):
+        if self.total_rows == 0:
+            return 0
+        return round((self.processed_rows / self.total_rows) * 100, 2)
+
+    def __str__(self):
+        return (
+            f'MemberImport {str(self.id)[:8]} - '
+            f'{self.sacco.name} - {self.status}'
+        )
