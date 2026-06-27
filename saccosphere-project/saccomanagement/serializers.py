@@ -1,6 +1,12 @@
+from decimal import Decimal
+
+from django.db.models import Sum, Value
+from django.db.models.functions import Coalesce
+from django.utils import timezone
 from rest_framework import serializers
 
 from saccomembership.models import SaccoApplication, Membership
+from services.models import RepaymentSchedule, Saving, SavingsType
 
 from .models import SystemAuditLog
 
@@ -39,6 +45,9 @@ class AdminMemberDetailSerializer(serializers.ModelSerializer):
     savings_breakdown = serializers.SerializerMethodField()
     active_loans = serializers.SerializerMethodField()
     recent_transactions = serializers.SerializerMethodField()
+    monthly_contribution = serializers.SerializerMethodField()
+    share_capital = serializers.SerializerMethodField()
+    repayment_rate_pct = serializers.SerializerMethodField()
 
     class Meta:
         model = Membership
@@ -52,6 +61,9 @@ class AdminMemberDetailSerializer(serializers.ModelSerializer):
             'approved_date',
             'savings_total',
             'outstanding_loans',
+            'monthly_contribution',
+            'share_capital',
+            'repayment_rate_pct',
             'savings_breakdown',
             'active_loans',
             'recent_transactions',
@@ -102,6 +114,55 @@ class AdminMemberDetailSerializer(serializers.ModelSerializer):
             }
             for transaction in transactions
         ]
+
+    def get_monthly_contribution(self, obj):
+        value = getattr(obj, 'monthly_contribution', None)
+        if value is not None:
+            return value
+
+        start_date = timezone.localdate() - timezone.timedelta(days=30)
+        return Saving.objects.filter(
+            membership=obj,
+            last_transaction_date__gte=start_date,
+        ).aggregate(
+            total=Coalesce(
+                Sum('total_contributions'),
+                Value(Decimal('0.00')),
+            )
+        )['total']
+
+    def get_share_capital(self, obj):
+        value = getattr(obj, 'share_capital', None)
+        if value is not None:
+            return value
+
+        return Saving.objects.filter(
+            membership=obj,
+            savings_type__name=SavingsType.Name.SHARE_CAPITAL,
+            status=Saving.Status.ACTIVE,
+        ).aggregate(
+            total=Coalesce(
+                Sum('amount'),
+                Value(Decimal('0.00')),
+            )
+        )['total']
+
+    def get_repayment_rate_pct(self, obj):
+        value = getattr(obj, 'repayment_rate_pct', None)
+        if value is not None:
+            return value
+
+        total_instalments = RepaymentSchedule.objects.filter(
+            loan__membership=obj,
+        ).count()
+        if total_instalments == 0:
+            return 0.0
+
+        paid_instalments = RepaymentSchedule.objects.filter(
+            loan__membership=obj,
+            status=RepaymentSchedule.Status.PAID,
+        ).count()
+        return round((paid_instalments / total_instalments) * 100, 2)
 
 
 class AdminSaccoStatsSerializer(serializers.Serializer):

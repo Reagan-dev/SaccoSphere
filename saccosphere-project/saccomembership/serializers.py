@@ -26,12 +26,14 @@ class MembershipSaccoSerializer(serializers.Serializer):
 
 class MembershipListSerializer(serializers.ModelSerializer):
     user = MembershipUserSerializer(read_only=True)
+    user_id = serializers.UUIDField(read_only=True)
     sacco = MembershipSaccoSerializer(read_only=True)
 
     class Meta:
         model = Membership
         fields = (
             'id',
+            'user_id',
             'user',
             'sacco',
             'member_number',
