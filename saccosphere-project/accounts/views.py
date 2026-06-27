@@ -25,7 +25,7 @@ from .integrations.iprs_client import IPRSClient, IPRSError
 from .models import KYCVerification, Sacco, User
 from . import serializers as account_serializers
 from .permissions import IsSaccoAdminOrSuperAdmin
-from .role_utils import get_sacco_admin_id
+from .utils import get_user_sacco_context
 from .serializers import (
     AdminKYCReviewSerializer,
     KYCStatusSerializer,
@@ -147,11 +147,13 @@ class LoginView(StandardResponseMixin, APIView):
             )
 
         refresh = RefreshToken.for_user(user)
+        sacco_context = get_user_sacco_context(user)
         data = {
             'access': str(refresh.access_token),
             'refresh': str(refresh),
             'user': UserProfileSerializer(user).data,
-            'sacco_id': get_sacco_admin_id(user),
+            'sacco_context': sacco_context,
+            'sacco_id': sacco_context['sacco_id'],
         }
         return self.ok(data, 'Login successful')
 

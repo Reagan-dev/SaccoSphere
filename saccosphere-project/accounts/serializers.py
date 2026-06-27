@@ -7,6 +7,7 @@ from rest_framework import serializers
 
 from .models import KYCVerification, OTPToken, Sacco, User, UserDevice
 from .role_utils import get_sacco_admin_id
+from .utils import get_user_sacco_context
 
 
 KENYAN_PHONE_REGEX = re.compile(r'^\+?254(?:7|1)\d{8}$')
@@ -103,6 +104,7 @@ class GoogleAuthSerializer(serializers.Serializer):
 
 class UserProfileSerializer(serializers.ModelSerializer):
     sacco_id = serializers.SerializerMethodField()
+    sacco_context = serializers.SerializerMethodField()
     biometric_login_enabled = serializers.SerializerMethodField()
 
     class Meta:
@@ -117,6 +119,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'date_of_birth',
             'date_joined',
             'sacco_id',
+            'sacco_context',
             'biometric_login_enabled',
         )
         read_only_fields = (
@@ -124,11 +127,15 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'email',
             'date_joined',
             'sacco_id',
+            'sacco_context',
             'biometric_login_enabled',
         )
 
     def get_sacco_id(self, obj):
         return get_sacco_admin_id(obj)
+
+    def get_sacco_context(self, obj):
+        return get_user_sacco_context(obj)
 
     def get_biometric_login_enabled(self, obj):
         return obj.devices.filter(biometric_enabled=True).exists()
