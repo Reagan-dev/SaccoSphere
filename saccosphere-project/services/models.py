@@ -200,8 +200,11 @@ class Loan(models.Model):
     class Status(models.TextChoices):
         PENDING = 'PENDING', 'Pending'
         GUARANTORS_PENDING = 'GUARANTORS_PENDING', 'Guarantors pending'
+        PENDING_APPROVAL = 'PENDING_APPROVAL', 'Pending approval'
+        UNDER_REVIEW = 'UNDER_REVIEW', 'Under review'
         BOARD_REVIEW = 'BOARD_REVIEW', 'Board review'
         APPROVED = 'APPROVED', 'Approved'
+        DISBURSED = 'DISBURSED', 'Disbursed'
         DISBURSEMENT_PENDING = (
             'DISBURSEMENT_PENDING',
             'Disbursement pending',
@@ -274,6 +277,11 @@ class Loan(models.Model):
         null=True,
         blank=True,
         help_text='Reason provided when the loan is rejected.',
+    )
+    admin_notes = models.TextField(
+        null=True,
+        blank=True,
+        help_text='Optional notes recorded by SACCO admin during review.',
     )
     approved_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

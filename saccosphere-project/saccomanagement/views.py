@@ -21,7 +21,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsSaccoAdmin, IsSuperAdmin
-from guarantor.utils import check_loan_guarantors_complete
 from payments.models import Transaction
 from saccomembership.membership_doc_serializers import (
     MembershipDocumentDetailSerializer,
@@ -223,6 +222,8 @@ class AdminSaccoStatsView(SaccoScopedMixin, APIView):
             status__in=[
                 Loan.Status.PENDING,
                 Loan.Status.GUARANTORS_PENDING,
+                Loan.Status.PENDING_APPROVAL,
+                Loan.Status.UNDER_REVIEW,
                 Loan.Status.BOARD_REVIEW,
             ],
         )
@@ -466,129 +467,6 @@ class ApplicationReviewView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
             title=title,
             message=message,
         )
-
-
-class AdminLoanApprovalView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
-    """
-    Update loan status (admin approval workflow).
-
-    PATCH /api/v1/management/loans/{id}/status/
-
-    Permission: IsSaccoAdmin
-
-    Allowed transitions:
-    - PENDING → BOARD_REVIEW
-    - BOARD_REVIEW → APPROVED or REJECTED
-
-    On APPROVED: generates RepaymentSchedule.
-
-    Body: {
-        "status": "APPROVED|REJECTED|BOARD_REVIEW",
-        "notes": "Optional admin notes"
-    }
-
-    Returns 200 with updated Loan instance.
-    """
-
-    permission_classes = [IsAuthenticated, IsSaccoAdmin]
-    lookup_field = 'id'
-    audit_resource_type = 'Loan'
-
-    def patch(self, request, *args, **kwargs):
-        """Set SACCO context before processing request."""
-        response = self._set_sacco_context()
-        if response:  # 403 error
-            return response
-        return super().patch(request, *args, **kwargs)
-
-    def get_queryset(self):
-        """Get loans scoped to current SACCO."""
-        from services.models import Loan
-
-        queryset = Loan.objects.all()
-        return self.get_sacco_queryset(
-            queryset,
-            sacco_field='membership__sacco',
-        )
-
-    def get_serializer(self, *args, **kwargs):
-        """Return loan serializer for response."""
-        from services.serializers import LoanDetailSerializer
-
-        return LoanDetailSerializer(*args, **kwargs)
-
-    def partial_update(self, request, *args, **kwargs):
-        """
-        Partial update with status transition validation.
-
-        Validates that the status transition is allowed.
-        Triggers RepaymentSchedule generation on APPROVED.
-        """
-        loan = self.get_object()
-        old_values = {
-            'status': loan.status,
-            'outstanding_balance': str(loan.outstanding_balance),
-            'updated_at': loan.updated_at.isoformat(),
-        }
-        new_status = request.data.get('status')
-        notes = request.data.get('notes', '')
-
-        # Validate status transition
-        current_status = loan.status
-        valid_transitions = {
-            'PENDING': ['BOARD_REVIEW'],
-            'BOARD_REVIEW': ['APPROVED', 'REJECTED'],
-            'APPROVED': [],
-            'REJECTED': [],
-        }
-
-        if new_status not in valid_transitions.get(current_status, []):
-            raise ValidationError(
-                {
-                    'status': f'Cannot transition from {current_status} '
-                    f'to {new_status}.'
-                }
-            )
-
-        if new_status == Loan.Status.APPROVED:
-            is_complete, reason = check_loan_guarantors_complete(loan)
-            if not is_complete:
-                return Response(
-                    {'detail': reason},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-        # Update status and notes
-        loan.status = new_status
-        if notes:
-            loan.admin_notes = notes
-        loan.save()
-
-        # Generate repayment schedule on approval
-        if new_status == 'APPROVED':
-            try:
-                import importlib
-                tasks_module = importlib.import_module('services.tasks')
-                tasks_module.generate_repayment_schedule(loan.id)
-            except (AttributeError, ImportError):
-                # Task may not exist yet, skip silently
-                pass
-
-        serializer = self.get_serializer(loan)
-        log_audit(
-            request.user,
-            'UPDATE',
-            self.audit_resource_type,
-            loan.id,
-            old_values=old_values,
-            new_values={
-                'status': loan.status,
-                'outstanding_balance': str(loan.outstanding_balance),
-                'updated_at': loan.updated_at.isoformat(),
-            },
-            request=request,
-        )
-        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class AuditLogListView(ListAPIView):

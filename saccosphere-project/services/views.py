@@ -162,6 +162,9 @@ class LoanApplyView(LoanEligibilityCreateMixin, CreateAPIView):
 
             # Dispatch async task to notify guarantors.
             notify_guarantors_task.delay(str(loan.id))
+        else:
+            loan.status = Loan.Status.PENDING_APPROVAL
+            loan.save(update_fields=['status', 'updated_at'])
 
 
 class LoanEligibilityView(APIView):
@@ -565,9 +568,9 @@ class GuarantorRespondView(APIView):
                     status=Guarantor.Status.APPROVED,
                 ).count()
 
-                # If all required guarantors approved, move to BOARD_REVIEW.
+                # If all required guarantors approved, move to PENDING_APPROVAL.
                 if approved_count >= total_required and total_required > 0:
-                    loan.status = Loan.Status.BOARD_REVIEW
+                    loan.status = Loan.Status.PENDING_APPROVAL
                     loan.save(update_fields=['status', 'updated_at'])
 
                     # Notify SACCO admin that loan is ready for review.
