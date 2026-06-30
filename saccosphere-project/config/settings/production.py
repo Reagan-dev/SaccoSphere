@@ -1,10 +1,14 @@
 from decouple import Csv, config
 
 from .base import *  # noqa: F403
-
+import os
 
 DEBUG = False
 SECRET_KEY = config('SECRET_KEY')
+
+CORS_ALLOWED_ORIGINS = [
+    url.strip() for url in os.environ.get("FRONTEND_URL", "").split(",") if url.strip()
+]
 
 SECURE_SSL_REDIRECT = config(
     'SECURE_SSL_REDIRECT',
