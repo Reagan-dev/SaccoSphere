@@ -315,6 +315,108 @@
           "response": []
         },
         {
+          "name": "Google OAuth Callback",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"google_oauth_code\",\n  \"flow\": \"signup\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/oauth/google/callback/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "oauth", "google", "callback", ""]
+            },
+            "description": "Google Sign-In + Sign-Up callback with flow parameter"
+          },
+          "response": []
+        },
+        {
+          "name": "Register Biometric Device",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_name\": \"iPhone 14 Pro\",\n  \"device_type\": \"ios\",\n  \"device_identifier\": \"unique_device_id\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/device/register/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "device", "register", ""]
+            },
+            "description": "Register a biometric device for authentication"
+          },
+          "response": []
+        },
+        {
+          "name": "List Registered Devices",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/devices/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "devices", ""]
+            },
+            "description": "List all registered biometric devices for the user"
+          },
+          "response": []
+        },
+        {
+          "name": "Revoke Device",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/device/{{device_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "device", "{{device_id}}", ""]
+            },
+            "description": "Revoke a registered biometric device"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Public Statistics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/public-stats/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "accounts", "public-stats", ""]
+            },
+            "description": "Get public platform statistics (no authentication required)"
+          },
+          "response": []
+        },
+        {
           "name": "List SACCOs",
           "request": {
             "method": "GET",
@@ -577,6 +679,78 @@
               "path": ["api", "v1", "members", "saccos", "{{sacco_id}}", "fields", ""]
             },
             "description": "Get custom field definitions for a SACCO"
+          },
+          "response": []
+        },
+        {
+          "name": "Upload Membership Document",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "document_type",
+                  "value": "payslip",
+                  "type": "text"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/members/applications/{{application_id}}/documents/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "members", "applications", "{{application_id}}", "documents", ""]
+            },
+            "description": "Upload document for membership application"
+          },
+          "response": []
+        },
+        {
+          "name": "List Membership Documents",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/members/applications/{{application_id}}/documents/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "members", "applications", "{{application_id}}", "documents", ""]
+            },
+            "description": "List documents for a membership application"
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Membership Document",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/members/applications/{{application_id}}/documents/{{id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "members", "applications", "{{application_id}}", "documents", "{{id}}", ""]
+            },
+            "description": "Remove a document from membership application"
           },
           "response": []
         }
@@ -1444,6 +1618,52 @@
             "description": "Approve or decline a guarantor request"
           },
           "response": []
+        },
+        {
+          "name": "Submit External Guarantor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Jane Smith\",\n  \"phone_number\": \"+254723456789\",\n  \"email\": \"jane@example.com\",\n  \"guarantee_amount\": 25000.00\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/external-guarantors/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "external-guarantors", ""]
+            },
+            "description": "Submit external guarantor for a loan"
+          },
+          "response": []
+        },
+        {
+          "name": "List External Guarantors",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/external-guarantors/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "external-guarantors", ""]
+            },
+            "description": "List external guarantors for a loan"
+          },
+          "response": []
         }
       ]
     },
@@ -1779,6 +1999,34 @@
               ]
             },
             "description": "Download ledger statement as PDF"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Guarantors",
+      "item": [
+        {
+          "name": "Respond to External Guarantor Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"response\": \"ACCEPT\",\n  \"notes\": \"I accept to be a guarantor\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/guarantors/external/respond/{{response_token}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "guarantors", "external", "respond", "{{response_token}}", ""]
+            },
+            "description": "External guarantor accepts or declines guarantee request via token"
           },
           "response": []
         }
@@ -2243,6 +2491,25 @@
             "description": "List all members with pagination (SUPER_ADMIN only)"
           },
           "response": []
+        },
+        {
+          "name": "List All SACCOs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/superadmin/saccos/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "management", "superadmin", "saccos", ""]
+            },
+            "description": "List all SACCOs with health status (SUPER_ADMIN only)"
+          },
+          "response": []
         }
       ]
     }
@@ -2330,6 +2597,14 @@
     },
     {
       "key": "job_id",
+      "value": ""
+    },
+    {
+      "key": "device_id",
+      "value": ""
+    },
+    {
+      "key": "response_token",
       "value": ""
     }
   ]

@@ -1,6 +1,384 @@
 # Scaling API Guide
 
-This document details the new scaling-related endpoints added to SaccoSphere. These endpoints enable SACCO admins to manage loan approvals, configure SACCO-specific settings, and generate reports. They also provide Super Admins with platform-wide visibility for monitoring and scaling decisions.
+This document details the new scaling-related endpoints added to SaccoSphere. These endpoints enable SACCO admins to manage loan approvals, configure SACCO-specific settings, and generate reports. They also provide Super Admins with platform-wide visibility for monitoring and scaling decisions. Additionally, this guide covers biometric authentication, OAuth integration, external guarantors, and membership document management.
+
+---
+
+## Accounts Endpoints
+
+### POST /api/v1/accounts/oauth/google/callback/
+
+**Purpose:** Handles Google Sign-In and Sign-Up callback with a flow parameter. This enables users to authenticate using their Google account, reducing friction in the onboarding process—critical for scaling user acquisition.
+
+**Input Requirements:**
+- Headers:
+  - `Content-Type: application/json`
+- Body:
+```json
+{
+  "code": "google_oauth_code",
+  "flow": "signup"
+}
+```
+
+**Expected Outcome:**
+```json
+{
+  "access": "jwt_access_token",
+  "refresh": "jwt_refresh_token",
+  "user": {
+    "id": "uuid",
+    "email": "user@example.com",
+    "first_name": "John",
+    "last_name": "Doe"
+  },
+  "sacco_context": {
+    "active_saccos": [],
+    "pending_applications": []
+  }
+}
+```
+
+**Integration Tip:** Implement Google OAuth flow using the official Google Identity Services SDK. The `flow` parameter distinguishes between new sign-ups and returning sign-ins. Handle both scenarios appropriately in your frontend.
+
+---
+
+### POST /api/v1/accounts/device/register/
+
+**Purpose:** Registers a biometric device (Face ID, Touch ID) for authentication. This enables passwordless authentication, improving security and user experience—essential for scaling mobile adoption.
+
+**Input Requirements:**
+- Headers:
+  - `Content-Type: application/json`
+  - `Authorization: Bearer {{access_token}}`
+- Body:
+```json
+{
+  "device_name": "iPhone 14 Pro",
+  "device_type": "ios",
+  "device_identifier": "unique_device_id"
+}
+```
+
+**Expected Outcome:**
+```json
+{
+  "id": "uuid",
+  "device_name": "iPhone 14 Pro",
+  "device_type": "ios",
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Integration Tip:** Use platform-specific biometric APIs (Face ID for iOS, BiometricPrompt for Android). Store the returned device identifier locally for future authentication attempts. Limit the number of registered devices per user (e.g., 3 devices max).
+
+---
+
+### GET /api/v1/accounts/devices/
+
+**Purpose:** Lists all registered biometric devices for the authenticated user. This allows users to manage their trusted devices and revoke access if needed—critical for security at scale.
+
+**Input Requirements:**
+- Headers:
+  - `Authorization: Bearer {{access_token}}`
+- Query params: None
+
+**Expected Outcome:**
+```json
+[
+  {
+    "id": "uuid",
+    "device_name": "iPhone 14 Pro",
+    "device_type": "ios",
+    "last_used_at": "2024-01-15T10:30:00Z",
+    "created_at": "2024-01-10T14:20:00Z"
+  }
+]
+```
+
+**Integration Tip:** Display this list in a "Security Settings" section. Allow users to revoke devices with a confirmation dialog. Show the last used timestamp to help users identify inactive devices.
+
+---
+
+### DELETE /api/v1/accounts/device/<device_id>/
+
+**Purpose:** Revokes a registered biometric device, preventing future authentication attempts from that device. This is essential for security when devices are lost or compromised.
+
+**Input Requirements:**
+- Headers:
+  - `Authorization: Bearer {{access_token}}`
+- Query params: None
+
+**Expected Outcome:**
+```json
+{
+  "success": true,
+  "message": "Device revoked successfully"
+}
+```
+
+**Integration Tip:** Implement a confirmation modal before revoking, explaining that the user will need to re-authenticate with their password on that device. Refresh the device list after successful revocation.
+
+---
+
+### GET /api/v1/accounts/public-stats/
+
+**Purpose:** Returns public platform statistics without authentication. This can be used on landing pages and marketing materials to showcase platform growth—critical for user acquisition at scale.
+
+**Input Requirements:**
+- Headers: None
+- Query params: None
+
+**Expected Outcome:**
+```json
+{
+  "total_saccos": 150,
+  "total_members": 45000,
+  "total_loans_disbursed": 500000000.00,
+  "active_saccos": 145
+}
+```
+
+**Integration Tip:** Cache this data for 5 minutes on the client side. Display these statistics prominently on your landing page with animated counters for visual appeal.
+
+---
+
+### GET /api/v1/accounts/me/ (Updated)
+
+**Purpose:** Returns the authenticated user's profile with SACCO context. The response now includes `sacco_context` to help the frontend determine which SACCOs the user belongs to and which applications are pending.
+
+**Input Requirements:**
+- Headers:
+  - `Authorization: Bearer {{access_token}}`
+- Query params: None
+
+**Expected Outcome:**
+```json
+{
+  "id": "uuid",
+  "email": "user@example.com",
+  "first_name": "John",
+  "last_name": "Doe",
+  "phone_number": "+254712345678",
+  "sacco_context": {
+    "active_saccos": [
+      {
+        "sacco_id": "uuid",
+        "sacco_name": "Teachers SACCO",
+        "membership_id": "uuid",
+        "role": "MEMBER"
+      }
+    ],
+    "pending_applications": [
+      {
+        "application_id": "uuid",
+        "sacco_name": "Health Workers SACCO",
+        "status": "PENDING",
+        "applied_at": "2024-01-15T10:30:00Z"
+      }
+    ]
+  }
+}
+```
+
+**Integration Tip:** Use `sacco_context` to drive your SACCO switcher UI. Show pending applications in a "Join SACCO" flow. Cache this data locally to reduce API calls during session.
+
+---
+
+### POST /api/v1/accounts/login/ (Updated)
+
+**Purpose:** Authenticates user credentials and returns JWT tokens. The response now includes `sacco_context` for immediate SACCO context after login.
+
+**Input Requirements:**
+- Headers:
+  - `Content-Type: application/json`
+- Body:
+```json
+{
+  "email": "user@example.com",
+  "password": "SecurePass123"
+}
+```
+
+**Expected Outcome:**
+```json
+{
+  "access": "jwt_access_token",
+  "refresh": "jwt_refresh_token",
+  "sacco_context": {
+    "active_saccos": [...],
+    "pending_applications": [...]
+  }
+}
+```
+
+**Integration Tip:** After successful login, use `sacco_context` to automatically select the user's primary SACCO or prompt them to choose from multiple SACCOs. Store the context in your state management library.
+
+---
+
+## SACCO Membership Endpoints
+
+### POST /api/v1/members/applications/<application_id>/documents/
+
+**Purpose:** Uploads supporting documents (payslips, ID cards, bank statements) for a membership application. This enables SACCOs to verify member eligibility—critical for compliance and risk management at scale.
+
+**Input Requirements:**
+- Headers:
+  - `Authorization: Bearer {{access_token}}`
+- Body (formdata):
+  - `document_type`: `payslip` | `id_card` | `bank_statement`
+  - `file`: The document file
+
+**Expected Outcome:**
+```json
+{
+  "id": "uuid",
+  "document_type": "payslip",
+  "file_url": "https://...",
+  "uploaded_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Integration Tip:** Implement file upload with progress indicators. Validate file types and sizes on the client side before upload. Allow multiple document uploads per application. Show a preview of uploaded documents.
+
+---
+
+### GET /api/v1/members/applications/<application_id>/documents/
+
+**Purpose:** Lists all documents uploaded for a membership application. This allows users to review their submissions and SACCO admins to verify documentation.
+
+**Input Requirements:**
+- Headers:
+  - `Authorization: Bearer {{access_token}}`
+- Query params: None
+
+**Expected Outcome:**
+```json
+[
+  {
+    "id": "uuid",
+    "document_type": "payslip",
+    "file_url": "https://...",
+    "uploaded_at": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+**Integration Tip:** Display documents in a grid with thumbnails for images. Allow users to download or view documents in a modal. Show the upload date to help users identify recent submissions.
+
+---
+
+### DELETE /api/v1/members/applications/<application_id>/documents/<id>/
+
+**Purpose:** Removes a document from a membership application. This allows users to correct mistakes or update expired documents.
+
+**Input Requirements:**
+- Headers:
+  - `Authorization: Bearer {{access_token}}`
+- Query params: None
+
+**Expected Outcome:**
+```json
+{
+  "success": true,
+  "message": "Document deleted successfully"
+}
+```
+
+**Integration Tip:** Implement a confirmation dialog before deletion. Refresh the document list after successful deletion. Allow re-uploading immediately after deletion.
+
+---
+
+## Services Endpoints
+
+### POST /api/v1/services/loans/<loan_id>/external-guarantors/
+
+**Purpose:** Submits an external guarantor (non-member) for a loan. This enables borrowers to use guarantors outside their SACCO—critical for increasing loan approval rates.
+
+**Input Requirements:**
+- Headers:
+  - `Content-Type: application/json`
+  - `Authorization: Bearer {{access_token}}`
+- Body:
+```json
+{
+  "full_name": "Jane Smith",
+  "phone_number": "+254723456789",
+  "email": "jane@example.com",
+  "guarantee_amount": 25000.00
+}
+```
+
+**Expected Outcome:**
+```json
+{
+  "id": "uuid",
+  "full_name": "Jane Smith",
+  "phone_number": "+254723456789",
+  "status": "PENDING",
+  "response_token": "abc123xyz",
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+**Integration Tip:** Validate phone number format and email address before submission. Show the `response_token` to the user so they can share it with the external guarantor. Send the guarantor an SMS/email with the response link.
+
+---
+
+### GET /api/v1/services/loans/<loan_id>/external-guarantors/
+
+**Purpose:** Lists all external guarantors submitted for a loan. This allows borrowers to track the status of their external guarantor requests.
+
+**Input Requirements:**
+- Headers:
+  - `Authorization: Bearer {{access_token}}`
+- Query params: None
+
+**Expected Outcome:**
+```json
+[
+  {
+    "id": "uuid",
+    "full_name": "Jane Smith",
+    "phone_number": "+254723456789",
+    "status": "ACCEPTED",
+    "guarantee_amount": 25000.00,
+    "responded_at": "2024-01-15T11:30:00Z"
+  }
+]
+```
+
+**Integration Tip:** Display status badges (PENDING = yellow, ACCEPTED = green, DECLINED = red). Show the responded date for completed requests. Allow re-sending the request link for pending guarantors.
+
+---
+
+## Guarantors Endpoints
+
+### POST /api/v1/guarantors/external/respond/<response_token>/
+
+**Purpose:** Allows external guarantors to accept or decline guarantee requests via a unique token. This enables non-members to participate in the guarantor process without creating accounts—critical for scaling loan approvals.
+
+**Input Requirements:**
+- Headers:
+  - `Content-Type: application/json`
+- Body:
+```json
+{
+  "response": "ACCEPT",
+  "notes": "I accept to be a guarantor"
+}
+```
+
+**Expected Outcome:**
+```json
+{
+  "success": true,
+  "message": "Guarantor response recorded successfully",
+  "status": "ACCEPTED"
+}
+```
+
+**Integration Tip:** Create a dedicated public-facing page for external guarantors. The URL should include the `response_token` as a query parameter. Validate the token before showing the form. Show a success message after submission.
 
 ---
 
