@@ -74,7 +74,6 @@ python-decouple==3.8
 python-engineio==4.13.3
 python-socketio==5.16.3
 pytz==2026.2
-pywin32==312
 PyYAML==6.0.3
 pyzmq==27.1.0
 redis==5.2.1
