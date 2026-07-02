@@ -111,20 +111,6 @@ AWS_S3_SIGNATURE_VERSION = 's3v4'
 
 DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
-# --- Redis Session Config ---
-# Ensure django-redis is installed
-CACHES = {
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": os.getenv("REDIS_URL"), 
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-        }
-    }
-}
-
-SESSION_ENGINE = "django.contrib.sessions.backends.cache"
-SESSION_CACHE_ALIAS = "default"
 
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -263,19 +249,27 @@ BILLING_PAYBILL = config('BILLING_PAYBILL', default='')
 
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
+SESSION_ENGINE = "django.contrib.sessions.backends.cache"
+SESSION_CACHE_ALIAS = "default"
+
 if DEBUG:
     CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-            'LOCATION': 'saccosphere-dev-cache',
-        },
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "saccosphere-dev-cache",
+        }
     }
+    # Sessions fall back to DB in dev so Redis isn't required locally
+    SESSION_ENGINE = "django.contrib.sessions.backends.db"
 else:
     CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-            'LOCATION': REDIS_URL,
-        },
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            },
+        }
     }
 
 CELERY_BROKER_URL = config(
