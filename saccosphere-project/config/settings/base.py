@@ -172,6 +172,14 @@ REST_FRAMEWORK = {
     'EXCEPTION_HANDLER': (
         'config.exception_handler.custom_exception_handler'
     ),
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/hour',
+        'user': '1000/hour',
+    },    
 }
 
 SIMPLE_JWT = {
@@ -265,11 +273,14 @@ if DEBUG:
 else:
     CACHES = {
         "default": {
-            "BACKEND": "django_redis.cache.RedisCache",
+            "BACKEND": "django_redis.cache.RedisCache",  # ← switch to django_redis
             "LOCATION": REDIS_URL,
             "OPTIONS": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "SOCKET_CONNECT_TIMEOUT": 5,
+                "SOCKET_TIMEOUT": 5,
             },
+            "KEY_PREFIX": "saccosphere",  # ← namespace all keys
         }
     }
 
