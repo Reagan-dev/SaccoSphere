@@ -58,6 +58,11 @@ from django.core.cache import cache
 logger = logging.getLogger('saccosphere.security')
 
 SAFARICOM_IP_RANGES = [
+    '196.201.212.0/24',
+    '196.201.213.0/24',
+    '196.201.214.0/24',
+    '196.201.214.0/23',
+    '192.168.201.0/24',
     '196.201.208.0/21',  
     '196.201.216.0/21',  
 ]
