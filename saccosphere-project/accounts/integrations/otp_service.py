@@ -124,8 +124,8 @@ class ATSMSClient:
         try:
             response = self.sms.send(
                 message=message,
-                recipients=[normalized_phone],
-                sender_id='SaccoSphere',
+                recipients=[normalized_phone]
+                
             )
             logger.info(
                 f'OTP sent successfully to {normalized_phone} '
@@ -168,8 +168,8 @@ class ATSMSClient:
         try:
             response = self.sms.send(
                 message=message,
-                recipients=[normalized_phone],
-                sender_id='SaccoSphere',
+                recipients=[normalized_phone]
+                
             )
             logger.info(
                 'SMS sent successfully to %s. response=%s',
