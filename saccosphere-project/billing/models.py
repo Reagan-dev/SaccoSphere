@@ -85,6 +85,10 @@ class PlatformRevenue(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=3, default='KES')
     description = models.CharField(max_length=255, null=True, blank=True)
+    is_collected = models.BooleanField(
+        default=True,
+        help_text='Whether this revenue was actually collected in cash.',
+    )
     recorded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
