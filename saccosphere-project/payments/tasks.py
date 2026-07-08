@@ -139,7 +139,7 @@ def _process_successful_callback(
         stk_callback,
         'MpesaReceiptNumber',
     )
-    amount = _to_decimal(_get_metadata_value(stk_callback, 'Amount'))
+    callback_amount = _to_decimal(_get_metadata_value(stk_callback, 'Amount'))
 
     mpesa_transaction.callback_received = True
     mpesa_transaction.mpesa_receipt_number = receipt_number
@@ -166,21 +166,45 @@ def _process_successful_callback(
         update_fields=['status', 'external_reference', 'updated_at']
     )
 
+    # Reconcile callback amount with expected gross amount
+    expected_gross = transaction.amount + (transaction.fee_amount or Decimal('0.00'))
+    amount_difference = abs(callback_amount - expected_gross)
+    if amount_difference > Decimal('0.01'):
+        logger.warning(
+            'M-Pesa callback amount mismatch for transaction_id=%s: '
+            'callback_amount=%s, expected_gross=%s, difference=%s',
+            transaction.id,
+            callback_amount,
+            expected_gross,
+            amount_difference,
+        )
+    else:
+        logger.info(
+            'M-Pesa callback amount reconciled for transaction_id=%s: '
+            'callback_amount=%s matches expected_gross=%s',
+            transaction.id,
+            callback_amount,
+            expected_gross,
+        )
+
+    # Use net amount (transaction.amount) for crediting, not gross callback amount
+    net_amount = transaction.amount
+
     if mpesa_transaction.related_saving_id:
-        _apply_saving_deposit(mpesa_transaction, transaction, amount)
+        _apply_saving_deposit(mpesa_transaction, transaction, net_amount)
         _record_platform_fee_for_sacco(
             transaction,
             mpesa_transaction.related_saving.membership.sacco,
         )
 
     if mpesa_transaction.related_loan_id:
-        _apply_loan_repayment(mpesa_transaction, transaction, amount)
+        _apply_loan_repayment(mpesa_transaction, transaction, net_amount)
         _record_platform_fee_for_sacco(
             transaction,
             mpesa_transaction.related_loan.membership.sacco,
         )
 
-    _notify_payment_success(mpesa_transaction, transaction, amount)
+    _notify_payment_success(mpesa_transaction, transaction, net_amount)
 
 
 def _process_failed_callback(
@@ -505,13 +529,13 @@ def _normalize_result_code(result_code):
 
 
 def _record_platform_fee_for_sacco(transaction, sacco):
-    """Record the 2% platform fee for completed transaction once."""
+    """Record the platform fee for completed transaction once."""
     if sacco is None:
         return
     try:
-        from billing.services import record_transaction_fee
+        from billing.services import record_collected_fee
 
-        record_transaction_fee(transaction, sacco)
+        record_collected_fee(transaction, sacco)
     except Exception:
         logger.exception(
             'Failed to record platform fee for transaction_id=%s.',
