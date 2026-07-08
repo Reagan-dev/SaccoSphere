@@ -1,6 +1,6 @@
 import json
 import logging
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
 
 from django.db import transaction as db_transaction
@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsSaccoAdmin
+from billing.services import TRANSACTION_FEE_RATE
 from config.response import StandardResponseMixin
 from guarantor.utils import check_loan_guarantors_complete
 from services.models import Loan, Saving
@@ -202,10 +203,17 @@ class STKPushView(APIView):
 
         reference = self._build_reference()
 
+        # Calculate fee and gross amount upfront
+        net_amount = data['amount']
+        fee_amount = (
+            net_amount * TRANSACTION_FEE_RATE
+        ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        gross_amount = net_amount + fee_amount
+
         try:
             daraja_response = DarajaClient().initiate_stk_push(
                 phone_number=data['phone_number'],
-                amount=data['amount'],
+                amount=gross_amount,
                 account_reference=reference,
                 description=description,
                 callback_path='/api/v1/payments/callback/mpesa/stk/',
@@ -237,12 +245,16 @@ class STKPushView(APIView):
                 reference=reference,
                 external_reference=checkout_request_id,
                 transaction_type=transaction_type,
-                amount=data['amount'],
+                amount=net_amount,
+                fee_amount=fee_amount,
                 status=Transaction.Status.PENDING,
                 description=description,
                 metadata={
                     'purpose': data['purpose'],
                     'sacco_id': str(data['sacco_id']),
+                    'gross_amount': str(gross_amount),
+                    'net_amount': str(net_amount),
+                    'fee_amount': str(fee_amount),
                     'daraja_response': daraja_response,
                 },
             )
@@ -256,11 +268,26 @@ class STKPushView(APIView):
                 related_instalment_number=data.get('instalment_number'),
             )
 
+        # Build clear message showing total charge breakdown
+        if transaction_type == Transaction.TransactionType.DEPOSIT:
+            amount_description = f'saving deposit'
+        else:
+            amount_description = f'loan repayment'
+
+        message = (
+            f'Check your phone to enter your M-Pesa PIN. '
+            f'You will be charged KES {gross_amount} total: '
+            f'KES {net_amount} for {amount_description} + KES {fee_amount} platform fee.'
+        )
+
         return Response(
             {
                 'checkout_request_id': checkout_request_id,
                 'merchant_request_id': merchant_request_id,
-                'message': 'Check your phone to enter your M-Pesa PIN.',
+                'net_amount': str(net_amount),
+                'fee_amount': str(fee_amount),
+                'gross_amount': str(gross_amount),
+                'message': message,
             },
             status=status.HTTP_201_CREATED,
         )

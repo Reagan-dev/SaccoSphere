@@ -1,5 +1,6 @@
 """Billing service helpers for platform fees and monthly SACCO invoices."""
 
+import logging
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import csv
@@ -16,11 +17,19 @@ from payments.models import PlatformFee, Transaction
 from saccomanagement.models import Role
 
 
+logger = logging.getLogger('saccosphere.billing')
+
+
 TRANSACTION_FEE_RATE = Decimal('0.02')
 
 
 def record_transaction_fee(txn, sacco):
-    """Apply and persist 2% platform fee for a completed transaction."""
+    """Apply and persist 2% platform fee for a completed transaction.
+
+    DEPRECATED: Use record_collected_fee() for new transactions where fee
+    is collected upfront via gross-up. This function is kept for backward
+    compatibility with existing transactions.
+    """
     if txn.status != Transaction.Status.COMPLETED:
         return None
 
@@ -53,6 +62,70 @@ def record_transaction_fee(txn, sacco):
             description='2% platform transaction fee',
         )
 
+    return platform_fee
+
+
+def record_collected_fee(txn, sacco):
+    """Record the already-collected platform fee from a gross-up transaction.
+
+    For transactions where the fee was collected upfront via STK push gross-up,
+    the fee_amount is already set on the transaction at initiation time.
+    This function records that fee as revenue without recalculating it.
+
+    Args:
+        txn: Transaction with fee_amount already set (from initiation)
+        sacco: SACCO to associate the revenue with
+
+    Returns:
+        PlatformRevenue record if created, None if skipped
+    """
+    if txn.status != Transaction.Status.COMPLETED:
+        logger.debug(
+            'Skipping fee recording for transaction_id=%s: status=%s',
+            txn.id,
+            txn.status,
+        )
+        return None
+
+    if not txn.fee_amount or txn.fee_amount <= Decimal('0.00'):
+        logger.warning(
+            'Skipping fee recording for transaction_id=%s: fee_amount is zero or unset',
+            txn.id,
+        )
+        return None
+
+    existing_revenue = PlatformRevenue.objects.filter(
+        transaction=txn,
+        revenue_type=PlatformRevenue.RevenueType.TRANSACTION_FEE,
+    ).first()
+    if existing_revenue:
+        logger.debug(
+            'Platform revenue already recorded for transaction_id=%s',
+            txn.id,
+        )
+        return existing_revenue
+
+    with db_transaction.atomic():
+        platform_fee = PlatformFee.objects.create(
+            transaction=txn,
+            fee_type=PlatformFee.FeeType.TRANSACTION_PCT,
+            amount=txn.fee_amount,
+        )
+        PlatformRevenue.objects.create(
+            sacco=sacco,
+            transaction=txn,
+            revenue_type=PlatformRevenue.RevenueType.TRANSACTION_FEE,
+            amount=txn.fee_amount,
+            currency=txn.currency,
+            description='Platform fee collected via gross-up at initiation',
+        )
+
+    logger.info(
+        'Recorded collected fee for transaction_id=%s: amount=%s %s',
+        txn.id,
+        txn.fee_amount,
+        txn.currency,
+    )
     return platform_fee
 
 
