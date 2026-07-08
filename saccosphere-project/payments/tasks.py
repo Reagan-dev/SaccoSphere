@@ -16,6 +16,7 @@ def process_stk_callback_task(checkout_request_id, result_code, callback_body):
     with db_transaction.atomic():
         try:
             mpesa_transaction = MpesaTransaction.objects.select_for_update(
+                of=('self',),
             ).select_related(
                 'transaction',
                 'transaction__user',
@@ -68,6 +69,7 @@ def process_b2c_callback_task(conversation_id, result_code, callback_body):
     with db_transaction.atomic():
         try:
             mpesa_transaction = MpesaTransaction.objects.select_for_update(
+                of=('self',),
             ).select_related(
                 'transaction',
                 'transaction__user',
