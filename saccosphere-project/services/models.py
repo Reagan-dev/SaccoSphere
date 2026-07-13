@@ -604,3 +604,75 @@ class Insurance(models.Model):
 
     def __str__(self):
         return f'{self.membership} — {self.type}'
+
+
+class CRBCheck(models.Model):
+    class CreditBand(models.TextChoices):
+        POOR = 'POOR', 'Poor'
+        FAIR = 'FAIR', 'Fair'
+        GOOD = 'GOOD', 'Good'
+        VERY_GOOD = 'VERY_GOOD', 'Very Good'
+        EXCELLENT = 'EXCELLENT', 'Excellent'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+        help_text='Unique CRB check identifier.',
+    )
+    loan = models.ForeignKey(
+        Loan,
+        on_delete=models.CASCADE,
+        related_name='crb_checks',
+        help_text='Loan this CRB check was performed for.',
+    )
+    score = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text='Credit score from CRB check (300-850 range).',
+    )
+    band = models.CharField(
+        max_length=20,
+        choices=CreditBand.choices,
+        null=True,
+        blank=True,
+        help_text='Credit band classification.',
+    )
+    listed_negative = models.BooleanField(
+        default=False,
+        help_text='Whether the applicant is listed negatively with CRB.',
+    )
+    provider = models.CharField(
+        max_length=50,
+        default='metropol',
+        help_text='CRB provider used for the check.',
+    )
+    reference = models.CharField(
+        max_length=100,
+        help_text='Reference number from CRB provider.',
+    )
+    raw_response = models.JSONField(
+        null=True,
+        blank=True,
+        help_text='Raw response from CRB provider for audit purposes.',
+    )
+    checked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='crb_checks',
+        help_text='User who initiated this CRB check.',
+    )
+    checked_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text='Date and time this CRB check was performed.',
+    )
+
+    class Meta:
+        ordering = ['-checked_at']
+        verbose_name = 'CRB Check'
+        verbose_name_plural = 'CRB Checks'
+
+    def __str__(self):
+        return f'CRB Check for {self.loan} — {self.band or "Pending"}'
