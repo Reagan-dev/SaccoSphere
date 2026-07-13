@@ -24,6 +24,7 @@ from .superadmin_views import (
     SystemOverviewView,
     TopSaccosView,
 )
+from .sasra_reports import SASRAReturnView
 from .views import (
     AuditLogListView,
     AdminMemberDetailView,
@@ -85,6 +86,11 @@ urlpatterns = [
         name='loan-approval',
     ),
     path('reports/', SaccoReportView.as_view(), name='sacco-reports'),
+    path(
+        'reports/sasra/',
+        SASRAReturnView.as_view(),
+        name='sasra-returns',
+    ),
     path('settings/', SaccoSettingsView.as_view(), name='sacco-settings'),
     path(
         'external-guarantors/',
