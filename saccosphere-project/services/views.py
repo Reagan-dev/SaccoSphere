@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+from datetime import timedelta
 
 from django.core.cache import cache
 from django.db import transaction
@@ -18,6 +19,7 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
 from accounts.models import Sacco, User
+from accounts.permissions import IsSaccoAdmin
 from notifications.utils import create_notification
 from saccomembership.models import Membership
 
@@ -27,6 +29,7 @@ from .engines.guarantor_logic import (
 )
 from .engines.loan_limits import calculate_loan_limit
 from .models import (
+    CRBCheck,
     GuaranteeCapacity,
     Guarantor,
     Loan,
@@ -801,5 +804,107 @@ class RepaymentScheduleView(ListAPIView):
             loan__id=loan_id,
             loan__membership__user=self.request.user,
         ).select_related('loan')
+
+
+class CRBCheckView(APIView):
+    """
+    Perform CRB check for a loan application.
+    
+    POST /api/v1/management/loans/<pk>/crb-check/
+    
+    Checks credit status via Metropol CRB. Caches results for 30 days
+    unless force_refresh=true is passed.
+    """
+    
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    
+    def post(self, request, pk):
+        """Perform CRB check for the specified loan."""
+        loan = get_object_or_404(
+            Loan.objects.select_related('membership', 'membership__user'),
+            id=pk,
+        )
+        
+        # Verify user is admin for this loan's SACCO
+        from saccomanagement.models import Role
+        if not request.user.roles.filter(
+            name=Role.SACCO_ADMIN,
+            sacco=loan.membership.sacco,
+        ).exists():
+            return Response(
+                {'detail': 'You are not an admin for this SACCO.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        # Get member's ID number from KYC
+        from accounts.models import KYCVerification
+        kyc = KYCVerification.objects.filter(
+            user=loan.membership.user,
+        ).first()
+        
+        if not kyc or not kyc.id_number:
+            return Response(
+                {'detail': 'Member KYC verification with ID number required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        id_number = kyc.id_number
+        phone_number = loan.membership.user.phone_number
+        
+        # Check for existing recent CRB check (within 30 days)
+        force_refresh = request.query_params.get('force_refresh', 'false').lower() == 'true'
+        
+        if not force_refresh:
+            cutoff_date = timezone.now() - timedelta(days=30)
+            existing_check = loan.crb_checks.filter(
+                checked_at__gte=cutoff_date,
+            ).order_by('-checked_at').first()
+            
+            if existing_check:
+                return Response({
+                    'id': str(existing_check.id),
+                    'score': existing_check.score,
+                    'band': existing_check.band,
+                    'listed_negative': existing_check.listed_negative,
+                    'provider': existing_check.provider,
+                    'reference': existing_check.reference,
+                    'checked_at': existing_check.checked_at.isoformat(),
+                    'cached': True,
+                })
+        
+        # Perform new CRB check
+        from .integrations.metropol_client import MetropolClient, CRBCheckError
+        
+        try:
+            client = MetropolClient()
+            crb_result = client.check_credit(id_number, phone_number)
+        except CRBCheckError as exc:
+            return Response(
+                {'detail': f'CRB check failed: {str(exc)}'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        
+        # Create CRBCheck record
+        crb_check = CRBCheck.objects.create(
+            loan=loan,
+            score=crb_result.get('score'),
+            band=crb_result.get('band'),
+            listed_negative=crb_result.get('listed_negative', False),
+            provider=crb_result.get('provider', 'metropol'),
+            reference=crb_result.get('reference'),
+            raw_response=crb_result,
+            checked_by=request.user,
+        )
+        
+        return Response({
+            'id': str(crb_check.id),
+            'score': crb_check.score,
+            'band': crb_check.band,
+            'listed_negative': crb_check.listed_negative,
+            'provider': crb_check.provider,
+            'reference': crb_check.reference,
+            'checked_at': crb_check.checked_at.isoformat(),
+            'cached': False,
+        }, status=status.HTTP_201_CREATED)
 
 

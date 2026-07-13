@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 from guarantor.external_views import ExternalGuarantorCollectionView
 
 from .views import (
+    CRBCheckView,
     GuarantorRequestView,
     GuarantorRespondView,
     GuarantorSearchView,
@@ -68,5 +69,10 @@ urlpatterns = [
         'loans/<uuid:loan_id>/external-guarantors/',
         ExternalGuarantorCollectionView.as_view(),
         name='external-guarantor-collection',
+    ),
+    path(
+        'loans/<uuid:pk>/crb-check/',
+        CRBCheckView.as_view(),
+        name='crb-check',
     ),
 ]
