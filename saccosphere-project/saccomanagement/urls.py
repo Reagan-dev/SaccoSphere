@@ -5,6 +5,7 @@ from guarantor.external_views import (
     ExternalGuarantorAdminListView,
     ExternalGuarantorAdminReviewView,
 )
+from services.views import LiquidityStatusView
 
 from .admin_views import AdminLoanApprovalView, LoanApprovalListView
 from .dashboard_views import (
@@ -92,6 +93,11 @@ urlpatterns = [
         name='sasra-returns',
     ),
     path('settings/', SaccoSettingsView.as_view(), name='sacco-settings'),
+    path(
+        'liquidity/',
+        LiquidityStatusView.as_view(),
+        name='liquidity-status',
+    ),
     path(
         'external-guarantors/',
         ExternalGuarantorAdminListView.as_view(),

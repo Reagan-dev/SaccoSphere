@@ -22,16 +22,19 @@ from accounts.models import Sacco, User
 from accounts.permissions import IsSaccoAdmin
 from notifications.utils import create_notification
 from saccomembership.models import Membership
+from saccomanagement.models import Role
 
 from .engines.guarantor_logic import (
     calculate_guarantee_capacity,
     update_guarantee_capacity,
 )
 from .engines.loan_limits import calculate_loan_limit
+from .engines.liquidity_monitor import check_liquidity_risk
 from .models import (
     CRBCheck,
     GuaranteeCapacity,
     Guarantor,
+    LiquidityAlert,
     Loan,
     LoanType,
     RepaymentSchedule,
@@ -734,6 +737,96 @@ class SavingsBreakdownView(APIView):
             'success': True,
             'data': breakdown
         })
+
+
+class LiquidityStatusView(APIView):
+    """Return the current liquidity risk snapshot for a SACCO admin."""
+
+    permission_classes = [IsSaccoAdmin]
+
+    def get(self, request):
+        sacco = self._get_sacco(request)
+        if sacco is None:
+            return Response(
+                {
+                    'success': False,
+                    'message': 'SACCO context is required.',
+                    'error_code': 'SACCO_CONTEXT_REQUIRED',
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        risk = check_liquidity_risk(sacco)
+        alerts = LiquidityAlert.objects.filter(sacco=sacco).order_by(
+            '-created_at',
+        )[:5]
+
+        return Response(
+            {
+                'success': True,
+                'data': {
+                    'sacco_id': str(sacco.id),
+                    'sacco_name': sacco.name,
+                    'current': self._serialize_risk(risk),
+                    'recent_alerts': [
+                        self._serialize_alert(alert)
+                        for alert in alerts
+                    ],
+                },
+            }
+        )
+
+    def _get_sacco(self, request):
+        current_sacco = getattr(request, 'current_sacco', None)
+        if current_sacco is not None:
+            return current_sacco
+
+        role = request.user.roles.filter(
+            name=Role.SACCO_ADMIN,
+            sacco__isnull=False,
+        ).select_related('sacco').first()
+
+        if role:
+            return role.sacco
+
+        return None
+
+    def _serialize_risk(self, risk):
+        return {
+            'available_reserves': self._decimal_to_string(
+                risk['available_reserves'],
+            ),
+            'pending_disbursements': self._decimal_to_string(
+                risk['pending_disbursements'],
+            ),
+            'utilisation_pct': self._decimal_to_string(
+                risk['utilisation_pct'],
+            ),
+            'at_risk': risk['at_risk'],
+        }
+
+    def _serialize_alert(self, alert):
+        return {
+            'id': str(alert.id),
+            'available_reserves': self._decimal_to_string(
+                alert.available_reserves,
+            ),
+            'pending_disbursements': self._decimal_to_string(
+                alert.pending_disbursements,
+            ),
+            'utilisation_pct': self._decimal_to_string(
+                alert.utilisation_pct,
+            ),
+            'resolved': alert.resolved,
+            'resolved_at': (
+                alert.resolved_at.isoformat()
+                if alert.resolved_at else None
+            ),
+            'created_at': alert.created_at.isoformat(),
+        }
+
+    def _decimal_to_string(self, value):
+        return str(value.quantize(Decimal('0.01')))
 
 
 class RepaymentScheduleView(ListAPIView):
