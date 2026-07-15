@@ -5,7 +5,7 @@ from guarantor.external_views import (
     ExternalGuarantorAdminListView,
     ExternalGuarantorAdminReviewView,
 )
-from services.views import LiquidityStatusView
+from services.views import LiquidityStatusView, NPLDashboardView
 
 from .admin_views import AdminLoanApprovalView, LoanApprovalListView
 from .dashboard_views import (
@@ -97,6 +97,11 @@ urlpatterns = [
         'liquidity/',
         LiquidityStatusView.as_view(),
         name='liquidity-status',
+    ),
+    path(
+        'npl/',
+        NPLDashboardView.as_view(),
+        name='npl-dashboard',
     ),
     path(
         'external-guarantors/',
