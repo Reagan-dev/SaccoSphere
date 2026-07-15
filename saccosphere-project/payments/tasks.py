@@ -64,6 +64,12 @@ def process_stk_callback_task(checkout_request_id, result_code, callback_body):
     return True
 
 
+@shared_task(name='payments.tasks.process_payment_callback')
+def process_payment_callback(callback_id):
+    logger.info('Processing payment callback %s', callback_id)
+    return True
+
+
 @shared_task(name='payments.tasks.process_b2c_callback')
 def process_b2c_callback_task(conversation_id, result_code, callback_body):
     with db_transaction.atomic():

@@ -3,9 +3,12 @@ import logging
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
 
+from django.conf import settings
 from django.db import transaction as db_transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import serializers, status
@@ -14,10 +17,12 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.models import Sacco
 from accounts.permissions import IsSaccoAdmin
 from billing.services import TRANSACTION_FEE_RATE
 from config.response import StandardResponseMixin
 from guarantor.utils import check_loan_guarantors_complete
+from payments.providers import get_psp_provider
 from services.models import Loan, Saving
 
 from .integrations.mpesa.daraja import DarajaClient, DarajaError
@@ -28,13 +33,36 @@ from .integrations.mpesa.security import (
     is_safaricom_ip,
     verify_mpesa_signature,
 )
-from .models import MpesaTransaction, PaymentProvider, Transaction
+from .models import Callback, MpesaTransaction, PaymentProvider, Transaction
 from .serializers import (
     CallbackSerializer,
     MpesaTransactionSerializer,
     TransactionSerializer,
 )
+from .tasks import process_payment_callback
 from .validators import validate_mpesa_phone
+
+
+class DepositRequestSerializer(serializers.Serializer):
+    """Validate the fields required to initiate a PSP-backed deposit."""
+
+    phone = serializers.CharField(max_length=15)
+    gross_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    net_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    platform_fee = serializers.DecimalField(max_digits=12, decimal_places=2)
+    sacco = serializers.PrimaryKeyRelatedField(queryset=Sacco.objects.all())
+
+    def validate(self, attrs):
+        gross_amount = attrs.get('gross_amount', Decimal('0.00'))
+        net_amount = attrs.get('net_amount', Decimal('0.00'))
+        platform_fee = attrs.get('platform_fee', Decimal('0.00'))
+
+        if gross_amount != net_amount + platform_fee:
+            raise serializers.ValidationError(
+                'gross_amount must equal net_amount plus platform_fee.'
+            )
+
+        return attrs
 
 
 class STKPushRequestSerializer(serializers.Serializer):
@@ -122,6 +150,146 @@ class B2CDisbursementSerializer(serializers.Serializer):
             )
 
         return value
+
+
+class DepositInitiateView(APIView):
+    """Initiate a PSP-backed deposit for the authenticated user."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = DepositRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        sacco = data['sacco']
+
+        provider = get_psp_provider(sacco=sacco)
+        provider_record, _ = PaymentProvider.objects.get_or_create(
+            name=provider.provider_name,
+            defaults={
+                'provider_type': PaymentProvider.ProviderType.INTERNAL,
+                'is_active': True,
+            },
+        )
+
+        transaction = Transaction(
+            provider=provider_record,
+            user=request.user,
+            reference=f'SS-{uuid4().hex[:20].upper()}',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=data['net_amount'],
+            fee_amount=data['platform_fee'],
+            currency='KES',
+            status=Transaction.Status.PENDING,
+            description='Deposit initiated',
+            metadata={
+                'sacco_id': str(sacco.id),
+                'gross_amount': str(data['gross_amount']),
+                'net_amount': str(data['net_amount']),
+                'platform_fee': str(data['platform_fee']),
+            },
+        )
+
+        try:
+            with db_transaction.atomic():
+                transaction.save()
+                result = provider.create_checkout(
+                    transaction_id=str(transaction.id),
+                    phone=data['phone'],
+                    gross_amount=data['gross_amount'],
+                    net_amount=data['net_amount'],
+                    platform_fee=data['platform_fee'],
+                    sacco=sacco,
+                )
+                transaction.external_reference = result.provider_reference
+                transaction.save(update_fields=['external_reference', 'updated_at'])
+        except Exception:
+            logger.exception('Deposit initiation failed for transaction %s', transaction.id)
+            try:
+                with db_transaction.atomic():
+                    transaction.status = Transaction.Status.FAILED
+                    transaction.save(update_fields=['status', 'updated_at'])
+            except Exception:
+                logger.exception('Failed to update transaction %s to FAILED', transaction.id)
+            return Response(
+                {'detail': 'Deposit initiation failed.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(
+            {
+                'transaction_id': str(transaction.id),
+                'gross_amount': str(transaction.metadata.get('gross_amount', '0.00')),
+                'net_amount': str(transaction.metadata.get('net_amount', '0.00')),
+                'platform_fee': str(transaction.metadata.get('platform_fee', '0.00')),
+                'status': transaction.status,
+                'fee_breakdown': {
+                    'platform_fee': str(transaction.fee_amount),
+                    'gross_amount': str(data['gross_amount']),
+                    'net_amount': str(data['net_amount']),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class PaymentCallbackView(APIView):
+    """Receive a PSP callback and queue asynchronous processing."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    @method_decorator(csrf_exempt, name='dispatch')
+    def dispatch(self, request, *args, **kwargs):
+        return super().dispatch(request, *args, **kwargs)
+
+    def post(self, request):
+        provider = get_psp_provider()
+        provider_name = provider.provider_name
+
+        try:
+            is_valid = provider.verify_webhook(request)
+        except Exception as exc:
+            logger.warning(
+                'Payment callback verification raised an exception for provider %s: %s',
+                provider_name,
+                exc,
+            )
+            return Response({'detail': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+        if not is_valid:
+            logger.warning('Payment callback rejected by provider %s', provider_name)
+            return Response({'detail': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
+
+        payload = request.data if hasattr(request, 'data') else {}
+        payload_preview = str(payload)[:500]
+        logger.info(
+            'Payment callback received from provider %s with payload %s',
+            provider_name,
+            payload_preview,
+        )
+
+        provider_record, _ = PaymentProvider.objects.get_or_create(
+            name=provider_name,
+            defaults={
+                'provider_type': PaymentProvider.ProviderType.INTERNAL,
+                'is_active': True,
+            },
+        )
+        callback = Callback.objects.create(
+            raw_payload=payload,
+            provider=provider_record,
+            processed=False,
+        )
+
+        try:
+            process_payment_callback.delay(str(callback.id))
+        except Exception as exc:
+            logger.exception('Failed to enqueue callback processing for %s', callback.id)
+            callback.processing_error = str(exc)
+            callback.save(update_fields=['processing_error', 'updated_at'])
+
+        return Response({'received': True}, status=status.HTTP_200_OK)
 
 
 class TransactionListView(StandardResponseMixin, ListAPIView):
