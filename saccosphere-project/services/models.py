@@ -798,7 +798,7 @@ class RepaymentSchedule(models.Model):
 
         return (
 
-            self.status == self.Status.PENDING
+            self.status in [self.Status.PENDING, self.Status.OVERDUE]
 
             and self.due_date < timezone.localdate()
 
@@ -1269,6 +1269,53 @@ class LiquidityAlert(models.Model):
             f'{self.sacco.name} liquidity alert '
             f'{self.utilisation_pct}%'
         )
+
+
+class NPLFlag(models.Model):
+    """Staged non-performing-loan early warning for arrears."""
+
+    class ThresholdDays(models.IntegerChoices):
+        THIRTY = 30, '30 days'
+        SIXTY = 60, '60 days'
+        NINETY = 90, '90 days'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+        help_text='Unique NPL flag identifier.',
+    )
+    loan = models.ForeignKey(
+        Loan,
+        on_delete=models.CASCADE,
+        related_name='npl_flags',
+        help_text='Loan that crossed this arrears threshold.',
+    )
+    threshold_days = models.PositiveSmallIntegerField(
+        choices=ThresholdDays.choices,
+        help_text='Arrears threshold that triggered this flag.',
+    )
+    flagged_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        help_text='Date and time this NPL flag was created.',
+    )
+    resolved = models.BooleanField(
+        default=False,
+        help_text='Whether this NPL flag has been cleared.',
+    )
+    resolved_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Date and time this NPL flag was resolved.',
+    )
+
+    class Meta:
+        ordering = ['-flagged_at']
+        unique_together = ['loan', 'threshold_days']
+
+    def __str__(self):
+        return f'{self.loan} - {self.threshold_days} days'
 
 
 class CRBCheck(models.Model):

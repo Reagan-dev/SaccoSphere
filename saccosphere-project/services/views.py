@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Count, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -37,6 +37,7 @@ from .models import (
     LiquidityAlert,
     Loan,
     LoanType,
+    NPLFlag,
     RepaymentSchedule,
     Saving,
     SavingsType,
@@ -827,6 +828,103 @@ class LiquidityStatusView(APIView):
 
     def _decimal_to_string(self, value):
         return str(value.quantize(Decimal('0.01')))
+
+
+class NPLDashboardView(APIView):
+    """Return unresolved NPL warning counts and portfolio ratio."""
+
+    permission_classes = [IsSaccoAdmin]
+
+    def get(self, request):
+        sacco = self._get_sacco(request)
+        if sacco is None:
+            return Response(
+                {
+                    'success': False,
+                    'message': 'SACCO context is required.',
+                    'error_code': 'SACCO_CONTEXT_REQUIRED',
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        active_loans = Loan.objects.filter(
+            membership__sacco=sacco,
+            status=Loan.Status.ACTIVE,
+        )
+        npl_loans = active_loans.filter(
+            npl_flags__resolved=False,
+        ).distinct()
+        total_outstanding = self._sum_outstanding(active_loans)
+        npl_outstanding = self._sum_outstanding(npl_loans)
+        counts = self._get_unresolved_counts(sacco)
+
+        return Response(
+            {
+                'success': True,
+                'data': {
+                    'sacco_id': str(sacco.id),
+                    'sacco_name': sacco.name,
+                    'unresolved_counts': counts,
+                    'npl_outstanding_balance': self._decimal_to_string(
+                        npl_outstanding,
+                    ),
+                    'active_outstanding_balance': self._decimal_to_string(
+                        total_outstanding,
+                    ),
+                    'npl_ratio': self._decimal_to_string(
+                        self._calculate_ratio(
+                            npl_outstanding,
+                            total_outstanding,
+                        ),
+                        places='0.0001',
+                    ),
+                },
+            }
+        )
+
+    def _get_sacco(self, request):
+        current_sacco = getattr(request, 'current_sacco', None)
+        if current_sacco is not None:
+            return current_sacco
+
+        role = request.user.roles.filter(
+            name=Role.SACCO_ADMIN,
+            sacco__isnull=False,
+        ).select_related('sacco').first()
+
+        if role:
+            return role.sacco
+
+        return None
+
+    def _get_unresolved_counts(self, sacco):
+        grouped_counts = NPLFlag.objects.filter(
+            loan__membership__sacco=sacco,
+            resolved=False,
+        ).values('threshold_days').annotate(
+            count=Count('id'),
+        )
+        counts = {'30': 0, '60': 0, '90': 0}
+
+        for row in grouped_counts:
+            counts[str(row['threshold_days'])] = row['count']
+
+        return counts
+
+    def _sum_outstanding(self, queryset):
+        return (
+            queryset.aggregate(total=Sum('outstanding_balance'))['total']
+            or Decimal('0.00')
+        )
+
+    def _calculate_ratio(self, npl_outstanding, total_outstanding):
+        if total_outstanding == Decimal('0.00'):
+            return Decimal('0.0000')
+
+        return npl_outstanding / total_outstanding
+
+    def _decimal_to_string(self, value, places='0.01'):
+        return str(value.quantize(Decimal(places)))
 
 
 class RepaymentScheduleView(ListAPIView):

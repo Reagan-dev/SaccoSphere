@@ -41,6 +41,10 @@ app.conf.beat_schedule = {
         'task': 'services.tasks.check_all_sacco_liquidity',
         'schedule': crontab(minute=0),
     },
+    'daily-npl-arrears-check': {
+        'task': 'services.tasks.flag_npl_arrears',
+        'schedule': crontab(minute=30, hour=6),
+    },
 }
 app.conf.task_serializer = 'json'
 app.conf.result_expires = 3600
