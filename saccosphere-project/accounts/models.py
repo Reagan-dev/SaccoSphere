@@ -702,6 +702,11 @@ class SaccoSettings(models.Model):
 
     )
 
+    sms_daily_limit = models.PositiveIntegerField(
+        default=1000,
+        help_text='Daily SMS send limit to control costs.',
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     updated_at = models.DateTimeField(auto_now=True)

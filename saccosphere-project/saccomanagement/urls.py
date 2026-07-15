@@ -8,6 +8,11 @@ from guarantor.external_views import (
 from services.views import LiquidityStatusView, NPLDashboardView
 
 from .admin_views import AdminLoanApprovalView, LoanApprovalListView
+from .bulk_sms_views import (
+    BulkSMSCampaignCollectionView,
+    BulkSMSCampaignDetailView,
+    BulkSMSSendView,
+)
 from .dashboard_views import (
     ContributionsDashboardView,
     DisbursementsDashboardView,
@@ -93,6 +98,21 @@ urlpatterns = [
         name='sasra-returns',
     ),
     path('settings/', SaccoSettingsView.as_view(), name='sacco-settings'),
+    path(
+        'sms/campaigns/',
+        BulkSMSCampaignCollectionView.as_view(),
+        name='sms-campaign-collection',
+    ),
+    path(
+        'sms/campaigns/<uuid:id>/',
+        BulkSMSCampaignDetailView.as_view(),
+        name='sms-campaign-detail',
+    ),
+    path(
+        'sms/campaigns/<uuid:id>/send/',
+        BulkSMSSendView.as_view(),
+        name='sms-campaign-send',
+    ),
     path(
         'liquidity/',
         LiquidityStatusView.as_view(),
