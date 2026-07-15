@@ -6,8 +6,10 @@ from .views import (
     B2CHistoryView,
     B2CStatusView,
     CallbackCreateView,
+    DepositInitiateView,
     MpesaTransactionDetailView,
     MPesaSTKCallbackView,
+    PaymentCallbackView,
     STKPushView,
     STKStatusView,
     TransactionDetailView,
@@ -32,6 +34,16 @@ urlpatterns = [
         'mpesa/<uuid:id>/',
         MpesaTransactionDetailView.as_view(),
         name='mpesa-detail',
+    ),
+    path(
+        'deposit/',
+        DepositInitiateView.as_view(),
+        name='deposit-initiate',
+    ),
+    path(
+        'callback/',
+        PaymentCallbackView.as_view(),
+        name='payment-callback',
     ),
     path(
         'mpesa/stk-push/',
