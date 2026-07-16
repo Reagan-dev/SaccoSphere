@@ -16,8 +16,13 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/health/",
-              "host": ["{{base_url}}"],
-              "path": ["health", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health",
+                ""
+              ]
             },
             "description": "Basic liveness check to verify the API is running"
           },
@@ -30,10 +35,81 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/health/ready/",
-              "host": ["{{base_url}}"],
-              "path": ["health", "ready", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health",
+                "ready",
+                ""
+              ]
             },
             "description": "Checks if the API is ready to accept requests (database and cache)"
+          },
+          "response": []
+        },
+        {
+          "name": "API v1 Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/health/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health",
+                ""
+              ]
+            },
+            "description": "Versioned API health check."
+          },
+          "response": []
+        },
+        {
+          "name": "API v1 Liveness Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/health/live/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health",
+                "live",
+                ""
+              ]
+            },
+            "description": "Versioned API liveness probe."
+          },
+          "response": []
+        },
+        {
+          "name": "API v1 Readiness Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/health/ready/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health",
+                "ready",
+                ""
+              ]
+            },
+            "description": "Versioned API readiness probe."
           },
           "response": []
         }
@@ -58,8 +134,16 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/register/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "register", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "register",
+                ""
+              ]
             },
             "description": "Register a new user account"
           },
@@ -81,8 +165,16 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/login/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "login", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "login",
+                ""
+              ]
             },
             "description": "Authenticate user and receive JWT tokens"
           },
@@ -108,8 +200,16 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/logout/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "logout", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "logout",
+                ""
+              ]
             },
             "description": "Logout user and blacklist refresh token"
           },
@@ -131,8 +231,16 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/token/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "token", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "token",
+                ""
+              ]
             },
             "description": "Obtain JWT access and refresh tokens"
           },
@@ -154,8 +262,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/token/refresh/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "token", "refresh", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "token",
+                "refresh",
+                ""
+              ]
             },
             "description": "Refresh access token using refresh token"
           },
@@ -173,8 +290,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/me/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "me", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "me",
+                ""
+              ]
             },
             "description": "Get authenticated user's profile information"
           },
@@ -200,8 +325,16 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/me/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "me", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "me",
+                ""
+              ]
             },
             "description": "Update authenticated user's profile information"
           },
@@ -227,8 +360,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/password/change/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "password", "change", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "password",
+                "change",
+                ""
+              ]
             },
             "description": "Change authenticated user's password"
           },
@@ -254,8 +396,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/kyc/submit-id/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "kyc", "submit-id", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "kyc",
+                "submit-id",
+                ""
+              ]
             },
             "description": "Submit national ID number for IPRS verification"
           },
@@ -288,8 +439,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/kyc/upload/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "kyc", "upload", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "kyc",
+                "upload",
+                ""
+              ]
             },
             "description": "Upload KYC document (ID front, ID back, passport, or Huduma)"
           },
@@ -307,8 +467,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/kyc/status/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "kyc", "status", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "kyc",
+                "status",
+                ""
+              ]
             },
             "description": "Get authenticated user's KYC verification status"
           },
@@ -330,8 +499,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/oauth/google/callback/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "oauth", "google", "callback", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "oauth",
+                "google",
+                "callback",
+                ""
+              ]
             },
             "description": "Google Sign-In + Sign-Up callback with flow parameter"
           },
@@ -357,8 +536,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/device/register/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "device", "register", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "device",
+                "register",
+                ""
+              ]
             },
             "description": "Register a biometric device for authentication"
           },
@@ -376,8 +564,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/devices/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "devices", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "devices",
+                ""
+              ]
             },
             "description": "List all registered biometric devices for the user"
           },
@@ -395,8 +591,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/device/{{device_id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "device", "{{device_id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "device",
+                "{{device_id}}",
+                ""
+              ]
             },
             "description": "Revoke a registered biometric device"
           },
@@ -409,8 +614,16 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/public-stats/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "public-stats", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "public-stats",
+                ""
+              ]
             },
             "description": "Get public platform statistics (no authentication required)"
           },
@@ -423,8 +636,16 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/saccos/?search=&verified_only=true&ordering=-member_count",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "saccos", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "saccos",
+                ""
+              ],
               "query": [
                 {
                   "key": "search",
@@ -451,8 +672,17 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/saccos/{{sacco_id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "saccos", "{{sacco_id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "saccos",
+                "{{sacco_id}}",
+                ""
+              ]
             },
             "description": "Get detailed information about a specific SACCO"
           },
@@ -474,8 +704,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/otp/send/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "otp", "send", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "otp",
+                "send",
+                ""
+              ]
             },
             "description": "Send OTP code to user's phone number"
           },
@@ -497,8 +736,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/otp/verify/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "otp", "verify", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "otp",
+                "verify",
+                ""
+              ]
             },
             "description": "Verify OTP code and update user's phone number"
           },
@@ -520,8 +768,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/otp/resend/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "otp", "resend", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "otp",
+                "resend",
+                ""
+              ]
             },
             "description": "Resend OTP code (with cooldown period)"
           },
@@ -543,8 +800,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/password/reset/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "password", "reset", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "password",
+                "reset",
+                ""
+              ]
             },
             "description": "Request password reset via OTP"
           },
@@ -566,8 +832,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/password/reset/confirm/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "accounts", "password", "reset", "confirm", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "password",
+                "reset",
+                "confirm",
+                ""
+              ]
             },
             "description": "Confirm password reset with OTP"
           },
@@ -590,8 +866,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/members/memberships/?status=APPROVED",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "members", "memberships", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "members",
+                "memberships",
+                ""
+              ],
               "query": [
                 {
                   "key": "status",
@@ -623,8 +907,16 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/members/memberships/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "members", "memberships", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "members",
+                "memberships",
+                ""
+              ]
             },
             "description": "Apply for SACCO membership"
           },
@@ -642,8 +934,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/members/memberships/{{membership_id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "members", "memberships", "{{membership_id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "members",
+                "memberships",
+                "{{membership_id}}",
+                ""
+              ]
             },
             "description": "Get detailed information about a specific membership"
           },
@@ -661,8 +962,18 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/members/memberships/{{membership_id}}/leave/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "members", "memberships", "{{membership_id}}", "leave", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "members",
+                "memberships",
+                "{{membership_id}}",
+                "leave",
+                ""
+              ]
             },
             "description": "Leave a SACCO membership"
           },
@@ -675,8 +986,18 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/v1/members/saccos/{{sacco_id}}/fields/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "members", "saccos", "{{sacco_id}}", "fields", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "members",
+                "saccos",
+                "{{sacco_id}}",
+                "fields",
+                ""
+              ]
             },
             "description": "Get custom field definitions for a SACCO"
           },
@@ -709,8 +1030,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/members/applications/{{application_id}}/documents/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "members", "applications", "{{application_id}}", "documents", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "members",
+                "applications",
+                "{{application_id}}",
+                "documents",
+                ""
+              ]
             },
             "description": "Upload document for membership application"
           },
@@ -728,8 +1059,18 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/members/applications/{{application_id}}/documents/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "members", "applications", "{{application_id}}", "documents", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "members",
+                "applications",
+                "{{application_id}}",
+                "documents",
+                ""
+              ]
             },
             "description": "List documents for a membership application"
           },
@@ -747,8 +1088,19 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/members/applications/{{application_id}}/documents/{{id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "members", "applications", "{{application_id}}", "documents", "{{id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "members",
+                "applications",
+                "{{application_id}}",
+                "documents",
+                "{{id}}",
+                ""
+              ]
             },
             "description": "Remove a document from membership application"
           },
@@ -779,8 +1131,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/management/roles/assign/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "roles", "assign", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "roles",
+                "assign",
+                ""
+              ]
             },
             "description": "Assign a role to a user (SUPER_ADMIN only)"
           },
@@ -798,8 +1159,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/roles/{{role_id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "roles", "{{role_id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "roles",
+                "{{role_id}}",
+                ""
+              ]
             },
             "description": "Revoke a role from a user (SUPER_ADMIN only)"
           },
@@ -817,8 +1187,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/roles/?user_id={{user_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "roles", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "roles",
+                ""
+              ],
               "query": [
                 {
                   "key": "user_id",
@@ -846,8 +1224,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/members/?search=&status=APPROVED",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "members", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "members",
+                ""
+              ],
               "query": [
                 {
                   "key": "search",
@@ -879,8 +1265,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/members/{{membership_id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "members", "{{membership_id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "members",
+                "{{membership_id}}",
+                ""
+              ]
             },
             "description": "Get detailed member information with savings and loans (SACCO_ADMIN only)"
           },
@@ -902,8 +1297,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/stats/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "stats", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "stats",
+                ""
+              ]
             },
             "description": "Get aggregate dashboard statistics for current SACCO (SACCO_ADMIN only)"
           },
@@ -933,8 +1336,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/management/applications/{{application_id}}/review/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "applications", "{{application_id}}", "review", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "applications",
+                "{{application_id}}",
+                "review",
+                ""
+              ]
             },
             "description": "Approve or reject a SACCO membership application (SACCO_ADMIN only)"
           },
@@ -956,8 +1369,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/kyc/queue/?status=PENDING",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "kyc", "queue", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "kyc",
+                "queue",
+                ""
+              ],
               "query": [
                 {
                   "key": "status",
@@ -993,8 +1415,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/management/kyc/{{kyc_id}}/review/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "kyc", "{{kyc_id}}", "review", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "kyc",
+                "{{kyc_id}}",
+                "review",
+                ""
+              ]
             },
             "description": "Approve or reject a member KYC verification"
           },
@@ -1024,8 +1456,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/management/loans/{{loan_id}}/status/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "loans", "{{loan_id}}", "status", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "loans",
+                "{{loan_id}}",
+                "status",
+                ""
+              ]
             },
             "description": "Update loan status through approval workflow"
           },
@@ -1043,8 +1485,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/audit-logs/?action=UPDATE&resource_type=Loan",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "audit-logs", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "audit-logs",
+                ""
+              ],
               "query": [
                 {
                   "key": "action",
@@ -1086,8 +1536,16 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/management/import/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "import", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "import",
+                ""
+              ]
             },
             "description": "Create an asynchronous SACCO member import job from uploaded file (SACCO_ADMIN only)"
           },
@@ -1109,8 +1567,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/import/{{job_id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "import", "{{job_id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "import",
+                "{{job_id}}",
+                ""
+              ]
             },
             "description": "Get SACCO-scoped progress and summary for one import job"
           },
@@ -1132,8 +1599,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/dashboard/disbursements/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "dashboard", "disbursements", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dashboard",
+                "disbursements",
+                ""
+              ]
             },
             "description": "Get disbursements dashboard data (SACCO_ADMIN only)"
           },
@@ -1155,8 +1631,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/dashboard/contributions/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "dashboard", "contributions", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dashboard",
+                "contributions",
+                ""
+              ]
             },
             "description": "Get contributions dashboard data (SACCO_ADMIN only)"
           },
@@ -1178,8 +1663,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/external-guarantors/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "external-guarantors", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "external-guarantors",
+                ""
+              ]
             },
             "description": "List external guarantor requests (SACCO_ADMIN only)"
           },
@@ -1209,8 +1702,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/management/external-guarantors/{{id}}/review/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "external-guarantors", "{{id}}", "review", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "external-guarantors",
+                "{{id}}",
+                "review",
+                ""
+              ]
             },
             "description": "Approve or reject external guarantor request (SACCO_ADMIN only)"
           },
@@ -1232,8 +1735,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/loans/approvals/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "loans", "approvals", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "loans",
+                "approvals",
+                ""
+              ]
             },
             "description": "List pending loans requiring SACCO admin approval"
           },
@@ -1255,8 +1767,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/reports/?type=loans&from_date=2024-01-01&to_date=2024-12-31",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "reports", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "reports",
+                ""
+              ],
               "query": [
                 {
                   "key": "type",
@@ -1292,8 +1812,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/settings/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "settings", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "settings",
+                ""
+              ]
             },
             "description": "Get SACCO-specific configuration settings"
           },
@@ -1323,10 +1851,625 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/management/settings/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "settings", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "settings",
+                ""
+              ]
             },
             "description": "Update SACCO-specific configuration settings"
+          },
+          "response": []
+        },
+        {
+          "name": "Generate SASRA Return",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/reports/sasra/?type=par&as_of_date=2026-07-16&format=json",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "reports",
+                "sasra",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "par"
+                },
+                {
+                  "key": "as_of_date",
+                  "value": "2026-07-16"
+                },
+                {
+                  "key": "format",
+                  "value": "json"
+                }
+              ]
+            },
+            "description": "Generate SASRA regulatory returns."
+          },
+          "response": []
+        },
+        {
+          "name": "List SMS Campaigns",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/sms/campaigns/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "sms",
+                "campaigns",
+                ""
+              ]
+            },
+            "description": "List bulk SMS campaigns for the current SACCO."
+          },
+          "response": []
+        },
+        {
+          "name": "Create SMS Campaign",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/sms/campaigns/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "sms",
+                "campaigns",
+                ""
+              ]
+            },
+            "description": "Create a draft bulk SMS campaign.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Member reminder: monthly contributions are due by Friday.\",\n  \"audience_filter\": {\n    \"status\": \"APPROVED\"\n  }\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get SMS Campaign Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/sms/campaigns/{{campaign_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "sms",
+                "campaigns",
+                "{{campaign_id}}",
+                ""
+              ]
+            },
+            "description": "Retrieve a bulk SMS campaign with recipients."
+          },
+          "response": []
+        },
+        {
+          "name": "Send SMS Campaign",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/sms/campaigns/{{campaign_id}}/send/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "sms",
+                "campaigns",
+                "{{campaign_id}}",
+                "send",
+                ""
+              ]
+            },
+            "description": "Queue a draft SMS campaign for sending."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Liquidity Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/liquidity/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "liquidity",
+                ""
+              ]
+            },
+            "description": "Return liquidity risk and recent alerts."
+          },
+          "response": []
+        },
+        {
+          "name": "Get NPL Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/npl/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "npl",
+                ""
+              ]
+            },
+            "description": "Return unresolved NPL warning counts and ratio."
+          },
+          "response": []
+        },
+        {
+          "name": "List Management Dividend Declarations",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dividends/declarations/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dividends",
+                "declarations",
+                ""
+              ]
+            },
+            "description": "List management dividend declarations."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Management Dividend Declaration",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dividends/declarations/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dividends",
+                "declarations",
+                ""
+              ]
+            },
+            "description": "Create a management dividend declaration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"financial_year\": 2026,\n  \"declared_rate\": \"12.50\",\n  \"savings_type\": \"{{savings_type_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Management Dividend Declaration",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Retrieve one management dividend declaration."
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Management Dividend Declaration",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Replace a draft management dividend declaration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"financial_year\": 2026,\n  \"declared_rate\": \"12.50\",\n  \"savings_type\": \"{{savings_type_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Management Dividend Declaration",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Partially update a draft management dividend declaration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"declared_rate\": \"13.00\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Management Dividend Declaration",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Delete a draft management dividend declaration."
+          },
+          "response": []
+        },
+        {
+          "name": "Calculate Management Dividends",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dividends/declarations/{{dividend_declaration_id}}/calculate/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                "calculate",
+                ""
+              ]
+            },
+            "description": "Calculate management dividend payouts."
+          },
+          "response": []
+        },
+        {
+          "name": "Approve Management Dividends",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dividends/declarations/{{dividend_declaration_id}}/approve/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                "approve",
+                ""
+              ]
+            },
+            "description": "Approve calculated management dividends."
+          },
+          "response": []
+        },
+        {
+          "name": "Disburse Management Dividends",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dividends/declarations/{{dividend_declaration_id}}/disburse/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                "disburse",
+                ""
+              ]
+            },
+            "description": "Disburse approved management dividends."
+          },
+          "response": []
+        },
+        {
+          "name": "List Management Dividend Payouts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/dividends/payouts/?declaration={{dividend_declaration_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "dividends",
+                "payouts",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "declaration",
+                  "value": "{{dividend_declaration_id}}"
+                }
+              ]
+            },
+            "description": "List management dividend payouts."
           },
           "response": []
         }
@@ -1342,8 +2485,16 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/v1/services/savings-types/?sacco_id={{sacco_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "savings-types", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "savings-types",
+                ""
+              ],
               "query": [
                 {
                   "key": "sacco_id",
@@ -1367,8 +2518,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/services/savings/?sacco={{sacco_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "savings", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "savings",
+                ""
+              ],
               "query": [
                 {
                   "key": "sacco",
@@ -1392,8 +2551,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/services/savings/breakdown/?sacco_id={{sacco_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "savings", "breakdown", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "savings",
+                "breakdown",
+                ""
+              ],
               "query": [
                 {
                   "key": "sacco_id",
@@ -1412,8 +2580,16 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/v1/services/loan-types/?sacco_id={{sacco_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loan-types", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loan-types",
+                ""
+              ],
               "query": [
                 {
                   "key": "sacco_id",
@@ -1437,8 +2613,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/eligibility/?sacco_id={{sacco_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loans", "eligibility", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "eligibility",
+                ""
+              ],
               "query": [
                 {
                   "key": "sacco_id",
@@ -1470,8 +2655,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/apply/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loans", "apply", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "apply",
+                ""
+              ]
             },
             "description": "Apply for a loan"
           },
@@ -1489,8 +2683,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/list/?status=ACTIVE",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loans", "list", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "list",
+                ""
+              ],
               "query": [
                 {
                   "key": "status",
@@ -1514,8 +2717,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loans", "{{loan_id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "{{loan_id}}",
+                ""
+              ]
             },
             "description": "Get detailed information about a specific loan"
           },
@@ -1533,8 +2745,18 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/schedule/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "schedule", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "{{loan_id}}",
+                "schedule",
+                ""
+              ]
             },
             "description": "Get or generate repayment schedule for a loan"
           },
@@ -1552,8 +2774,19 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/guarantors/search/?phone=+254723456789",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "guarantors", "search", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "{{loan_id}}",
+                "guarantors",
+                "search",
+                ""
+              ],
               "query": [
                 {
                   "key": "phone",
@@ -1585,8 +2818,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/guarantors/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "guarantors", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "{{loan_id}}",
+                "guarantors",
+                ""
+              ]
             },
             "description": "Request a member to guarantee a loan"
           },
@@ -1612,8 +2855,20 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/guarantors/{{guarantor_id}}/respond/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "guarantors", "{{guarantor_id}}", "respond", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "{{loan_id}}",
+                "guarantors",
+                "{{guarantor_id}}",
+                "respond",
+                ""
+              ]
             },
             "description": "Approve or decline a guarantor request"
           },
@@ -1639,8 +2894,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/external-guarantors/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "external-guarantors", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "{{loan_id}}",
+                "external-guarantors",
+                ""
+              ]
             },
             "description": "Submit external guarantor for a loan"
           },
@@ -1658,10 +2923,666 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/external-guarantors/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "services", "loans", "{{loan_id}}", "external-guarantors", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "{{loan_id}}",
+                "external-guarantors",
+                ""
+              ]
             },
             "description": "List external guarantors for a loan"
+          },
+          "response": []
+        },
+        {
+          "name": "Services API Root",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                ""
+              ]
+            },
+            "description": "DRF API root for services router endpoints."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Savings Type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/savings-types/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "savings-types",
+                ""
+              ]
+            },
+            "description": "Create a SACCO savings type. Admin only.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"BOSA\",\n  \"description\": \"Back office savings account\",\n  \"minimum_contribution\": \"1000.00\",\n  \"interest_rate\": \"0.00\",\n  \"sacco\": \"{{sacco_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Savings Type Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/savings-types/{{savings_type_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "savings-types",
+                "{{savings_type_id}}",
+                ""
+              ]
+            },
+            "description": "Retrieve one savings type."
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Savings Type",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/savings-types/{{savings_type_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "savings-types",
+                "{{savings_type_id}}",
+                ""
+              ]
+            },
+            "description": "Replace a SACCO savings type. Admin only.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"BOSA\",\n  \"description\": \"Back office savings account\",\n  \"minimum_contribution\": \"1000.00\",\n  \"interest_rate\": \"0.00\",\n  \"sacco\": \"{{sacco_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Savings Type",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/savings-types/{{savings_type_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "savings-types",
+                "{{savings_type_id}}",
+                ""
+              ]
+            },
+            "description": "Partially update a SACCO savings type. Admin only.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"minimum_contribution\": \"1500.00\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Savings Type",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/savings-types/{{savings_type_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "savings-types",
+                "{{savings_type_id}}",
+                ""
+              ]
+            },
+            "description": "Delete a SACCO savings type. Admin only."
+          },
+          "response": []
+        },
+        {
+          "name": "List Loans (Collection)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/?status=ACTIVE",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "ACTIVE"
+                }
+              ]
+            },
+            "description": "List loans through the collection endpoint."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Loan (Collection)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                ""
+              ]
+            },
+            "description": "Create a loan through the collection endpoint.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"loan_type\": \"{{loan_type_id}}\",\n  \"amount\": \"50000.00\",\n  \"term_months\": 12,\n  \"application_notes\": \"School fees\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Run CRB Check",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/crb-check/?force_refresh=false",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "{{loan_id}}",
+                "crb-check",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "force_refresh",
+                  "value": "false"
+                }
+              ]
+            },
+            "description": "Run or reuse a cached CRB check for a loan application. SACCO admin only."
+          },
+          "response": []
+        },
+        {
+          "name": "List Service Dividend Declarations",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/dividends/declarations/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "dividends",
+                "declarations",
+                ""
+              ]
+            },
+            "description": "List dividend declarations for the SACCO context."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Service Dividend Declaration",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/dividends/declarations/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "dividends",
+                "declarations",
+                ""
+              ]
+            },
+            "description": "Create a draft dividend declaration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"financial_year\": 2026,\n  \"declared_rate\": \"12.50\",\n  \"savings_type\": \"{{savings_type_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Service Dividend Declaration",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Retrieve one dividend declaration."
+          },
+          "response": []
+        },
+        {
+          "name": "Replace Service Dividend Declaration",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Replace a draft dividend declaration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"financial_year\": 2026,\n  \"declared_rate\": \"12.50\",\n  \"savings_type\": \"{{savings_type_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Service Dividend Declaration",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Partially update a draft dividend declaration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"declared_rate\": \"13.00\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Service Dividend Declaration",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Delete a draft dividend declaration."
+          },
+          "response": []
+        },
+        {
+          "name": "Calculate Service Dividends",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/dividends/declarations/{{dividend_declaration_id}}/calculate/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                "calculate",
+                ""
+              ]
+            },
+            "description": "Calculate payouts for a dividend declaration."
+          },
+          "response": []
+        },
+        {
+          "name": "Approve Service Dividends",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/dividends/declarations/{{dividend_declaration_id}}/approve/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                "approve",
+                ""
+              ]
+            },
+            "description": "Approve a calculated dividend declaration."
+          },
+          "response": []
+        },
+        {
+          "name": "Disburse Service Dividends",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/dividends/declarations/{{dividend_declaration_id}}/disburse/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                "disburse",
+                ""
+              ]
+            },
+            "description": "Disburse approved dividends to member savings."
+          },
+          "response": []
+        },
+        {
+          "name": "List Service Dividend Payouts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/dividends/payouts/?declaration={{dividend_declaration_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "dividends",
+                "payouts",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "declaration",
+                  "value": "{{dividend_declaration_id}}"
+                }
+              ]
+            },
+            "description": "List dividend payouts."
           },
           "response": []
         }
@@ -1682,8 +3603,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/payments/transactions/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "payments", "transactions", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "transactions",
+                ""
+              ]
             },
             "description": "List authenticated user's payment transactions"
           },
@@ -1701,8 +3630,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/payments/transactions/{{transaction_id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "payments", "transactions", "{{transaction_id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "transactions",
+                "{{transaction_id}}",
+                ""
+              ]
             },
             "description": "Get detailed information about a specific transaction"
           },
@@ -1720,8 +3658,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/payments/mpesa/{{mpesa_transaction_id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "payments", "mpesa", "{{mpesa_transaction_id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "mpesa",
+                "{{mpesa_transaction_id}}",
+                ""
+              ]
             },
             "description": "Get detailed M-Pesa transaction information"
           },
@@ -1747,8 +3694,17 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/payments/mpesa/stk-push/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "payments", "mpesa", "stk-push", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "mpesa",
+                "stk-push",
+                ""
+              ]
             },
             "description": "Initiate M-Pesa STK push for saving deposit or loan repayment"
           },
@@ -1766,8 +3722,19 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/payments/mpesa/stk/{{checkout_request_id}}/status/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "payments", "mpesa", "stk", "{{checkout_request_id}}", "status", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "mpesa",
+                "stk",
+                "{{checkout_request_id}}",
+                "status",
+                ""
+              ]
             },
             "description": "Get STK transaction status by checkout request ID"
           },
@@ -1797,8 +3764,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/payments/mpesa/b2c/disburse/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "payments", "mpesa", "b2c", "disburse", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "mpesa",
+                "b2c",
+                "disburse",
+                ""
+              ]
             },
             "description": "Initiate M-Pesa B2C loan disbursement (SACCO_ADMIN only)"
           },
@@ -1820,8 +3797,19 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/payments/mpesa/b2c/{{conversation_id}}/status/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "payments", "mpesa", "b2c", "{{conversation_id}}", "status", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "mpesa",
+                "b2c",
+                "{{conversation_id}}",
+                "status",
+                ""
+              ]
             },
             "description": "Get B2C disbursement status by conversation ID (SACCO_ADMIN only)"
           },
@@ -1843,8 +3831,18 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/payments/mpesa/b2c/history/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "payments", "mpesa", "b2c", "history", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "mpesa",
+                "b2c",
+                "history",
+                ""
+              ]
             },
             "description": "List B2C disbursement history for current SACCO (SACCO_ADMIN only)"
           },
@@ -1866,10 +3864,84 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/payments/callbacks/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "payments", "callbacks", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "callbacks",
+                ""
+              ]
             },
             "description": "Create a callback record (testing/debugging)"
+          },
+          "response": []
+        },
+        {
+          "name": "M-Pesa STK Callback",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/callback/mpesa/stk/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "callback",
+                "mpesa",
+                "stk",
+                ""
+              ]
+            },
+            "description": "Public Safaricom callback endpoint for STK push results.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"Body\": {\n    \"stkCallback\": {\n      \"MerchantRequestID\": \"29115-34620561-1\",\n      \"CheckoutRequestID\": \"ws_CO_16072026123456789\",\n      \"ResultCode\": 0,\n      \"ResultDesc\": \"The service request is processed successfully.\"\n    }\n  }\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "M-Pesa B2C Callback",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/callback/mpesa/b2c/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "callback",
+                "mpesa",
+                "b2c",
+                ""
+              ]
+            },
+            "description": "Public Safaricom callback endpoint for B2C disbursement results.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"Result\": {\n    \"ConversationID\": \"AG_20260716_123456789\",\n    \"ResultCode\": 0,\n    \"ResultDesc\": \"The service request is processed successfully.\"\n  }\n}"
+            }
           },
           "response": []
         }
@@ -1890,8 +3962,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/ledger/entries/?sacco_id={{sacco_id}}&from_date=2024-01-01&to_date=2024-12-31",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "ledger", "entries", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "ledger",
+                "entries",
+                ""
+              ],
               "query": [
                 {
                   "key": "sacco_id",
@@ -1923,8 +4003,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/ledger/balance/?sacco_id={{sacco_id}}",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "ledger", "balance", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "ledger",
+                "balance",
+                ""
+              ],
               "query": [
                 {
                   "key": "sacco_id",
@@ -1948,8 +4036,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/ledger/statement/?sacco_id={{sacco_id}}&from_date=2024-01-01&to_date=2024-12-31",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "ledger", "statement", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "ledger",
+                "statement",
+                ""
+              ],
               "query": [
                 {
                   "key": "sacco_id",
@@ -1981,8 +4077,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/ledger/statement/pdf/?sacco_id={{sacco_id}}&from_date=2024-01-01&to_date=2024-12-31",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "ledger", "statement", "pdf", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "ledger",
+                "statement",
+                "pdf",
+                ""
+              ],
               "query": [
                 {
                   "key": "sacco_id",
@@ -2023,8 +4128,18 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/guarantors/external/respond/{{response_token}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "guarantors", "external", "respond", "{{response_token}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "guarantors",
+                "external",
+                "respond",
+                "{{response_token}}",
+                ""
+              ]
             },
             "description": "External guarantor accepts or declines guarantee request via token"
           },
@@ -2047,8 +4162,15 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/notifications/?is_read=false",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "notifications", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                ""
+              ],
               "query": [
                 {
                   "key": "is_read",
@@ -2072,8 +4194,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/notifications/{{notification_id}}/read/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "notifications", "{{notification_id}}", "read", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "{{notification_id}}",
+                "read",
+                ""
+              ]
             },
             "description": "Mark one notification as read"
           },
@@ -2091,8 +4222,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/notifications/read-all/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "notifications", "read-all", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "read-all",
+                ""
+              ]
             },
             "description": "Mark all notifications for the user as read"
           },
@@ -2118,8 +4257,16 @@
             },
             "url": {
               "raw": "{{base_url}}/api/v1/notifications/device/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "notifications", "device", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "device",
+                ""
+              ]
             },
             "description": "Register or reactivate a device token for push notifications"
           },
@@ -2146,8 +4293,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/billing/invoices/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "billing", "invoices", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "billing",
+                "invoices",
+                ""
+              ]
             },
             "description": "List monthly invoices visible to current SACCO admin or super admin"
           },
@@ -2169,8 +4324,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/billing/invoices/{{invoice_id}}/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "billing", "invoices", "{{invoice_id}}", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "billing",
+                "invoices",
+                "{{invoice_id}}",
+                ""
+              ]
             },
             "description": "Retrieve one invoice by ID"
           },
@@ -2192,8 +4356,18 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/billing/invoices/{{invoice_id}}/resend/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "billing", "invoices", "{{invoice_id}}", "resend", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "billing",
+                "invoices",
+                "{{invoice_id}}",
+                "resend",
+                ""
+              ]
             },
             "description": "Resend existing invoice report to SACCO emails/admin recipients"
           },
@@ -2215,8 +4389,18 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/billing/invoices/{{invoice_id}}/download/?format=csv",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "billing", "invoices", "{{invoice_id}}", "download", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "billing",
+                "invoices",
+                "{{invoice_id}}",
+                "download",
+                ""
+              ],
               "query": [
                 {
                   "key": "format",
@@ -2245,8 +4429,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/dashboard/portfolio/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "dashboard", "portfolio", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "dashboard",
+                "portfolio",
+                ""
+              ]
             },
             "description": "Get unified member portfolio across SACCO memberships"
           },
@@ -2264,8 +4456,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/dashboard/state/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "dashboard", "state", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "dashboard",
+                "state",
+                ""
+              ]
             },
             "description": "Get current dashboard state for authenticated member"
           },
@@ -2283,8 +4483,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/dashboard/saccos/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "dashboard", "saccos", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "dashboard",
+                "saccos",
+                ""
+              ]
             },
             "description": "List SACCO switcher cards for authenticated member"
           },
@@ -2302,8 +4510,16 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/dashboard/activity/?limit=20",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "dashboard", "activity", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "dashboard",
+                "activity",
+                ""
+              ],
               "query": [
                 {
                   "key": "limit",
@@ -2327,8 +4543,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/dashboard/loans/compare/?amount=50000&term=12",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "dashboard", "loans", "compare", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "dashboard",
+                "loans",
+                "compare",
+                ""
+              ],
               "query": [
                 {
                   "key": "amount",
@@ -2361,8 +4586,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/superadmin/overview/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "superadmin", "overview", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "superadmin",
+                "overview",
+                ""
+              ]
             },
             "description": "Get platform-wide overview statistics (SUPER_ADMIN only)"
           },
@@ -2380,8 +4614,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/superadmin/revenue-chart/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "superadmin", "revenue-chart", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "superadmin",
+                "revenue-chart",
+                ""
+              ]
             },
             "description": "Get last 12 months of revenue breakdown (SUPER_ADMIN only)"
           },
@@ -2399,8 +4642,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/superadmin/top-saccos/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "superadmin", "top-saccos", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "superadmin",
+                "top-saccos",
+                ""
+              ]
             },
             "description": "Get top 10 SACCOs by transaction volume (SUPER_ADMIN only)"
           },
@@ -2418,8 +4670,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/superadmin/alerts/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "superadmin", "alerts", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "superadmin",
+                "alerts",
+                ""
+              ]
             },
             "description": "Get all open compliance flags (SUPER_ADMIN only)"
           },
@@ -2437,8 +4698,18 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/superadmin/transactions/live/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "superadmin", "transactions", "live", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "superadmin",
+                "transactions",
+                "live",
+                ""
+              ]
             },
             "description": "Get last 50 M-Pesa transactions (SUPER_ADMIN only, 10s cache)"
           },
@@ -2456,8 +4727,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/superadmin/saccos/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "superadmin", "saccos", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "superadmin",
+                "saccos",
+                ""
+              ]
             },
             "description": "List all SACCOs with health status (SUPER_ADMIN only)"
           },
@@ -2475,8 +4755,17 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/superadmin/members/?sacco_id=&search=",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "superadmin", "members", ""],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "superadmin",
+                "members",
+                ""
+              ],
               "query": [
                 {
                   "key": "sacco_id",
@@ -2504,8 +4793,1662 @@
             ],
             "url": {
               "raw": "{{base_url}}/api/v1/management/superadmin/saccos/",
-              "host": ["{{base_url}}"],
-              "path": ["api", "v1", "management", "superadmin", "saccos", ""]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "superadmin",
+                "saccos",
+                ""
+              ]
+            },
+            "description": "List all SACCOs with health status (SUPER_ADMIN only)"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "API Documentation",
+      "item": [
+        {
+          "name": "Swagger UI",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/swagger/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "swagger",
+                ""
+              ]
+            },
+            "description": "Interactive Swagger/OpenAPI documentation."
+          },
+          "response": []
+        },
+        {
+          "name": "Redoc UI",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/redoc/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "redoc",
+                ""
+              ]
+            },
+            "description": "Redoc OpenAPI documentation."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "SACCO Management Alias (/saccomanagement)",
+      "item": [
+        {
+          "name": "Assign Role",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{user_id}}\",\n  \"role_name\": \"SACCO_ADMIN\",\n  \"sacco_id\": \"{{sacco_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/roles/assign/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "roles",
+                "assign",
+                ""
+              ]
+            },
+            "description": "Assign a role to a user (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Revoke Role",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/roles/{{role_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "roles",
+                "{{role_id}}",
+                ""
+              ]
+            },
+            "description": "Revoke a role from a user (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List User Roles",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/roles/?user_id={{user_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "roles",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "user_id",
+                  "value": "{{user_id}}"
+                }
+              ]
+            },
+            "description": "List all roles for a specific user"
+          },
+          "response": []
+        },
+        {
+          "name": "List Admin Members",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/members/?search=&status=APPROVED",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "members",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "search",
+                  "value": ""
+                },
+                {
+                  "key": "status",
+                  "value": "APPROVED"
+                }
+              ]
+            },
+            "description": "List members of the current SACCO (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Admin Member Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/members/{{membership_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "members",
+                "{{membership_id}}",
+                ""
+              ]
+            },
+            "description": "Get detailed member information with savings and loans (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get SACCO Statistics",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/stats/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "stats",
+                ""
+              ]
+            },
+            "description": "Get aggregate dashboard statistics for current SACCO (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Review Application",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"review_notes\": \"Application approved\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/applications/{{application_id}}/review/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "applications",
+                "{{application_id}}",
+                "review",
+                ""
+              ]
+            },
+            "description": "Approve or reject a SACCO membership application (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List KYC Queue",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/kyc/queue/?status=PENDING",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "kyc",
+                "queue",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "PENDING"
+                }
+              ]
+            },
+            "description": "List pending KYC verification records for admin review"
+          },
+          "response": []
+        },
+        {
+          "name": "Review KYC",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"rejection_reason\": \"\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/kyc/{{kyc_id}}/review/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "kyc",
+                "{{kyc_id}}",
+                "review",
+                ""
+              ]
+            },
+            "description": "Approve or reject a member KYC verification"
+          },
+          "response": []
+        },
+        {
+          "name": "Update Loan Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"notes\": \"Loan approved\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/loans/{{loan_id}}/status/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "loans",
+                "{{loan_id}}",
+                "status",
+                ""
+              ]
+            },
+            "description": "Update loan status through approval workflow"
+          },
+          "response": []
+        },
+        {
+          "name": "List Audit Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/audit-logs/?action=UPDATE&resource_type=Loan",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "audit-logs",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "action",
+                  "value": "UPDATE"
+                },
+                {
+                  "key": "resource_type",
+                  "value": "Loan"
+                }
+              ]
+            },
+            "description": "List system audit logs (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Import Members",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/import/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "import",
+                ""
+              ]
+            },
+            "description": "Create an asynchronous SACCO member import job from uploaded file (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Import Job Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/import/{{job_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "import",
+                "{{job_id}}",
+                ""
+              ]
+            },
+            "description": "Get SACCO-scoped progress and summary for one import job"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Disbursements Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dashboard/disbursements/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dashboard",
+                "disbursements",
+                ""
+              ]
+            },
+            "description": "Get disbursements dashboard data (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Contributions Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dashboard/contributions/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dashboard",
+                "contributions",
+                ""
+              ]
+            },
+            "description": "Get contributions dashboard data (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List External Guarantors",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/external-guarantors/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "external-guarantors",
+                ""
+              ]
+            },
+            "description": "List external guarantor requests (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Review External Guarantor",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"review_notes\": \"Guarantor verified\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/external-guarantors/{{id}}/review/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "external-guarantors",
+                "{{id}}",
+                "review",
+                ""
+              ]
+            },
+            "description": "Approve or reject external guarantor request (SACCO_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List Loan Approvals",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/loans/approvals/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "loans",
+                "approvals",
+                ""
+              ]
+            },
+            "description": "List pending loans requiring SACCO admin approval"
+          },
+          "response": []
+        },
+        {
+          "name": "Get SACCO Reports",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/reports/?type=loans&from_date=2024-01-01&to_date=2024-12-31",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "reports",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "loans"
+                },
+                {
+                  "key": "from_date",
+                  "value": "2024-01-01"
+                },
+                {
+                  "key": "to_date",
+                  "value": "2024-12-31"
+                }
+              ]
+            },
+            "description": "Get SACCO-scoped reports (loans, contributions, members)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get SACCO Settings",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/settings/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "settings",
+                ""
+              ]
+            },
+            "description": "Get SACCO-specific configuration settings"
+          },
+          "response": []
+        },
+        {
+          "name": "Update SACCO Settings",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"min_loan_amount\": 1000.00,\n  \"max_loan_amount\": 500000.00,\n  \"loan_multiplier\": 3,\n  \"requires_guarantor\": true,\n  \"guarantor_type_allowed\": \"BOTH\",\n  \"registration_fee\": 500.00,\n  \"monthly_contribution_amount\": 1000.00\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/settings/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "settings",
+                ""
+              ]
+            },
+            "description": "Update SACCO-specific configuration settings"
+          },
+          "response": []
+        },
+        {
+          "name": "Generate SASRA Return",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/reports/sasra/?type=par&as_of_date=2026-07-16&format=json",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "reports",
+                "sasra",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "par"
+                },
+                {
+                  "key": "as_of_date",
+                  "value": "2026-07-16"
+                },
+                {
+                  "key": "format",
+                  "value": "json"
+                }
+              ]
+            },
+            "description": "Generate SASRA regulatory returns."
+          },
+          "response": []
+        },
+        {
+          "name": "List SMS Campaigns",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/sms/campaigns/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "sms",
+                "campaigns",
+                ""
+              ]
+            },
+            "description": "List bulk SMS campaigns for the current SACCO."
+          },
+          "response": []
+        },
+        {
+          "name": "Create SMS Campaign",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/sms/campaigns/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "sms",
+                "campaigns",
+                ""
+              ]
+            },
+            "description": "Create a draft bulk SMS campaign.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Member reminder: monthly contributions are due by Friday.\",\n  \"audience_filter\": {\n    \"status\": \"APPROVED\"\n  }\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get SMS Campaign Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/sms/campaigns/{{campaign_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "sms",
+                "campaigns",
+                "{{campaign_id}}",
+                ""
+              ]
+            },
+            "description": "Retrieve a bulk SMS campaign with recipients."
+          },
+          "response": []
+        },
+        {
+          "name": "Send SMS Campaign",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/sms/campaigns/{{campaign_id}}/send/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "sms",
+                "campaigns",
+                "{{campaign_id}}",
+                "send",
+                ""
+              ]
+            },
+            "description": "Queue a draft SMS campaign for sending."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Liquidity Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/liquidity/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "liquidity",
+                ""
+              ]
+            },
+            "description": "Return liquidity risk and recent alerts."
+          },
+          "response": []
+        },
+        {
+          "name": "Get NPL Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/npl/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "npl",
+                ""
+              ]
+            },
+            "description": "Return unresolved NPL warning counts and ratio."
+          },
+          "response": []
+        },
+        {
+          "name": "List SACCO Management Dividend Declarations",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dividends/declarations/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dividends",
+                "declarations",
+                ""
+              ]
+            },
+            "description": "List management dividend declarations."
+          },
+          "response": []
+        },
+        {
+          "name": "Create SACCO Management Dividend Declaration",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dividends/declarations/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dividends",
+                "declarations",
+                ""
+              ]
+            },
+            "description": "Create a management dividend declaration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"financial_year\": 2026,\n  \"declared_rate\": \"12.50\",\n  \"savings_type\": \"{{savings_type_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get SACCO Management Dividend Declaration",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Retrieve one management dividend declaration."
+          },
+          "response": []
+        },
+        {
+          "name": "Replace SACCO Management Dividend Declaration",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Replace a draft management dividend declaration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"financial_year\": 2026,\n  \"declared_rate\": \"12.50\",\n  \"savings_type\": \"{{savings_type_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update SACCO Management Dividend Declaration",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Partially update a draft management dividend declaration.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"declared_rate\": \"13.00\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete SACCO Management Dividend Declaration",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dividends/declarations/{{dividend_declaration_id}}/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                ""
+              ]
+            },
+            "description": "Delete a draft management dividend declaration."
+          },
+          "response": []
+        },
+        {
+          "name": "Calculate SACCO Management Dividends",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dividends/declarations/{{dividend_declaration_id}}/calculate/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                "calculate",
+                ""
+              ]
+            },
+            "description": "Calculate management dividend payouts."
+          },
+          "response": []
+        },
+        {
+          "name": "Approve SACCO Management Dividends",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dividends/declarations/{{dividend_declaration_id}}/approve/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                "approve",
+                ""
+              ]
+            },
+            "description": "Approve calculated management dividends."
+          },
+          "response": []
+        },
+        {
+          "name": "Disburse SACCO Management Dividends",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dividends/declarations/{{dividend_declaration_id}}/disburse/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dividends",
+                "declarations",
+                "{{dividend_declaration_id}}",
+                "disburse",
+                ""
+              ]
+            },
+            "description": "Disburse approved management dividends."
+          },
+          "response": []
+        },
+        {
+          "name": "List SACCO Management Dividend Payouts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/dividends/payouts/?declaration={{dividend_declaration_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "dividends",
+                "payouts",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "declaration",
+                  "value": "{{dividend_declaration_id}}"
+                }
+              ]
+            },
+            "description": "List management dividend payouts."
+          },
+          "response": []
+        },
+        {
+          "name": "Get System Overview",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/superadmin/overview/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "superadmin",
+                "overview",
+                ""
+              ]
+            },
+            "description": "Get platform-wide overview statistics (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Revenue Chart",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/superadmin/revenue-chart/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "superadmin",
+                "revenue-chart",
+                ""
+              ]
+            },
+            "description": "Get last 12 months of revenue breakdown (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Top SACCOs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/superadmin/top-saccos/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "superadmin",
+                "top-saccos",
+                ""
+              ]
+            },
+            "description": "Get top 10 SACCOs by transaction volume (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Platform Alerts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/superadmin/alerts/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "superadmin",
+                "alerts",
+                ""
+              ]
+            },
+            "description": "Get all open compliance flags (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Live Transaction Feed",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/superadmin/transactions/live/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "superadmin",
+                "transactions",
+                "live",
+                ""
+              ]
+            },
+            "description": "Get last 50 M-Pesa transactions (SUPER_ADMIN only, 10s cache)"
+          },
+          "response": []
+        },
+        {
+          "name": "List All SACCOs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/superadmin/saccos/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "superadmin",
+                "saccos",
+                ""
+              ]
+            },
+            "description": "List all SACCOs with health status (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List All Members",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/superadmin/members/?sacco_id=&search=",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "superadmin",
+                "members",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "sacco_id",
+                  "value": ""
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "List all members with pagination (SUPER_ADMIN only)"
+          },
+          "response": []
+        },
+        {
+          "name": "List All SACCOs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/superadmin/saccos/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "superadmin",
+                "saccos",
+                ""
+              ]
             },
             "description": "List all SACCOs with health status (SUPER_ADMIN only)"
           },
@@ -2605,6 +6548,18 @@
     },
     {
       "key": "response_token",
+      "value": ""
+    },
+    {
+      "key": "campaign_id",
+      "value": ""
+    },
+    {
+      "key": "dividend_declaration_id",
+      "value": ""
+    },
+    {
+      "key": "savings_type_id",
       "value": ""
     }
   ]
