@@ -37,6 +37,14 @@ app.conf.beat_schedule = {
         'task': 'billing.tasks.generate_and_send_monthly_fee_reports',
         'schedule': crontab(minute=0, hour=0, day_of_month='1'),
     },
+    'hourly-sacco-liquidity-check': {
+        'task': 'services.tasks.check_all_sacco_liquidity',
+        'schedule': crontab(minute=0),
+    },
+    'daily-npl-arrears-check': {
+        'task': 'services.tasks.flag_npl_arrears',
+        'schedule': crontab(minute=30, hour=6),
+    },
 }
 app.conf.task_serializer = 'json'
 app.conf.result_expires = 3600

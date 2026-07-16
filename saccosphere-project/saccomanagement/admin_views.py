@@ -45,6 +45,13 @@ class LoanStatusUpdateSerializer(Serializer):
         ],
     )
     notes = CharField(required=False, allow_blank=True, max_length=500)
+    override_reason = CharField(
+        required=False,
+        allow_blank=True,
+        min_length=10,
+        max_length=500,
+        help_text='Required when approving loan with negative CRB listing.',
+    )
 
 
 class LoanApprovalListView(SaccoScopedMixin, ListAPIView):
@@ -98,6 +105,10 @@ class LoanApprovalListView(SaccoScopedMixin, ListAPIView):
     def _serialize_loan(self, loan, request):
         user = loan.membership.user
         member_name = user.get_full_name() or user.email
+        
+        # Get latest CRB check
+        latest_crb = loan.crb_checks.order_by('-checked_at').first()
+        
         return {
             'loan_id': str(loan.id),
             'member_name': member_name,
@@ -113,6 +124,10 @@ class LoanApprovalListView(SaccoScopedMixin, ListAPIView):
                 loan,
                 request=request,
             ),
+            'crb_status': latest_crb.band if latest_crb else None,
+            'crb_score': latest_crb.score if latest_crb else None,
+            'crb_checked_at': latest_crb.checked_at.isoformat() if latest_crb else None,
+            'crb_listed_negative': latest_crb.listed_negative if latest_crb else None,
         }
 
 
@@ -163,12 +178,36 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
         }
 
         if new_status == Loan.Status.APPROVED:
+            # Check guarantors are complete
             is_complete, reason = check_loan_guarantors_complete(loan)
             if not is_complete:
                 return Response(
                     {'detail': reason},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            
+            # Check CRB check exists
+            from services.models import CRBCheck
+            latest_crb = loan.crb_checks.order_by('-checked_at').first()
+            if not latest_crb:
+                return Response(
+                    {'detail': 'CRB check required before loan approval.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            
+            # Check for negative listing and require override
+            if latest_crb.listed_negative:
+                override_reason = serializer.validated_data.get('override_reason', '')
+                if not override_reason or len(override_reason) < 10:
+                    return Response(
+                        {
+                            'detail': (
+                                'CRB check shows negative listing. '
+                                'override_reason (min 10 characters) required.'
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
         disbursement_payload = None
         with transaction.atomic():
@@ -194,7 +233,13 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
                 )
                 persist_loan_repayment_schedule(loan)
                 self._notify_member_approved(loan)
-                audit_action = 'LOAN_APPROVED'
+                
+                # Check if CRB override was used
+                if latest_crb and latest_crb.listed_negative:
+                    override_reason = serializer.validated_data.get('override_reason', '')
+                    audit_action = 'LOAN_APPROVED_WITH_CRB_OVERRIDE'
+                else:
+                    audit_action = 'LOAN_APPROVED'
 
             elif new_status == Loan.Status.REJECTED:
                 loan.status = Loan.Status.REJECTED
@@ -226,17 +271,22 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
             else:
                 raise ValidationError({'status': 'Unsupported status value.'})
 
+        # Include override reason in new_values if CRB override was used
+        new_values = {
+            'status': loan.status,
+            'admin_notes': loan.admin_notes,
+            'rejection_reason': loan.rejection_reason,
+        }
+        if audit_action == 'LOAN_APPROVED_WITH_CRB_OVERRIDE':
+            new_values['crb_override_reason'] = override_reason
+        
         log_audit(
             request.user,
             audit_action,
             'Loan',
             loan.id,
             old_values=old_values,
-            new_values={
-                'status': loan.status,
-                'admin_notes': loan.admin_notes,
-                'rejection_reason': loan.rejection_reason,
-            },
+            new_values=new_values,
             request=request,
         )
 
