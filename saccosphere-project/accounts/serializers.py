@@ -232,12 +232,23 @@ class SaccoDetailSerializer(SaccoListSerializer):
 
 
 class KYCStatusSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(
+        source='get_status_display',
+        read_only=True,
+    )
+    admin_review_reason = serializers.SerializerMethodField()
+
     class Meta:
         model = KYCVerification
         fields = (
             'id',
             'status',
+            'status_display',
             'iprs_verified',
+            'iprs_attempted_at',
+            'iprs_error',
+            'admin_review_reason',
+            'manual_verification_reason',
             'submitted_at',
             'rejection_reason',
             'id_front',
@@ -245,6 +256,18 @@ class KYCStatusSerializer(serializers.ModelSerializer):
             'passport',
         )
         read_only_fields = fields
+
+    def get_admin_review_reason(self, obj):
+        if obj.status == KYCVerification.Status.IPRS_MISMATCH:
+            return obj.iprs_error or 'IPRS returned a mismatch.'
+
+        if obj.status == KYCVerification.Status.PENDING_MANUAL:
+            return obj.iprs_error or 'IPRS was unavailable.'
+
+        if obj.status == KYCVerification.Status.PENDING:
+            return 'Awaiting admin KYC review.'
+
+        return ''
 
 
 class KYCUploadSerializer(serializers.Serializer):
@@ -311,6 +334,11 @@ class AdminKYCReviewSerializer(serializers.Serializer):
     )
     rejection_reason = serializers.CharField(
         allow_blank=True,
+        required=False,
+    )
+    manual_verification_reason = serializers.CharField(
+        max_length=255,
+        min_length=10,
         required=False,
     )
 
