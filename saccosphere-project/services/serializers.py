@@ -5,6 +5,8 @@ from rest_framework import serializers
 from saccomembership.models import Membership
 
 from .models import (
+    DividendDeclaration,
+    DividendPayout,
     Guarantor,
     Insurance,
     Loan,
@@ -214,14 +216,138 @@ class SavingsBreakdownSerializer(serializers.Serializer):
     """
     sacco_id = serializers.UUIDField(read_only=True)
     sacco_name = serializers.CharField(read_only=True)
-    bosa_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    fosa_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    share_capital_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    dividend_eligible_total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    total = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    bosa_total = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
+    fosa_total = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
+    share_capital_total = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
+    dividend_eligible_total = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
+    total = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
 
 
 class InsuranceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Insurance
         fields = '__all__'
+
+
+class DividendDeclarationSerializer(serializers.ModelSerializer):
+    sacco_id = serializers.UUIDField(source='sacco.id', read_only=True)
+    savings_type_name = serializers.CharField(
+        source='savings_type.name',
+        read_only=True,
+    )
+    approved_by_email = serializers.EmailField(
+        source='approved_by.email',
+        read_only=True,
+    )
+
+    class Meta:
+        model = DividendDeclaration
+        fields = (
+            'id',
+            'sacco_id',
+            'savings_type',
+            'savings_type_name',
+            'financial_year',
+            'declared_rate',
+            'period_start',
+            'period_end',
+            'status',
+            'calculated_at',
+            'approved_by_email',
+            'total_dividend_amount',
+            'created_at',
+        )
+        read_only_fields = (
+            'id',
+            'sacco_id',
+            'savings_type_name',
+            'status',
+            'calculated_at',
+            'approved_by_email',
+            'total_dividend_amount',
+            'created_at',
+        )
+
+    def validate_savings_type(self, savings_type):
+        sacco = self.context.get('sacco')
+        if sacco and savings_type.sacco_id != sacco.id:
+            raise serializers.ValidationError(
+                'Savings type does not belong to the selected SACCO.'
+            )
+        return savings_type
+
+    def validate(self, attrs):
+        period_start = attrs.get(
+            'period_start',
+            getattr(self.instance, 'period_start', None),
+        )
+        period_end = attrs.get(
+            'period_end',
+            getattr(self.instance, 'period_end', None),
+        )
+
+        if period_start and period_end and period_end < period_start:
+            raise serializers.ValidationError(
+                {'period_end': 'Period end cannot be before period start.'}
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+        return DividendDeclaration.objects.create(
+            sacco=self.context['sacco'],
+            status=DividendDeclaration.Status.DRAFT,
+            **validated_data,
+        )
+
+
+class DividendPayoutSerializer(serializers.ModelSerializer):
+    declaration_financial_year = serializers.CharField(
+        source='declaration.financial_year',
+        read_only=True,
+    )
+    member_name = serializers.CharField(
+        source='membership.user.get_full_name',
+        read_only=True,
+    )
+    member_email = serializers.EmailField(
+        source='membership.user.email',
+        read_only=True,
+    )
+
+    class Meta:
+        model = DividendPayout
+        fields = (
+            'id',
+            'declaration',
+            'declaration_financial_year',
+            'membership',
+            'member_name',
+            'member_email',
+            'saving',
+            'average_balance',
+            'dividend_amount',
+            'status',
+            'created_at',
+        )
+        read_only_fields = fields

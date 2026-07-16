@@ -12,6 +12,8 @@ from rest_framework.generics import (
     ListAPIView,
     ListCreateAPIView,
     RetrieveAPIView,
+    RetrieveUpdateDestroyAPIView,
+    RetrieveUpdateAPIView,
 )
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
@@ -22,6 +24,7 @@ from accounts.models import Sacco, User
 from accounts.permissions import IsSaccoAdmin
 from notifications.utils import create_notification
 from saccomembership.models import Membership
+from saccomanagement.mixins import SaccoScopedMixin
 from saccomanagement.models import Role
 
 from .engines.guarantor_logic import (
@@ -32,6 +35,8 @@ from .engines.loan_limits import calculate_loan_limit
 from .engines.liquidity_monitor import check_liquidity_risk
 from .models import (
     CRBCheck,
+    DividendDeclaration,
+    DividendPayout,
     GuaranteeCapacity,
     Guarantor,
     LiquidityAlert,
@@ -44,6 +49,8 @@ from .models import (
 )
 from .permissions import GuarantorCapacityCheck
 from .serializers import (
+    DividendDeclarationSerializer,
+    DividendPayoutSerializer,
     GuarantorSearchResultSerializer,
     GuarantorSerializer,
     LoanApplySerializer,
@@ -575,7 +582,7 @@ class GuarantorRespondView(APIView):
                     status=Guarantor.Status.APPROVED,
                 ).count()
 
-                # If all required guarantors approved, move to PENDING_APPROVAL.
+                # If all required guarantors approved, move to approval.
                 if approved_count >= total_required and total_required > 0:
                     loan.status = Loan.Status.PENDING_APPROVAL
                     loan.save(update_fields=['status', 'updated_at'])
@@ -958,7 +965,11 @@ class RepaymentScheduleView(ListAPIView):
             return RepaymentSchedule.objects.none()
         
         # Generate schedule if loan is in appropriate status
-        if loan.status not in [Loan.Status.APPROVED, Loan.Status.ACTIVE, Loan.Status.DISBURSEMENT_PENDING]:
+        if loan.status not in [
+            Loan.Status.APPROVED,
+            Loan.Status.ACTIVE,
+            Loan.Status.DISBURSEMENT_PENDING,
+        ]:
             return RepaymentSchedule.objects.none()
         
         # Use disbursement date or today as start date
@@ -1043,7 +1054,10 @@ class CRBCheckView(APIView):
         phone_number = loan.membership.user.phone_number
         
         # Check for existing recent CRB check (within 30 days)
-        force_refresh = request.query_params.get('force_refresh', 'false').lower() == 'true'
+        force_refresh = (
+            request.query_params.get('force_refresh', 'false').lower()
+            == 'true'
+        )
         
         if not force_refresh:
             cutoff_date = timezone.now() - timedelta(days=30)
@@ -1099,3 +1113,317 @@ class CRBCheckView(APIView):
         }, status=status.HTTP_201_CREATED)
 
 
+
+
+class DividendDeclarationListCreateView(SaccoScopedMixin, ListCreateAPIView):
+    """List and create dividend declarations for a SACCO."""
+
+    serializer_class = DividendDeclarationSerializer
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    pagination_class = None
+
+    def get(self, request, *args, **kwargs):
+        response = self._set_sacco_context()
+        if response:
+            return response
+        return super().get(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        response = self._set_sacco_context()
+        if response:
+            return response
+        return super().post(request, *args, **kwargs)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({'success': True, 'data': serializer.data})
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['sacco'] = self.get_sacco_context()
+        return context
+
+    def get_queryset(self):
+        return self.apply_sacco_scope(
+            DividendDeclaration.objects.select_related(
+                'sacco',
+                'savings_type',
+                'approved_by',
+            )
+        )
+
+
+class DividendDeclarationDetailView(
+    SaccoScopedMixin,
+    RetrieveUpdateDestroyAPIView,
+):
+    """Retrieve, update, or delete a dividend declaration."""
+
+    serializer_class = DividendDeclarationSerializer
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    lookup_url_kwarg = 'uuid'
+
+    def get(self, request, *args, **kwargs):
+        response = self._set_sacco_context()
+        if response:
+            return response
+        return super().get(request, *args, **kwargs)
+
+    def put(self, request, *args, **kwargs):
+        response = self._set_sacco_context()
+        if response:
+            return response
+        return super().put(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        response = self._set_sacco_context()
+        if response:
+            return response
+        return super().patch(request, *args, **kwargs)
+
+    def delete(self, request, *args, **kwargs):
+        response = self._set_sacco_context()
+        if response:
+            return response
+        return super().delete(request, *args, **kwargs)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['sacco'] = self.get_sacco_context()
+        return context
+
+    def get_queryset(self):
+        return self.apply_sacco_scope(
+            DividendDeclaration.objects.select_related(
+                'sacco',
+                'savings_type',
+                'approved_by',
+            )
+        )
+
+    def get_object(self):
+        if 'pk' in self.kwargs and 'uuid' not in self.kwargs:
+            self.kwargs['uuid'] = self.kwargs['pk']
+        return super().get_object()
+
+    def perform_update(self, serializer):
+        declaration = self.get_object()
+
+        if declaration.status != DividendDeclaration.Status.DRAFT:
+            from rest_framework import serializers
+
+            raise serializers.ValidationError(
+                'Can only edit declarations in DRAFT status.'
+            )
+
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if instance.status != DividendDeclaration.Status.DRAFT:
+            from rest_framework import serializers
+
+            raise serializers.ValidationError(
+                'Can only delete declarations in DRAFT status.'
+            )
+
+        instance.delete()
+
+
+class DividendCalculateView(SaccoScopedMixin, APIView):
+    """Calculate dividends for a declaration."""
+
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+
+    def post(self, request, uuid=None, pk=None):
+        response = self._set_sacco_context()
+        if response:
+            return response
+
+        from services.engines.dividend_calculator import (
+            calculate_dividends_for_declaration,
+        )
+
+        declaration = get_object_or_404(
+            self.apply_sacco_scope(
+                DividendDeclaration.objects.filter(id=uuid or pk)
+            )
+        )
+
+        try:
+            with transaction.atomic():
+                result = calculate_dividends_for_declaration(declaration)
+        except ValueError as exc:
+            return Response(
+                {'detail': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                'total_dividend_amount': result['total_dividend_amount'],
+                'payout_count': result['payout_count'],
+            }
+        )
+
+
+class DividendApproveView(SaccoScopedMixin, APIView):
+    """Approve a calculated dividend declaration."""
+
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+
+    def post(self, request, uuid=None, pk=None):
+        response = self._set_sacco_context()
+        if response:
+            return response
+
+        with transaction.atomic():
+            declaration = get_object_or_404(
+                self.apply_sacco_scope(
+                    DividendDeclaration.objects.select_for_update().filter(
+                        id=uuid or pk,
+                    )
+                )
+            )
+
+            if declaration.status != DividendDeclaration.Status.CALCULATED:
+                return Response(
+                    {
+                        'detail': (
+                            'Can only approve declarations in CALCULATED '
+                            'status.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            declaration.status = DividendDeclaration.Status.APPROVED
+            declaration.approved_by = request.user
+            declaration.save(update_fields=['status', 'approved_by'])
+
+        return Response(
+            {
+                'id': str(declaration.id),
+                'status': declaration.status,
+                'approved_by': request.user.email,
+            }
+        )
+
+
+class DividendDisburseView(SaccoScopedMixin, APIView):
+    """Disburse approved dividends to member savings."""
+
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+
+    def post(self, request, uuid=None, pk=None):
+        response = self._set_sacco_context()
+        if response:
+            return response
+
+        from ledger.models import LedgerEntry
+        from ledger.utils import create_ledger_entry
+
+        with transaction.atomic():
+            declaration = get_object_or_404(
+                self.apply_sacco_scope(
+                    DividendDeclaration.objects.select_for_update().filter(
+                        id=uuid or pk,
+                    )
+                )
+            )
+
+            if declaration.status != DividendDeclaration.Status.APPROVED:
+                return Response(
+                    {
+                        'detail': (
+                            'Can only disburse declarations in APPROVED '
+                            'status.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            payout_ids = list(
+                declaration.payouts.filter(
+                    status=DividendPayout.Status.PENDING,
+                ).values_list('id', flat=True)
+            )
+            paid_count = 0
+
+            for start in range(0, len(payout_ids), 500):
+                batch_ids = payout_ids[start:start + 500]
+                batch_payouts = DividendPayout.objects.select_related(
+                    'membership',
+                    'saving',
+                ).select_for_update().filter(id__in=batch_ids)
+
+                for payout in batch_payouts:
+                    ledger_entry = create_ledger_entry(
+                        membership=payout.membership,
+                        entry_type=LedgerEntry.EntryType.CREDIT,
+                        category=LedgerEntry.Category.DIVIDEND_PAYOUT,
+                        amount=payout.dividend_amount,
+                        description=(
+                            'Dividend payout for '
+                            f'{declaration.financial_year}'
+                        ),
+                        reference=f'DIV-{declaration.id}-{payout.id}',
+                    )
+
+                    if ledger_entry is None:
+                        raise RuntimeError(
+                            'Failed to create dividend ledger entry.'
+                        )
+
+                    payout.saving.amount += payout.dividend_amount
+                    payout.saving.save(update_fields=['amount', 'updated_at'])
+
+                    payout.status = DividendPayout.Status.PAID
+                    payout.save(update_fields=['status'])
+                    paid_count += 1
+
+            declaration.status = DividendDeclaration.Status.DISBURSED
+            declaration.save(update_fields=['status'])
+
+        return Response(
+            {
+                'id': str(declaration.id),
+                'status': declaration.status,
+                'paid_count': paid_count,
+            }
+        )
+
+
+class DividendPayoutListView(SaccoScopedMixin, ListAPIView):
+    """List dividend payouts for a SACCO, filterable by declaration."""
+
+    serializer_class = DividendPayoutSerializer
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    pagination_class = None
+
+    def get(self, request, *args, **kwargs):
+        response = self._set_sacco_context()
+        if response:
+            return response
+        return super().get(request, *args, **kwargs)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({'success': True, 'data': serializer.data})
+
+    def get_queryset(self):
+        queryset = self.get_sacco_queryset(
+            DividendPayout.objects.select_related(
+                'declaration',
+                'membership__user',
+                'saving',
+            ),
+            sacco_field='declaration__sacco',
+        )
+
+        declaration_id = self.request.query_params.get('declaration')
+        if declaration_id:
+            queryset = queryset.filter(declaration_id=declaration_id)
+
+        return queryset.order_by('-created_at')

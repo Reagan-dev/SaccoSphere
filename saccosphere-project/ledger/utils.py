@@ -18,6 +18,7 @@ CATEGORY_PREFIXES = {
     LedgerEntry.Category.FEE: 'FEE',
     LedgerEntry.Category.PENALTY: 'FEE',
     LedgerEntry.Category.DIVIDEND: 'SAV',
+    LedgerEntry.Category.DIVIDEND_PAYOUT: 'DIV',
     LedgerEntry.Category.ADJUSTMENT: 'ADJ',
 }
 

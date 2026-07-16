@@ -5,7 +5,16 @@ from guarantor.external_views import (
     ExternalGuarantorAdminListView,
     ExternalGuarantorAdminReviewView,
 )
-from services.views import LiquidityStatusView, NPLDashboardView
+from services.views import (
+    DividendApproveView,
+    DividendCalculateView,
+    DividendDeclarationDetailView,
+    DividendDeclarationListCreateView,
+    DividendDisburseView,
+    DividendPayoutListView,
+    LiquidityStatusView,
+    NPLDashboardView,
+)
 
 from .admin_views import AdminLoanApprovalView, LoanApprovalListView
 from .bulk_sms_views import (
@@ -122,6 +131,36 @@ urlpatterns = [
         'npl/',
         NPLDashboardView.as_view(),
         name='npl-dashboard',
+    ),
+    path(
+        'dividends/declarations/',
+        DividendDeclarationListCreateView.as_view(),
+        name='dividend-declaration-collection',
+    ),
+    path(
+        'dividends/declarations/<uuid:pk>/',
+        DividendDeclarationDetailView.as_view(),
+        name='dividend-declaration-detail',
+    ),
+    path(
+        'dividends/declarations/<uuid:pk>/calculate/',
+        DividendCalculateView.as_view(),
+        name='dividend-calculate',
+    ),
+    path(
+        'dividends/declarations/<uuid:pk>/approve/',
+        DividendApproveView.as_view(),
+        name='dividend-approve',
+    ),
+    path(
+        'dividends/declarations/<uuid:pk>/disburse/',
+        DividendDisburseView.as_view(),
+        name='dividend-disburse',
+    ),
+    path(
+        'dividends/payouts/',
+        DividendPayoutListView.as_view(),
+        name='dividend-payout-list',
     ),
     path(
         'external-guarantors/',

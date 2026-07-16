@@ -1458,3 +1458,153 @@ class CRBCheck(models.Model):
 
         return f'CRB Check for {self.loan} — {self.band or "Pending"}'
 
+class DividendDeclaration(models.Model):
+    """
+    Dividend declaration for a SACCO savings type and financial year.
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Draft'
+        CALCULATED = 'CALCULATED', 'Calculated'
+        APPROVED = 'APPROVED', 'Approved'
+        DISBURSED = 'DISBURSED', 'Disbursed'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+        help_text='Unique dividend declaration identifier.',
+    )
+    sacco = models.ForeignKey(
+        'accounts.Sacco',
+        on_delete=models.CASCADE,
+        related_name='dividend_declarations',
+        help_text='SACCO this declaration belongs to.',
+    )
+    savings_type = models.ForeignKey(
+        'SavingsType',
+        on_delete=models.PROTECT,
+        related_name='dividend_declarations',
+        help_text='Savings type this declaration applies to.',
+    )
+    financial_year = models.CharField(
+        max_length=20,
+        help_text='Financial year (e.g., 2025/2026).',
+    )
+    declared_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        help_text='Annual dividend rate percentage.',
+    )
+    period_start = models.DateField(
+        help_text='Start date of dividend calculation period.',
+    )
+    period_end = models.DateField(
+        help_text='End date of dividend calculation period.',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        help_text='Declaration status.',
+    )
+    calculated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Date and time dividends were calculated.',
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='approved_dividend_declarations',
+        help_text='User who approved this declaration.',
+    )
+    total_dividend_amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text='Total dividend amount calculated.',
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        help_text='Date and time this declaration was created.',
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Dividend Declaration'
+        verbose_name_plural = 'Dividend Declarations'
+
+    def __str__(self):
+        return (
+            f'{self.sacco.name} - {self.financial_year} - '
+            f'{self.savings_type.name}'
+        )
+
+
+class DividendPayout(models.Model):
+    """
+    Individual dividend payout for a member's saving.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        CREDITED = 'CREDITED', 'Credited'
+        PAID = 'PAID', 'Paid'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+        help_text='Unique dividend payout identifier.',
+    )
+    declaration = models.ForeignKey(
+        DividendDeclaration,
+        on_delete=models.CASCADE,
+        related_name='payouts',
+        help_text='Dividend declaration this payout belongs to.',
+    )
+    membership = models.ForeignKey(
+        'saccomembership.Membership',
+        on_delete=models.CASCADE,
+        related_name='dividend_payouts',
+        help_text='Membership receiving this dividend.',
+    )
+    saving = models.ForeignKey(
+        'Saving',
+        on_delete=models.CASCADE,
+        related_name='dividend_payouts',
+        help_text='Saving account this dividend is based on.',
+    )
+    average_balance = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        help_text='Average monthly balance during calculation period.',
+    )
+    dividend_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        help_text='Dividend amount calculated.',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        help_text='Payout status.',
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text='Date and time this payout was created.',
+    )
+
+    class Meta:
+        ordering = ['declaration', 'membership']
+        unique_together = ['declaration', 'saving']
+        verbose_name = 'Dividend Payout'
+        verbose_name_plural = 'Dividend Payouts'
+
+    def __str__(self):
+        return f'{self.membership} - {self.dividend_amount}'
