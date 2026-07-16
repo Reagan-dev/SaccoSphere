@@ -733,6 +733,10 @@ class KYCVerification(models.Model):
 
         PENDING = 'PENDING', 'Pending'
 
+        IPRS_MISMATCH = 'IPRS_MISMATCH', 'IPRS mismatch'
+
+        PENDING_MANUAL = 'PENDING_MANUAL', 'Pending manual review'
+
         APPROVED = 'APPROVED', 'Approved'
 
         REJECTED = 'REJECTED', 'Rejected'
@@ -862,6 +866,40 @@ class KYCVerification(models.Model):
         blank=True,
 
         help_text='IPRS verification reference number.',
+
+    )
+
+    iprs_attempted_at = models.DateTimeField(
+
+        null=True,
+
+        blank=True,
+
+        help_text='Date and time IPRS verification was last attempted.',
+
+    )
+
+    iprs_error = models.CharField(
+
+        max_length=255,
+
+        null=True,
+
+        blank=True,
+
+        help_text='Short IPRS error or mismatch reason.',
+
+    )
+
+    manual_verification_reason = models.CharField(
+
+        max_length=255,
+
+        null=True,
+
+        blank=True,
+
+        help_text='Admin reason for approving a manually verified KYC.',
 
     )
 
