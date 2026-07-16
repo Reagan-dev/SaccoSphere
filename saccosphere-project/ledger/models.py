@@ -16,6 +16,7 @@ class LedgerEntry(models.Model):
         FEE = 'FEE', 'Fee'
         PENALTY = 'PENALTY', 'Penalty'
         DIVIDEND = 'DIVIDEND', 'Dividend'
+        DIVIDEND_PAYOUT = 'DIVIDEND_PAYOUT', 'Dividend payout'
         ADJUSTMENT = 'ADJUSTMENT', 'Adjustment'
 
     id = models.UUIDField(
