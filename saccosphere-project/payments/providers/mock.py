@@ -20,10 +20,9 @@ class MockPSPProvider(BasePSPProvider):
         self,
         transaction_id: str,
         phone: str,
-        gross_amount: Decimal,
-        net_amount: Decimal,
-        platform_fee: Decimal,
+        amount: Decimal,
         sacco,
+        **kwargs,
     ) -> CheckoutResult:
         """Create a fake checkout response without contacting any external PSP."""
         logger.info(
@@ -38,9 +37,7 @@ class MockPSPProvider(BasePSPProvider):
             raw_response={
                 "transaction_id": transaction_id,
                 "provider_reference": provider_reference,
-                "gross_amount": str(gross_amount),
-                "net_amount": str(net_amount),
-                "platform_fee": str(platform_fee),
+                "amount": str(amount),
             },
             success=True,
         )

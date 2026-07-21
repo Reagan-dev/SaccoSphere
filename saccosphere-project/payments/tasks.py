@@ -9,7 +9,7 @@ from notifications.tasks import notify_user_task
 
 from ledger.utils import create_ledger_entry
 
-from .models import Callback, MpesaTransaction, PlatformFee, Transaction
+from .models import Callback, MpesaTransaction, Transaction
 from .providers.registry import get_provider_class
 
 
@@ -83,11 +83,11 @@ def process_payment_callback(self, callback_id):
         return True
 
     provider = get_provider_class(callback.provider.name)()
-    result = provider.parse_callback(callback.payload)
+    result = provider.parse_callback(callback.raw_payload)
 
-    transaction_id = callback.payload.get('merchantTransactionID')
+    transaction_id = callback.raw_payload.get('merchantTransactionID')
     if not transaction_id:
-        transaction_id = callback.payload.get('transaction_id')
+        transaction_id = callback.raw_payload.get('transaction_id')
 
     with db_transaction.atomic():
         try:
@@ -100,19 +100,12 @@ def process_payment_callback(self, callback_id):
 
         if transaction.status == Transaction.Status.COMPLETED:
             callback.processed = True
-            callback.save(update_fields=['processed', 'updated_at'])
+            callback.save(update_fields=['processed'])
             return True
 
         if result.is_successful:
             transaction.status = Transaction.Status.COMPLETED
             transaction.save(update_fields=['status', 'updated_at'])
-            PlatformFee.objects.create(
-                transaction=transaction,
-                fee_type=PlatformFee.FeeType.TRANSACTION_PCT,
-                amount=transaction.fee_amount,
-                invoice_number=str(transaction.id),
-                processed=True,
-            )
             if getattr(transaction, 'membership', None) is not None:
                 create_ledger_entry(
                     membership=transaction.membership,
@@ -147,7 +140,7 @@ def process_payment_callback(self, callback_id):
             logger.info('Transaction %s remains pending', transaction.id)
 
         callback.processed = True
-        callback.save(update_fields=['processed', 'updated_at'])
+        callback.save(update_fields=['processed'])
 
     return True
 
@@ -293,25 +286,25 @@ def _process_successful_callback(
         update_fields=['status', 'external_reference', 'updated_at']
     )
 
-    # Reconcile callback amount with expected gross amount
-    expected_gross = transaction.amount + (transaction.fee_amount or Decimal('0.00'))
-    amount_difference = abs(callback_amount - expected_gross)
+    # Reconcile callback amount with expected transaction amount
+    expected_amount = transaction.amount
+    amount_difference = abs(callback_amount - expected_amount)
     if amount_difference > Decimal('0.01'):
         logger.warning(
             'M-Pesa callback amount mismatch for transaction_id=%s: '
-            'callback_amount=%s, expected_gross=%s, difference=%s',
+            'callback_amount=%s, expected_amount=%s, difference=%s',
             transaction.id,
             callback_amount,
-            expected_gross,
+            expected_amount,
             amount_difference,
         )
     else:
         logger.info(
             'M-Pesa callback amount reconciled for transaction_id=%s: '
-            'callback_amount=%s matches expected_gross=%s',
+            'callback_amount=%s matches expected_amount=%s',
             transaction.id,
             callback_amount,
-            expected_gross,
+            expected_amount,
         )
 
     # Use net amount (transaction.amount) for crediting, not gross callback amount
