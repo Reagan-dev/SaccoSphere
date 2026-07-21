@@ -371,10 +371,7 @@ class PlatformFee(models.Model):
         blank=True,
         help_text='Optional invoice number for this fee.',
     )
-    processed = models.BooleanField(
-        default=False,
-        help_text='Whether this platform fee has been processed.',
-    )
+    # To be refactored in Prompt 4
     created_at = models.DateTimeField(
         auto_now_add=True,
         help_text='Date and time this fee was created.',

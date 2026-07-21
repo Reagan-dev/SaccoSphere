@@ -84,9 +84,8 @@ class PlatformFeeAdmin(admin.ModelAdmin):
         'amount',
         'transaction',
         'invoice_number',
-        'processed',
         'created_at',
     )
-    list_filter = ('fee_type', 'processed')
+    list_filter = ('fee_type',)
     search_fields = ('invoice_number', 'transaction__reference')
     readonly_fields = ('created_at',)

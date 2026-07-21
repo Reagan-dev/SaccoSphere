@@ -41,10 +41,9 @@ class BasePSPProvider(ABC):
         self,
         transaction_id: str,
         phone: str,
-        gross_amount: Decimal,
-        net_amount: Decimal,
-        platform_fee: Decimal,
+        amount: Decimal,
         sacco: "Sacco",
+        **kwargs,
     ) -> CheckoutResult:
         """Create a checkout request for a payment transaction."""
 

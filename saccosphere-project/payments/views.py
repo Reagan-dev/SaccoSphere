@@ -1,6 +1,6 @@
 import json
 import logging
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from uuid import uuid4
 
 from django.conf import settings
@@ -19,13 +19,13 @@ from rest_framework.views import APIView
 
 from accounts.models import Sacco
 from accounts.permissions import IsSaccoAdmin
-from billing.services import TRANSACTION_FEE_RATE
 from config.response import StandardResponseMixin
 from guarantor.utils import check_loan_guarantors_complete
 from payments.providers import get_psp_provider
 from services.models import Loan, Saving
 
 from .integrations.mpesa.daraja import DarajaClient, DarajaError
+from .fee_calculator import SaccoInvoiceFeeCalculator
 
 logger = logging.getLogger('saccosphere.payments')
 from .integrations.mpesa.security import (
@@ -46,23 +46,54 @@ from .validators import validate_mpesa_phone
 class DepositRequestSerializer(serializers.Serializer):
     """Validate the fields required to initiate a PSP-backed deposit."""
 
-    phone = serializers.CharField(max_length=15)
-    gross_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
-    net_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
-    platform_fee = serializers.DecimalField(max_digits=12, decimal_places=2)
-    sacco = serializers.PrimaryKeyRelatedField(queryset=Sacco.objects.all())
+    phone_number = serializers.CharField(max_length=15)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    sacco_id = serializers.PrimaryKeyRelatedField(
+        source='sacco',
+        queryset=Sacco.objects.all(),
+    )
 
-    def validate(self, attrs):
-        gross_amount = attrs.get('gross_amount', Decimal('0.00'))
-        net_amount = attrs.get('net_amount', Decimal('0.00'))
-        platform_fee = attrs.get('platform_fee', Decimal('0.00'))
+    def validate_phone_number(self, value):
+        return validate_mpesa_phone(value)
 
-        if gross_amount != net_amount + platform_fee:
+    def validate_amount(self, value):
+        if value <= Decimal('0.00'):
             raise serializers.ValidationError(
-                'gross_amount must equal net_amount plus platform_fee.'
+                'Amount must be greater than zero.'
             )
 
-        return attrs
+        if value > Decimal('300000.00'):
+            raise serializers.ValidationError(
+                'Amount cannot be more than 300000.'
+            )
+
+        return value
+
+    def validate(self, data):
+        """Compute fee breakdown and attach to validated data.
+
+        The frontend expects to preview the gross amount (what the member will
+        be charged), the platform fee, and the net amount that will be
+        credited to savings.
+        """
+        net_amount = data['amount']
+        fee_rate = getattr(settings, 'PLATFORM_FEES', {}).get('deposit')
+        from decimal import Decimal as _Decimal
+
+        if fee_rate is None:
+            fee_rate = _Decimal('0.01')
+        else:
+            fee_rate = _Decimal(str(fee_rate))
+
+        platform_fee = (net_amount * fee_rate).quantize(_Decimal('0.01'))
+        gross_amount = (net_amount + platform_fee).quantize(_Decimal('0.01'))
+
+        data['net_amount'] = net_amount
+        data['platform_fee'] = platform_fee
+        data['gross_amount'] = gross_amount
+        data['fee_rate'] = fee_rate
+
+        return data
 
 
 class STKPushRequestSerializer(serializers.Serializer):
@@ -184,9 +215,11 @@ class DepositInitiateView(APIView):
             description='Deposit initiated',
             metadata={
                 'sacco_id': str(sacco.id),
-                'gross_amount': str(data['gross_amount']),
+                'amount': str(data['net_amount']),
                 'net_amount': str(data['net_amount']),
                 'platform_fee': str(data['platform_fee']),
+                'gross_amount': str(data['gross_amount']),
+                'fee_rate': str(data['fee_rate']),
             },
         )
 
@@ -195,11 +228,11 @@ class DepositInitiateView(APIView):
                 transaction.save()
                 result = provider.create_checkout(
                     transaction_id=str(transaction.id),
-                    phone=data['phone'],
-                    gross_amount=data['gross_amount'],
+                    phone=data['phone_number'],
+                    amount=data['gross_amount'],
+                    sacco=sacco,
                     net_amount=data['net_amount'],
                     platform_fee=data['platform_fee'],
-                    sacco=sacco,
                 )
                 transaction.external_reference = result.provider_reference
                 transaction.save(update_fields=['external_reference', 'updated_at'])
@@ -216,18 +249,18 @@ class DepositInitiateView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        # Format breakdown for frontend confirmation
+        def fmt(v):
+            return f"KES {v:,.2f}"
+
         return Response(
             {
                 'transaction_id': str(transaction.id),
-                'gross_amount': str(transaction.metadata.get('gross_amount', '0.00')),
-                'net_amount': str(transaction.metadata.get('net_amount', '0.00')),
-                'platform_fee': str(transaction.metadata.get('platform_fee', '0.00')),
+                'amount_depositing': fmt(data['net_amount']),
+                'platform_fee': fmt(data['platform_fee']),
+                'total_charged': fmt(data['gross_amount']),
+                'savings_credited': fmt(data['net_amount']),
                 'status': transaction.status,
-                'fee_breakdown': {
-                    'platform_fee': str(transaction.fee_amount),
-                    'gross_amount': str(data['gross_amount']),
-                    'net_amount': str(data['net_amount']),
-                },
             },
             status=status.HTTP_200_OK,
         )
@@ -287,7 +320,7 @@ class PaymentCallbackView(APIView):
         except Exception as exc:
             logger.exception('Failed to enqueue callback processing for %s', callback.id)
             callback.processing_error = str(exc)
-            callback.save(update_fields=['processing_error', 'updated_at'])
+            callback.save(update_fields=['processing_error'])
 
         return Response({'received': True}, status=status.HTTP_200_OK)
 
@@ -371,17 +404,12 @@ class STKPushView(APIView):
 
         reference = self._build_reference()
 
-        # Calculate fee and gross amount upfront
-        net_amount = data['amount']
-        fee_amount = (
-            net_amount * TRANSACTION_FEE_RATE
-        ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-        gross_amount = net_amount + fee_amount
+        amount = data['amount']
 
         try:
             daraja_response = DarajaClient().initiate_stk_push(
                 phone_number=data['phone_number'],
-                amount=gross_amount,
+                amount=amount,
                 account_reference=reference,
                 description=description,
                 callback_path='/api/v1/payments/callback/mpesa/stk/',
@@ -413,16 +441,13 @@ class STKPushView(APIView):
                 reference=reference,
                 external_reference=checkout_request_id,
                 transaction_type=transaction_type,
-                amount=net_amount,
-                fee_amount=fee_amount,
+                amount=amount,
                 status=Transaction.Status.PENDING,
                 description=description,
                 metadata={
                     'purpose': data['purpose'],
                     'sacco_id': str(data['sacco_id']),
-                    'gross_amount': str(gross_amount),
-                    'net_amount': str(net_amount),
-                    'fee_amount': str(fee_amount),
+                    'amount': str(amount),
                     'daraja_response': daraja_response,
                 },
             )
@@ -444,17 +469,14 @@ class STKPushView(APIView):
 
         message = (
             f'Check your phone to enter your M-Pesa PIN. '
-            f'You will be charged KES {gross_amount} total: '
-            f'KES {net_amount} for {amount_description} + KES {fee_amount} platform fee.'
+            f'You will be charged KES {amount} for {amount_description}.'
         )
 
         return Response(
             {
                 'checkout_request_id': checkout_request_id,
                 'merchant_request_id': merchant_request_id,
-                'net_amount': str(net_amount),
-                'fee_amount': str(fee_amount),
-                'gross_amount': str(gross_amount),
+                'amount': str(amount),
                 'message': message,
             },
             status=status.HTTP_201_CREATED,
@@ -521,6 +543,43 @@ class STKStatusView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class FeePreviewView(APIView):
+    """Return a human-readable fee breakdown for a given transaction type.
+
+    Query params: ?type=deposit|repayment|disbursement|withdrawal&amount=1000
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        tx_type = request.query_params.get('type')
+        try:
+            amount = Decimal(request.query_params.get('amount', '0'))
+        except Exception:
+            return Response({'detail': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+
+        calc = SaccoInvoiceFeeCalculator()
+        breakdown = calc.calculate(tx_type, amount)
+
+        if tx_type in ('deposit', 'repayment'):
+            summary = {
+                'you_pay': f"KES {breakdown['gross_amount']:,.2f}",
+                'fee_line': f"Includes KES {breakdown['platform_fee']:,.2f} platform fee",
+                'sacco_receives': f"KES {breakdown['gross_amount']:,.2f}",
+                'credited_to_you': f"KES {breakdown['net_amount']:,.2f}",
+                'note': 'The platform fee is included in your payment.',
+            }
+        else:
+            summary = {
+                'amount_approved': f"KES {breakdown['gross_amount']:,.2f}",
+                'platform_fee': f"KES {breakdown['platform_fee']:,.2f}",
+                'you_receive': f"KES {breakdown['net_amount']:,.2f}",
+                'note': 'Platform fee deducted from disbursed amount.',
+            }
+
+        return Response({**breakdown, 'summary': summary})
 
 
 class MPesaSTKCallbackView(APIView):
