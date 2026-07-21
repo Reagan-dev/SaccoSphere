@@ -19,6 +19,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.response import StandardResponseMixin
+from saccomanagement.audit_logger import log_audit
 from saccomanagement.odpc_logging import DataAccessMixin
 
 from .integrations.iprs_client import IPRSClient, IPRSError
@@ -79,14 +80,37 @@ def get_user_by_phone_number(phone_number):
 
 def apply_iprs_result(kyc, result):
     """Save IPRS verification details on a KYC record."""
+    outcome = result.get('outcome')
+    if not outcome and result.get('verified'):
+        outcome = 'verified'
+
     kyc.id_number = result.get('id_number') or kyc.id_number
-    kyc.iprs_verified = bool(result.get('verified'))
+    kyc.iprs_verified = outcome == 'verified'
     kyc.iprs_reference = result.get('iprs_reference') or ''
+    kyc.iprs_attempted_at = timezone.now()
+    kyc.iprs_error = result.get('error') or ''
+
+    if outcome == 'mismatch':
+        kyc.status = KYCVerification.Status.IPRS_MISMATCH
+    elif outcome == 'unavailable':
+        kyc.status = KYCVerification.Status.PENDING_MANUAL
+    elif outcome == 'verified' and kyc.status in {
+        KYCVerification.Status.IPRS_MISMATCH,
+        KYCVerification.Status.PENDING_MANUAL,
+    }:
+        if kyc.id_front and kyc.id_back:
+            kyc.status = KYCVerification.Status.PENDING
+        else:
+            kyc.status = KYCVerification.Status.NOT_STARTED
+
     kyc.save(
         update_fields=[
             'id_number',
             'iprs_verified',
             'iprs_reference',
+            'iprs_attempted_at',
+            'iprs_error',
+            'status',
         ],
     )
 
@@ -298,9 +322,19 @@ class KYCUploadView(APIView):
     def _auto_verify_id(self, kyc):
         """Run IPRS during upload without blocking document submission."""
         try:
-            result = IPRSClient().verify_id(kyc.id_number)
+            result = IPRSClient().verify_id(
+                kyc.id_number,
+                date_of_birth=kyc.user.date_of_birth,
+                full_name=kyc.user.get_full_name(),
+            )
         except IPRSError:
-            return
+            result = {
+                'outcome': 'unavailable',
+                'verified': False,
+                'id_number': kyc.id_number,
+                'iprs_reference': '',
+                'error': 'IPRS request failed.',
+            }
 
         apply_iprs_result(kyc, result)
 
@@ -339,26 +373,26 @@ class KYCSubmitIDView(APIView):
         )
 
         try:
-            result = IPRSClient().verify_id(id_number, date_of_birth)
-        except IPRSError:
-            kyc.id_number = id_number
-            kyc.iprs_verified = False
-            kyc.save(update_fields=['id_number', 'iprs_verified'])
-            return Response(
-                {
-                    'iprs_verified': False,
-                    'message': (
-                        'Verification service unavailable. Admin will '
-                        'review manually.'
-                    ),
-                },
-                status=status.HTTP_200_OK,
+            result = IPRSClient().verify_id(
+                id_number,
+                date_of_birth=date_of_birth,
+                full_name=request.user.get_full_name(),
             )
+        except IPRSError:
+            result = {
+                'outcome': 'unavailable',
+                'verified': False,
+                'id_number': id_number,
+                'iprs_reference': '',
+                'error': 'IPRS request failed.',
+            }
 
         apply_iprs_result(kyc, result)
         return Response(
             {
+                'outcome': result.get('outcome'),
                 'iprs_verified': kyc.iprs_verified,
+                'status': kyc.status,
                 'id_number': kyc.id_number,
                 'name': result.get('name'),
                 'iprs_reference': kyc.iprs_reference,
@@ -444,6 +478,36 @@ class AdminKYCReviewView(AdminKYCQuerysetMixin, UpdateAPIView):
             'rejection_reason',
             '',
         )
+        manual_verification_reason = serializer.validated_data.get(
+            'manual_verification_reason',
+            '',
+        )
+        previous_status = kyc.status
+        old_values = {
+            'status': previous_status,
+            'iprs_verified': kyc.iprs_verified,
+            'iprs_error': kyc.iprs_error,
+            'manual_verification_reason': kyc.manual_verification_reason,
+        }
+
+        requires_manual_reason = previous_status in {
+            KYCVerification.Status.IPRS_MISMATCH,
+            KYCVerification.Status.PENDING_MANUAL,
+        }
+        if (
+            review_status == KYCVerification.Status.APPROVED
+            and requires_manual_reason
+            and not manual_verification_reason
+        ):
+            return Response(
+                {
+                    'manual_verification_reason': (
+                        'Manual verification reason is required when '
+                        'approving KYC after IPRS did not clear.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         kyc.status = review_status
         kyc.rejection_reason = rejection_reason
@@ -453,8 +517,29 @@ class AdminKYCReviewView(AdminKYCQuerysetMixin, UpdateAPIView):
         if review_status == KYCVerification.Status.APPROVED:
             kyc.verified_at = timezone.now()
             update_fields.append('verified_at')
+            if manual_verification_reason:
+                kyc.manual_verification_reason = manual_verification_reason
+                update_fields.append('manual_verification_reason')
 
         kyc.save(update_fields=update_fields)
+        if review_status == KYCVerification.Status.APPROVED:
+            log_audit(
+                user=request.user,
+                action='APPROVE_KYC',
+                resource_type='KYCVerification',
+                resource_id=kyc.id,
+                old_values=old_values,
+                new_values={
+                    'status': kyc.status,
+                    'reviewed_by': str(request.user.id),
+                    'manual_verification_reason': (
+                        kyc.manual_verification_reason
+                    ),
+                    'iprs_error': kyc.iprs_error,
+                },
+                request=request,
+            )
+
         self._notify_member(kyc)
 
         response_serializer = KYCStatusSerializer(
@@ -512,7 +597,13 @@ class AdminKYCQueueView(DataAccessMixin, AdminKYCQuerysetMixin, ListAPIView):
         if review_status:
             queryset = queryset.filter(status=review_status)
         else:
-            queryset = queryset.filter(status=KYCVerification.Status.PENDING)
+            queryset = queryset.filter(
+                status__in=[
+                    KYCVerification.Status.PENDING,
+                    KYCVerification.Status.IPRS_MISMATCH,
+                    KYCVerification.Status.PENDING_MANUAL,
+                ]
+            )
 
         if search:
             queryset = queryset.filter(

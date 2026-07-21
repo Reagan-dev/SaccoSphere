@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from django.conf import settings
+from django.core.validators import MaxLengthValidator
 from django.db import models
 
 
@@ -61,6 +62,100 @@ class DataConsentLog(models.Model):
             f'{self.accessed_by.email} accessed {self.user.email} '
             f'{self.data_type}'
         )
+
+
+class SMSCampaign(models.Model):
+    """Bulk SMS campaign prepared by a SACCO admin."""
+
+    MAX_MESSAGE_LENGTH = 918
+
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', 'Draft'
+        QUEUED = 'QUEUED', 'Queued'
+        SENDING = 'SENDING', 'Sending'
+        COMPLETED = 'COMPLETED', 'Completed'
+        FAILED = 'FAILED', 'Failed'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    sacco = models.ForeignKey(
+        'accounts.Sacco',
+        on_delete=models.CASCADE,
+        related_name='sms_campaigns',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='created_sms_campaigns',
+    )
+    message = models.TextField(
+        validators=[MaxLengthValidator(MAX_MESSAGE_LENGTH)],
+    )
+    audience_filter = models.JSONField(default=dict)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
+    total_recipients = models.PositiveIntegerField(default=0)
+    sent_count = models.PositiveIntegerField(default=0)
+    failed_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.sacco.name} SMS campaign {self.id}'
+
+
+class SMSCampaignRecipient(models.Model):
+    """Individual member recipient for a bulk SMS campaign."""
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        SENT = 'SENT', 'Sent'
+        FAILED = 'FAILED', 'Failed'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    campaign = models.ForeignKey(
+        SMSCampaign,
+        on_delete=models.CASCADE,
+        related_name='recipients',
+    )
+    membership = models.ForeignKey(
+        'saccomembership.Membership',
+        on_delete=models.CASCADE,
+        related_name='sms_campaign_recipients',
+    )
+    phone_number = models.CharField(max_length=20)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    sent_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ['id']
+        unique_together = ['campaign', 'membership']
+
+    def __str__(self):
+        return f'{self.campaign_id} - {self.phone_number} - {self.status}'
 
 
 class Role(models.Model):

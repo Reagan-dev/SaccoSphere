@@ -1,6 +1,8 @@
 from django.contrib import admin
 
 from .models import (
+    DividendDeclaration,
+    DividendPayout,
     GuaranteeCapacity,
     Guarantor,
     Insurance,
@@ -42,6 +44,40 @@ class SavingAdmin(admin.ModelAdmin):
         'membership__user__email',
         'membership__member_number',
         'membership__sacco__name',
+    )
+
+
+@admin.register(DividendDeclaration)
+class DividendDeclarationAdmin(admin.ModelAdmin):
+    list_display = (
+        'sacco',
+        'savings_type',
+        'financial_year',
+        'declared_rate',
+        'status',
+        'total_dividend_amount',
+        'created_at',
+    )
+    list_filter = ('status', 'sacco', 'savings_type')
+    search_fields = ('sacco__name', 'financial_year')
+
+
+@admin.register(DividendPayout)
+class DividendPayoutAdmin(admin.ModelAdmin):
+    list_display = (
+        'declaration',
+        'membership',
+        'saving',
+        'average_balance',
+        'dividend_amount',
+        'status',
+        'created_at',
+    )
+    list_filter = ('status', 'declaration__sacco')
+    search_fields = (
+        'membership__user__email',
+        'membership__member_number',
+        'declaration__financial_year',
     )
 
 
