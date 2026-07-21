@@ -215,6 +215,7 @@ class SaccoSettingsSerializer(serializers.ModelSerializer):
             'guarantor_type_allowed',
             'registration_fee',
             'monthly_contribution_amount',
+            'sms_daily_limit',
             'updated_at',
         )
         read_only_fields = ('sacco_id', 'updated_at')

@@ -5,8 +5,23 @@ from guarantor.external_views import (
     ExternalGuarantorAdminListView,
     ExternalGuarantorAdminReviewView,
 )
+from services.views import (
+    DividendApproveView,
+    DividendCalculateView,
+    DividendDeclarationDetailView,
+    DividendDeclarationListCreateView,
+    DividendDisburseView,
+    DividendPayoutListView,
+    LiquidityStatusView,
+    NPLDashboardView,
+)
 
 from .admin_views import AdminLoanApprovalView, LoanApprovalListView
+from .bulk_sms_views import (
+    BulkSMSCampaignCollectionView,
+    BulkSMSCampaignDetailView,
+    BulkSMSSendView,
+)
 from .dashboard_views import (
     ContributionsDashboardView,
     DisbursementsDashboardView,
@@ -24,6 +39,7 @@ from .superadmin_views import (
     SystemOverviewView,
     TopSaccosView,
 )
+from .sasra_reports import SASRAReturnView
 from .views import (
     AuditLogListView,
     AdminMemberDetailView,
@@ -85,7 +101,67 @@ urlpatterns = [
         name='loan-approval',
     ),
     path('reports/', SaccoReportView.as_view(), name='sacco-reports'),
+    path(
+        'reports/sasra/',
+        SASRAReturnView.as_view(),
+        name='sasra-returns',
+    ),
     path('settings/', SaccoSettingsView.as_view(), name='sacco-settings'),
+    path(
+        'sms/campaigns/',
+        BulkSMSCampaignCollectionView.as_view(),
+        name='sms-campaign-collection',
+    ),
+    path(
+        'sms/campaigns/<uuid:id>/',
+        BulkSMSCampaignDetailView.as_view(),
+        name='sms-campaign-detail',
+    ),
+    path(
+        'sms/campaigns/<uuid:id>/send/',
+        BulkSMSSendView.as_view(),
+        name='sms-campaign-send',
+    ),
+    path(
+        'liquidity/',
+        LiquidityStatusView.as_view(),
+        name='liquidity-status',
+    ),
+    path(
+        'npl/',
+        NPLDashboardView.as_view(),
+        name='npl-dashboard',
+    ),
+    path(
+        'dividends/declarations/',
+        DividendDeclarationListCreateView.as_view(),
+        name='dividend-declaration-collection',
+    ),
+    path(
+        'dividends/declarations/<uuid:pk>/',
+        DividendDeclarationDetailView.as_view(),
+        name='dividend-declaration-detail',
+    ),
+    path(
+        'dividends/declarations/<uuid:pk>/calculate/',
+        DividendCalculateView.as_view(),
+        name='dividend-calculate',
+    ),
+    path(
+        'dividends/declarations/<uuid:pk>/approve/',
+        DividendApproveView.as_view(),
+        name='dividend-approve',
+    ),
+    path(
+        'dividends/declarations/<uuid:pk>/disburse/',
+        DividendDisburseView.as_view(),
+        name='dividend-disburse',
+    ),
+    path(
+        'dividends/payouts/',
+        DividendPayoutListView.as_view(),
+        name='dividend-payout-list',
+    ),
     path(
         'external-guarantors/',
         ExternalGuarantorAdminListView.as_view(),

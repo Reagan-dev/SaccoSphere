@@ -4,6 +4,13 @@ from rest_framework.routers import DefaultRouter
 from guarantor.external_views import ExternalGuarantorCollectionView
 
 from .views import (
+    CRBCheckView,
+    DividendApproveView,
+    DividendCalculateView,
+    DividendDeclarationDetailView,
+    DividendDeclarationListCreateView,
+    DividendDisburseView,
+    DividendPayoutListView,
     GuarantorRequestView,
     GuarantorRespondView,
     GuarantorSearchView,
@@ -68,5 +75,40 @@ urlpatterns = [
         'loans/<uuid:loan_id>/external-guarantors/',
         ExternalGuarantorCollectionView.as_view(),
         name='external-guarantor-collection',
+    ),
+    path(
+        'loans/<uuid:pk>/crb-check/',
+        CRBCheckView.as_view(),
+        name='crb-check',
+    ),
+    path(
+        'dividends/declarations/',
+        DividendDeclarationListCreateView.as_view(),
+        name='dividend-declaration-collection',
+    ),
+    path(
+        'dividends/declarations/<uuid:uuid>/',
+        DividendDeclarationDetailView.as_view(),
+        name='dividend-declaration-detail',
+    ),
+    path(
+        'dividends/declarations/<uuid:uuid>/calculate/',
+        DividendCalculateView.as_view(),
+        name='dividend-calculate',
+    ),
+    path(
+        'dividends/declarations/<uuid:uuid>/approve/',
+        DividendApproveView.as_view(),
+        name='dividend-approve',
+    ),
+    path(
+        'dividends/declarations/<uuid:uuid>/disburse/',
+        DividendDisburseView.as_view(),
+        name='dividend-disburse',
+    ),
+    path(
+        'dividends/payouts/',
+        DividendPayoutListView.as_view(),
+        name='dividend-payout-list',
     ),
 ]
