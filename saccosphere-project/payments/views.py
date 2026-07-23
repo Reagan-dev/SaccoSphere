@@ -22,6 +22,8 @@ from accounts.permissions import IsSaccoAdmin
 from config.response import StandardResponseMixin
 from guarantor.utils import check_loan_guarantors_complete
 from payments.providers import get_psp_provider
+from payments.providers.registry import get_provider_class
+from saccomembership.models import Membership
 from services.models import Loan, Saving
 
 from .integrations.mpesa.daraja import DarajaClient, DarajaError
@@ -94,6 +96,15 @@ class DepositRequestSerializer(serializers.Serializer):
         data['fee_rate'] = fee_rate
 
         return data
+
+    def validate_membership(self, user):
+        """Return True when the user may deposit into the target SACCO."""
+        sacco = self.validated_data['sacco']
+        return Membership.objects.filter(
+            user=user,
+            sacco=sacco,
+            status=Membership.Status.APPROVED,
+        ).exists()
 
 
 class STKPushRequestSerializer(serializers.Serializer):
@@ -193,6 +204,16 @@ class DepositInitiateView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         sacco = data['sacco']
+        if not serializer.validate_membership(request.user):
+            return Response(
+                {
+                    'detail': (
+                        'You must have an approved membership in this SACCO '
+                        'before making a deposit.'
+                    ),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         provider = get_psp_provider(sacco=sacco)
         provider_record, _ = PaymentProvider.objects.get_or_create(
@@ -524,13 +545,8 @@ class STKStatusView(APIView):
         mpesa_transaction = get_object_or_404(
             MpesaTransaction.objects.select_related('transaction'),
             checkout_request_id=checkout_request_id,
+            transaction__user=request.user,
         )
-
-        if mpesa_transaction.transaction.user_id != request.user.id:
-            return Response(
-                {'detail': 'You do not have permission to view this status.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
 
         return Response(
             {
@@ -949,30 +965,52 @@ class CallbackCreateView(StandardResponseMixin, CreateAPIView):
     permission_classes = [AllowAny]
 
     def create(self, request, *args, **kwargs):
-        # Apply M-Pesa IP verification for M-Pesa callbacks
-        provider_id = request.data.get('provider')
-        if provider_id:
-            try:
-                provider = PaymentProvider.objects.get(id=provider_id)
-                if (
-                    provider.provider_type == PaymentProvider.ProviderType.MPESA
-                    and not is_safaricom_ip(request)
-                ):
-                    logger.warning(
-                        'M-Pesa callback rejected from non-Safaricom IP: %s',
-                        request.META.get('REMOTE_ADDR'),
-                    )
-                    return Response(
-                        {'detail': 'Forbidden'},
-                        status=status.HTTP_403_FORBIDDEN,
-                    )
-            except PaymentProvider.DoesNotExist:
-                pass
-
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        provider = serializer.validated_data['provider']
+
+        if not self._verify_callback(request, provider):
+            return Response(
+                {'detail': 'Forbidden'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         callback = serializer.save()
+        process_payment_callback.delay(str(callback.id))
         data = CallbackSerializer(callback).data
         return self.created(data, 'Callback received')
+
+    def _verify_callback(self, request, provider):
+        if provider.provider_type == PaymentProvider.ProviderType.MPESA:
+            payload = request.data.get('raw_payload') or request.data
+            request._mpesa_callback_body = payload
+            if not is_safaricom_ip(request):
+                logger.warning(
+                    'M-Pesa callback rejected from non-Safaricom IP: %s',
+                    request.META.get('REMOTE_ADDR'),
+                )
+                return False
+            return verify_mpesa_signature(request)
+
+        try:
+            provider_class = get_provider_class(provider.name)
+            provider_client = provider_class()
+        except (ImportError, AttributeError, TypeError, ValueError) as exc:
+            logger.warning(
+                'Callback rejected for unsupported provider %s: %s',
+                provider.name,
+                exc,
+            )
+            return False
+
+        try:
+            return provider_client.verify_webhook(request)
+        except Exception as exc:
+            logger.warning(
+                'Callback verification failed for provider %s: %s',
+                provider.name,
+                exc,
+            )
+            return False
 
 
