@@ -12,6 +12,7 @@ from saccomanagement.data_imports.parsers import (
     parse_member_import_file,
 )
 from saccomanagement.data_imports.validators import validate_import_file
+from saccomanagement.import_utils import process_import_job  # noqa: F401
 from saccomanagement.models import ImportJob
 
 

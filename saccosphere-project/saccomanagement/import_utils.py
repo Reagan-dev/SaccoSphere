@@ -4,6 +4,7 @@ import csv
 import io
 from decimal import Decimal, InvalidOperation
 
+from celery import shared_task
 from django.db import transaction
 from django.utils import timezone
 from openpyxl import load_workbook
@@ -57,12 +58,29 @@ def parse_import_file(uploaded_file):
     return rows, None
 
 
-def process_import_job(job_id, rows=None):
+@shared_task(
+    bind=True,
+    max_retries=3,
+    name='saccomanagement.import_utils.process_import_job',
+)
+def process_import_job(self, job_id, rows=None):
     """
-    Process all rows for one MemberImportJob synchronously.
+    Process all rows for one MemberImportJob in a Celery worker.
+    """
+    try:
+        job = _process_import_job(job_id, rows=rows)
+    except Exception as exc:
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
 
-    TODO: Wrap this function in a Celery task for large imports.
-    """
+        _mark_import_job_failed(job_id, exc)
+        raise
+
+    return {'job_id': str(job.id), 'status': job.status}
+
+
+def _process_import_job(job_id, rows=None):
+    """Process all rows for one MemberImportJob."""
     job = MemberImportJob.objects.select_related('sacco', 'created_by').get(
         id=job_id,
     )
@@ -120,6 +138,14 @@ def process_import_job(job_id, rows=None):
         ],
     )
     return job
+
+
+def _mark_import_job_failed(job_id, exc):
+    MemberImportJob.objects.filter(id=job_id).update(
+        status=MemberImportJob.Status.FAILED,
+        completed_at=timezone.now(),
+        errors=[{'error': str(exc)}],
+    )
 
 
 def _file_extension(filename):

@@ -1,6 +1,7 @@
 """Tests for member CSV/XLSX import endpoints."""
 
 import io
+from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
@@ -10,7 +11,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import Sacco, User
-from saccomanagement.import_utils import parse_import_file
+from saccomanagement.import_utils import _process_import_job, parse_import_file
 from saccomanagement.models import MemberImportJob, Role
 from saccomembership.models import Membership
 
@@ -128,14 +129,23 @@ class ImportJobTest(APITestCase):
             HTTP_X_SACCO_ID=str(self.sacco.id),
         )
 
-    def test_import_creates_members(self):
+    @patch('saccomanagement.import_views.process_import_job.delay')
+    def test_import_creates_members(self, delay_task):
+        delay_task.return_value.id = 'task-123'
+
         response = self._post_csv(
             'Alice,Member,alice.import@example.com,254711111111,Employed,30000\n'
             'Bob,Member,bob.import@example.com,254722222222,Employed,35000\n',
         )
 
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(response.data['status'], 'queued')
+        self.assertEqual(response.data['task_id'], 'task-123')
         job = MemberImportJob.objects.get(id=response.data['job_id'])
+        self.assertEqual(job.status, MemberImportJob.Status.PENDING)
+
+        _process_import_job(job.id, rows=delay_task.call_args.kwargs['rows'])
+        job.refresh_from_db()
         self.assertEqual(job.status, MemberImportJob.Status.COMPLETED)
         self.assertEqual(job.success_rows, 2)
         self.assertEqual(
@@ -149,7 +159,10 @@ class ImportJobTest(APITestCase):
             2,
         )
 
-    def test_import_errors_captured(self):
+    @patch('saccomanagement.import_views.process_import_job.delay')
+    def test_import_errors_captured(self, delay_task):
+        delay_task.return_value.id = 'task-456'
+
         response = self._post_csv(
             'Good,Member,good.import@example.com,254733333333,Employed,30000\n'
             ',Missing,invalid-row@example.com,254744444444,Employed,30000\n',
@@ -157,6 +170,8 @@ class ImportJobTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         job = MemberImportJob.objects.get(id=response.data['job_id'])
+        _process_import_job(job.id, rows=delay_task.call_args.kwargs['rows'])
+        job.refresh_from_db()
         self.assertEqual(job.success_rows, 1)
         self.assertEqual(job.error_rows, 1)
         self.assertEqual(len(job.errors), 1)
@@ -170,4 +185,5 @@ class ImportJobTest(APITestCase):
             HTTP_X_SACCO_ID=str(self.sacco.id),
         )
         self.assertEqual(status_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(status_response.data['status'], 'completed')
         self.assertEqual(status_response.data['errors_summary']['count'], 1)

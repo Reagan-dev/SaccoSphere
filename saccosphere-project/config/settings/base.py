@@ -1,8 +1,8 @@
-import os
 from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
 from decouple import Csv, config
 from corsheaders.defaults import default_headers
 
@@ -103,13 +103,15 @@ DATABASES = {
     ),
 }
 
-AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
-AWS_S3_ENDPOINT_URL = os.getenv('AWS_S3_ENDPOINT_URL')
+STORAGE_BACKEND = config('STORAGE_BACKEND', default='local').lower()
+AWS_ACCESS_KEY_ID = config('AWS_ACCESS_KEY_ID', default='')
+AWS_SECRET_ACCESS_KEY = config('AWS_SECRET_ACCESS_KEY', default='')
+AWS_STORAGE_BUCKET_NAME = config('AWS_STORAGE_BUCKET_NAME', default='')
+AWS_S3_ENDPOINT_URL = config('AWS_S3_ENDPOINT_URL', default='')
+AWS_S3_REGION_NAME = config('AWS_S3_REGION_NAME', default='')
 AWS_S3_SIGNATURE_VERSION = 's3v4'
-
-#DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+AWS_DEFAULT_ACL = None
+AWS_QUERYSTRING_AUTH = config('AWS_QUERYSTRING_AUTH', default=True, cast=bool)
 
 
 
@@ -146,18 +148,31 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+if STORAGE_BACKEND not in {'local', 's3'}:
+    raise ImproperlyConfigured(
+        "STORAGE_BACKEND must be either 'local' or 's3'."
+    )
+
+if STORAGE_BACKEND == 's3' and not AWS_STORAGE_BUCKET_NAME:
+    raise ImproperlyConfigured(
+        'AWS_STORAGE_BUCKET_NAME is required when STORAGE_BACKEND=s3.'
+    )
+
+default_storage_backend = 'django.core.files.storage.FileSystemStorage'
+if STORAGE_BACKEND == 's3':
+    default_storage_backend = 'storages.backends.s3boto3.S3Boto3Storage'
+
 STORAGES = {
     'default': {
-        'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
+        'BACKEND': default_storage_backend,
     },
     'staticfiles': {
         'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
     },
 }
-
-
-MEDIA_URL = 'media/'
-MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -231,6 +246,31 @@ IPRS_API_URL = config(
     default='https://iprs-mock.saccosphere.dev/verify',
 )
 IPRS_MOCK = config('IPRS_MOCK', cast=bool, default=True)
+
+# Metropol CRB Configuration
+METROPOL_API_KEY = config('METROPOL_API_KEY', default='')
+METROPOL_API_URL = config(
+    'METROPOL_API_URL',
+    default='https://metropol-mock.saccosphere.dev/credit-check',
+)
+METROPOL_MOCK = config('METROPOL_MOCK', cast=bool, default=True)
+
+# Google OAuth Configuration
+OAUTH_MOCK = config('OAUTH_MOCK', cast=bool, default=True)
+GOOGLE_OAUTH_CLIENT_ID = config('GOOGLE_OAUTH_CLIENT_ID', default='')
+GOOGLE_OAUTH_CLIENT_SECRET = config(
+    'GOOGLE_OAUTH_CLIENT_SECRET',
+    default='',
+)
+GOOGLE_OAUTH_REDIRECT_URI = config('GOOGLE_OAUTH_REDIRECT_URI', default='')
+GOOGLE_OAUTH_TOKEN_URL = config(
+    'GOOGLE_OAUTH_TOKEN_URL',
+    default='https://oauth2.googleapis.com/token',
+)
+GOOGLE_OAUTH_USERINFO_URL = config(
+    'GOOGLE_OAUTH_USERINFO_URL',
+    default='https://www.googleapis.com/oauth2/v3/userinfo',
+)
 
 # M-Pesa Daraja Configuration
 MPESA_CONSUMER_KEY = config('MPESA_CONSUMER_KEY', default='')
