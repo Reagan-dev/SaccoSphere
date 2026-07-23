@@ -11,7 +11,7 @@ from datetime import date
 from decimal import Decimal
 from io import BytesIO
 
-from django.db.models import Sum, Q
+from django.db.models import Sum
 from django.http import HttpResponse
 from django.utils import timezone
 from openpyxl import Workbook
@@ -23,7 +23,8 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsSaccoAdmin
 from ledger.models import LedgerEntry
-from saccomanagement.models import SystemAuditLog, Role
+from saccomanagement.mixins import SaccoScopedMixin
+from saccomanagement.models import SystemAuditLog
 from saccomembership.models import Membership
 from services.models import Loan, RepaymentSchedule, Saving, SavingsType
 
@@ -335,7 +336,7 @@ def build_membership_return(sacco, period_start, period_end):
     }
 
 
-class SASRAReturnView(APIView):
+class SASRAReturnView(SaccoScopedMixin, APIView):
     """
     API endpoint for generating SASRA regulatory returns.
 
@@ -345,6 +346,7 @@ class SASRAReturnView(APIView):
 
     def get(self, request):
         """Generate SASRA return based on query parameters."""
+        self._set_sacco_context()
         report_type = request.query_params.get('type')
         as_of_date_str = request.query_params.get('as_of_date')
         period_start_str = request.query_params.get('period_start')
@@ -395,33 +397,7 @@ class SASRAReturnView(APIView):
             else:
                 period_end = as_of_date
 
-        # Get SACCO from header
-        sacco_id = request.headers.get('X-Sacco-ID')
-        if not sacco_id:
-            return Response(
-                {'error': 'X-Sacco-ID header is required.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        from accounts.models import Sacco
-
-        try:
-            sacco = Sacco.objects.get(id=sacco_id)
-        except Sacco.DoesNotExist:
-            return Response(
-                {'error': 'SACCO not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # Verify user is admin for this SACCO
-        if not request.user.roles.filter(
-            name=Role.SACCO_ADMIN,
-            sacco=sacco,
-        ).exists():
-            return Response(
-                {'error': 'You are not an admin for this SACCO.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        sacco = self.get_sacco_context()
 
         # Generate report
         if report_type == 'par':

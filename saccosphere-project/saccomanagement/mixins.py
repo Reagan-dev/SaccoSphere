@@ -1,4 +1,3 @@
-from django.http import JsonResponse
 from rest_framework.exceptions import PermissionDenied
 
 from saccomanagement.models import Role
@@ -12,12 +11,20 @@ class SaccoScopedMixin:
     Only SACCO_ADMIN and SUPER_ADMIN can use these views.
     """
 
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        if self.should_enforce_sacco_scope():
+            self._set_sacco_context()
+
+    def should_enforce_sacco_scope(self):
+        return True
+
     def _set_sacco_context(self):
         """
         Set SACCO context from X-Sacco-ID header or first SACCO_ADMIN role.
-        
-        Called before get_queryset to validate and set the SACCO context.
-        Returns JsonResponse with 403 if unauthorized, None otherwise.
+
+        Raises PermissionDenied if the current user cannot be scoped to a
+        permitted SACCO. SUPER_ADMIN users are allowed without a SACCO context.
         """
         user = self.request.user
         
@@ -35,8 +42,9 @@ class SaccoScopedMixin:
         ).select_related('sacco')
         
         if not admin_roles.exists():
-            # Not a SACCO admin
-            return None
+            raise PermissionDenied(
+                'Only SACCO admins can access this resource.'
+            )
         
         # Check for X-Sacco-ID header
         sacco_id = self.request.headers.get('X-Sacco-ID')
@@ -45,13 +53,8 @@ class SaccoScopedMixin:
             # Validate the header-specified SACCO
             role = admin_roles.filter(sacco_id=sacco_id).first()
             if not role:
-                return JsonResponse(
-                    {
-                        'success': False,
-                        'message': 'You do not have access to this SACCO.',
-                        'error_code': 'UNAUTHORIZED_SACCO',
-                    },
-                    status=403,
+                raise PermissionDenied(
+                    'You do not have access to this SACCO.'
                 )
             self.request.current_sacco = role.sacco
             return None
@@ -60,8 +63,9 @@ class SaccoScopedMixin:
         role = admin_roles.first()
         if role:
             self.request.current_sacco = role.sacco
-        
-        return None
+            return None
+
+        raise PermissionDenied('SACCO context is required for this action.')
 
     def get_sacco_context(self):
         """

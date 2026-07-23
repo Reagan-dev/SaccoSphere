@@ -43,6 +43,21 @@ class SavingsTypeSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class SavingsTypeWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SavingsType
+        fields = (
+            'id',
+            'sacco',
+            'name',
+            'description',
+            'interest_rate',
+            'minimum_contribution',
+            'is_active',
+        )
+        read_only_fields = ('id', 'sacco')
+
+
 class SavingSerializer(serializers.ModelSerializer):
     membership = MembershipSummarySerializer(read_only=True)
     savings_type = SavingsTypeSerializer(read_only=True)

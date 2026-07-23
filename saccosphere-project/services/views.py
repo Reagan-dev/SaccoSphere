@@ -15,7 +15,7 @@ from rest_framework.generics import (
     RetrieveUpdateDestroyAPIView,
     RetrieveUpdateAPIView,
 )
-from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
@@ -60,17 +60,26 @@ from .serializers import (
     RepaymentScheduleSerializer,
     SavingSerializer,
     SavingsTypeSerializer,
+    SavingsTypeWriteSerializer,
 )
 
 
-class SavingsTypeViewSet(ModelViewSet):
+class SavingsTypeViewSet(SaccoScopedMixin, ModelViewSet):
     serializer_class = SavingsTypeSerializer
     queryset = SavingsType.objects.select_related('sacco')
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [AllowAny()]
-        return [IsAdminUser()]
+        return [IsAuthenticated(), IsSaccoAdmin()]
+
+    def should_enforce_sacco_scope(self):
+        return self.action not in ['list', 'retrieve']
+
+    def get_serializer_class(self):
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return SavingsTypeWriteSerializer
+        return SavingsTypeSerializer
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -83,6 +92,22 @@ class SavingsTypeViewSet(ModelViewSet):
             queryset = queryset.filter(sacco_id=sacco_id)
 
         return queryset
+
+    def get_serializer(self, *args, **kwargs):
+        if self.action in ['create', 'update', 'partial_update']:
+            data = kwargs.get('data')
+            if data is not None:
+                mutable_data = data.copy()
+                mutable_data.pop('sacco', None)
+                mutable_data.pop('sacco_id', None)
+                kwargs['data'] = mutable_data
+        return super().get_serializer(*args, **kwargs)
+
+    def perform_create(self, serializer):
+        serializer.save(sacco=self.get_sacco_context())
+
+    def perform_update(self, serializer):
+        serializer.save(sacco=self.get_sacco_context())
 
 
 class SavingListView(ListAPIView):
@@ -334,19 +359,29 @@ class GuarantorSearchView(APIView):
 
     def _find_guarantor_user(self, loan, phone=None, member_number=None):
         """Find a possible guarantor user by phone or member number."""
+        memberships = Membership.objects.select_related('user').filter(
+            sacco=loan.membership.sacco,
+            status=Membership.Status.APPROVED,
+        )
+
         if phone:
-            user = User.objects.filter(
-                phone_number__icontains=phone,
+            membership = memberships.filter(
+                user__phone_number=phone,
             ).first()
 
-            if user is not None:
-                return user
+            if membership is not None:
+                return membership.user
+
+            membership = memberships.filter(
+                user__phone_number__icontains=phone,
+            ).first()
+
+            if membership is not None:
+                return membership.user
 
         if member_number:
-            membership = Membership.objects.select_related('user').filter(
+            membership = memberships.filter(
                 member_number__iexact=member_number,
-                sacco=loan.membership.sacco,
-                status=Membership.Status.APPROVED,
             ).first()
 
             if membership is not None:
