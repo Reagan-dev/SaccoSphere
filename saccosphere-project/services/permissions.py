@@ -9,9 +9,9 @@ class GuarantorCapacityCheck(BasePermission):
     """
     Allow guarantor response only if user has sufficient guarantee capacity.
 
-    This permission checks whether the authenticated user (acting as guarantor)
-    has enough available guarantee capacity to cover the loan amount. Used
-    only when approving a guarantee request.
+    This permission checks whether the authenticated user (acting as
+    guarantor) has enough available guarantee capacity to cover the loan
+    amount. Used only when approving a guarantee request.
     """
 
     message = (

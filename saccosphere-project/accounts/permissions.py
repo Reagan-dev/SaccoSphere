@@ -1,8 +1,7 @@
-from decimal import Decimal
-
 from rest_framework.permissions import BasePermission
 
 from saccomanagement.models import Role
+from services.models import Guarantor, Saving
 
 
 class IsKYCVerified(BasePermission):
@@ -299,77 +298,21 @@ class IsEligibleGuarantor(BasePermission):
             return False
 
         # Check 3: User must have savings > 0 in that SACCO
-        try:
-            from payments.models import Savings
-
-            savings = Savings.objects.filter(
-                user=user,
-                sacco=sacco,
-            ).first()
-            if not savings or savings.amount <= 0:
-                return False
-        except ImportError:
-            # If Savings model doesn't exist, skip this check
-            pass
+        has_savings = Saving.objects.filter(
+            membership=user_membership,
+            status=Saving.Status.ACTIVE,
+            amount__gt=0,
+        ).exists()
+        if not has_savings:
+            return False
 
         # Check 4: User not already a guarantor on this loan
-        try:
-            from payments.models import LoanGuarantor
-
-            guarantor_exists = LoanGuarantor.objects.filter(
-                loan=obj,
-                guarantor=user,
-            ).exists()
-            if guarantor_exists:
-                return False
-        except ImportError:
-            # If LoanGuarantor model doesn't exist, skip this check
-            pass
+        guarantor_exists = Guarantor.objects.filter(
+            loan=obj,
+            guarantor=user,
+        ).exists()
+        if guarantor_exists:
+            return False
 
         return True
-
-
-class GuarantorCapacityCheck(BasePermission):
-    """
-    Verify user has sufficient guarantee capacity for a loan.
-
-    Checks that user's available guarantee capacity is at least
-    10% of loan amount.
-    """
-
-    message = 'Insufficient guarantee capacity.'
-
-    def has_object_permission(self, request, view, obj):
-        """
-        Check if user has sufficient guarantee capacity.
-
-        Object must be a Loan with .amount attribute.
-        Requires GuaranteeCapacity model to exist.
-        """
-        user = request.user
-
-        if not user or not user.is_authenticated:
-            return False
-
-        if not hasattr(obj, 'amount'):
-            return False
-
-        try:
-            from payments.models import GuaranteeCapacity
-
-            capacity = GuaranteeCapacity.objects.filter(
-                user=user
-            ).first()
-
-            if not capacity:
-                return False
-
-            required_capacity = obj.amount * Decimal('0.10')
-            return capacity.available_capacity >= required_capacity
-
-        except ImportError:
-            # If GuaranteeCapacity model doesn't exist, deny access
-            return False
-
-
 

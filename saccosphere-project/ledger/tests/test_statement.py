@@ -98,7 +98,7 @@ class StatementBuilderTestCase(TestCase):
         self.assertEqual(statement['closing_balance'], Decimal('1300.00'))
 
     def test_empty_range_returns_zero_movement(self):
-        """A range with no entries should return zero debit and credit totals."""
+        """A range with no entries should return zero movement totals."""
         self._create_entry(
             LedgerEntry.EntryType.CREDIT,
             Decimal('1000.00'),
@@ -117,6 +117,20 @@ class StatementBuilderTestCase(TestCase):
         self.assertEqual(statement['entries'], [])
         self.assertEqual(statement['opening_balance'], Decimal('1000.00'))
         self.assertEqual(statement['closing_balance'], Decimal('1000.00'))
+
+    def test_create_ledger_entry_quantizes_amount_half_up(self):
+        """Incoming amounts are normalized to currency precision."""
+        entry = create_ledger_entry(
+            membership=self.membership,
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.SAVING_DEPOSIT,
+            amount=Decimal('10.005'),
+            description='Quantize test entry',
+            reference='QUANTIZE-CREDIT',
+        )
+
+        self.assertEqual(entry.amount, Decimal('10.01'))
+        self.assertEqual(entry.balance_after, Decimal('10.01'))
 
     def _create_entry(self, entry_type, amount, created_date, reference):
         entry = create_ledger_entry(

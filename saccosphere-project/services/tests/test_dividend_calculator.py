@@ -1,19 +1,22 @@
 """Tests for dividend calculation engine and views."""
 
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from datetime import date, timedelta
 
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, SaccoSettings, User
+from ledger.models import LedgerEntry
+from ledger.utils import create_ledger_entry
 from saccomanagement.models import Role
 from saccomembership.models import Membership
 from services.engines.dividend_calculator import (
     calculate_average_balance,
     calculate_dividends_for_declaration,
 )
+from payments.models import MpesaTransaction, PaymentProvider, Transaction
 from services.models import (
     DividendDeclaration,
     DividendPayout,
@@ -59,13 +62,13 @@ class DividendCalculatorTests(TestCase):
     def test_average_balance_calculates_month_end_averages(self):
         period_start = date(2025, 1, 1)
         period_end = date(2025, 12, 31)
-        
+
         average = calculate_average_balance(
             self.saving,
             period_start,
             period_end,
         )
-        
+
         # Should return a Decimal
         self.assertIsInstance(average, Decimal)
         # Should be rounded to 2 decimal places
@@ -74,6 +77,82 @@ class DividendCalculatorTests(TestCase):
             -2,
             'Average should be rounded to 2 decimal places',
         )
+
+    def test_average_balance_uses_specific_saving_history(self):
+        other_savings_type = SavingsType.objects.create(
+            sacco=self.sacco,
+            name=SavingsType.Name.FOSA,
+            minimum_contribution=Decimal('500.00'),
+        )
+        other_saving = Saving.objects.create(
+            membership=self.membership,
+            savings_type=other_savings_type,
+            amount=Decimal('900.00'),
+            status=Saving.Status.ACTIVE,
+            dividend_eligible=True,
+        )
+        provider = PaymentProvider.objects.create(
+            name='M-Pesa',
+            provider_type=PaymentProvider.ProviderType.MPESA,
+            is_active=True,
+        )
+        self._create_saving_ledger_entry(
+            provider,
+            self.saving,
+            Decimal('100.00'),
+            'DIV-SPECIFIC-001',
+        )
+        self._create_saving_ledger_entry(
+            provider,
+            other_saving,
+            Decimal('900.00'),
+            'DIV-SPECIFIC-002',
+        )
+
+        average = calculate_average_balance(
+            self.saving,
+            date(2025, 1, 1),
+            date(2025, 1, 31),
+        )
+
+        self.assertEqual(average, Decimal('100.00'))
+
+    def _create_saving_ledger_entry(
+        self,
+        provider,
+        saving,
+        amount,
+        reference,
+    ):
+        transaction = Transaction.objects.create(
+            provider=provider,
+            user=self.user,
+            reference=f'{reference}-TXN',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=amount,
+            status=Transaction.Status.COMPLETED,
+            description='Dividend balance history test',
+        )
+        MpesaTransaction.objects.create(
+            transaction=transaction,
+            phone_number='254712345678',
+            checkout_request_id=f'{reference}-CHECKOUT',
+            related_saving=saving,
+        )
+        entry = create_ledger_entry(
+            membership=self.membership,
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.SAVING_DEPOSIT,
+            amount=amount,
+            description='Dividend balance history test',
+            reference=reference,
+            transaction=transaction,
+        )
+        created_at = timezone.make_aware(
+            datetime.combine(date(2025, 1, 15), time(hour=12)),
+        )
+        LedgerEntry.objects.filter(id=entry.id).update(created_at=created_at)
+        return entry
 
     def test_dividend_calculation_is_idempotent(self):
         declaration = DividendDeclaration.objects.create(

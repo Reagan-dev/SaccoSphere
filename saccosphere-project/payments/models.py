@@ -34,7 +34,9 @@ class PaymentProvider(models.Model):
     )
     config = models.JSONField(
         default=dict,
-        help_text='Provider configuration such as endpoints. Do not store secrets.',
+        help_text=(
+            'Provider configuration such as endpoints. Do not store secrets.'
+        ),
     )
     created_at = models.DateTimeField(
         auto_now_add=True,
@@ -60,8 +62,10 @@ class Transaction(models.Model):
     class Status(models.TextChoices):
         PENDING = 'PENDING', 'Pending'
         PROCESSING = 'PROCESSING', 'Processing'
+        SENT = 'SENT', 'Sent'
         COMPLETED = 'COMPLETED', 'Completed'
         FAILED = 'FAILED', 'Failed'
+        AMOUNT_MISMATCH = 'AMOUNT_MISMATCH', 'Amount mismatch'
         REVERSED = 'REVERSED', 'Reversed'
 
     id = models.UUIDField(

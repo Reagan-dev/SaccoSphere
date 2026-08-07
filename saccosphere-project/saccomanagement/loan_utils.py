@@ -1,7 +1,6 @@
 """Shared helpers for SACCO admin loan approval workflows."""
 
 from decimal import Decimal
-from uuid import uuid4
 
 from django.db import transaction
 from django.db.models import Sum
@@ -43,7 +42,7 @@ def build_guarantors_summary(loan):
 
 
 def get_member_application_documents(loan, request=None):
-    """Return membership documents linked to the borrower's SACCO application."""
+    """Return documents linked to the borrower's SACCO application."""
     application = (
         SaccoApplication.objects.filter(
             user=loan.membership.user,
@@ -108,8 +107,7 @@ def initiate_loan_disbursement(loan):
     """
     from django.conf import settings
 
-    from payments.integrations.mpesa.daraja import DarajaClient, DarajaError
-    from payments.models import MpesaTransaction, PaymentProvider, Transaction
+    from payments.disbursements import initiate_b2c_loan_disbursement
 
     member = loan.membership.user
     phone_number = member.phone_number
@@ -129,65 +127,9 @@ def initiate_loan_disbursement(loan):
             'detail': 'M-Pesa is not configured for disbursements.',
         }, 503
 
-    amount = loan.amount
-    reference = f'SS-B2C-{uuid4().hex[:18].upper()}'
-    remarks = f'Loan disbursement — {loan.id}'
-    callback_url = DarajaClient()._build_callback_url(
-        '/api/v1/payments/callback/mpesa/b2c/',
+    return initiate_b2c_loan_disbursement(
+        loan=loan,
+        phone_number=phone_number,
+        amount=loan.amount,
+        remarks=f'Loan disbursement - {loan.id}',
     )
-
-    try:
-        daraja_response = DarajaClient().initiate_b2c(
-            phone_number=phone_number,
-            amount=amount,
-            occasion='Loan Disbursement',
-            remarks=remarks,
-            result_url=callback_url,
-            timeout_url=callback_url,
-        )
-    except DarajaError as exc:
-        return False, {
-            'detail': exc.message,
-            'response_code': exc.response_code,
-        }, 502
-
-    conversation_id = daraja_response.get('ConversationID')
-    originator_conversation_id = daraja_response.get(
-        'OriginatorConversationID',
-    )
-
-    with transaction.atomic():
-        provider, _ = PaymentProvider.objects.get_or_create(
-            name='M-Pesa',
-            defaults={
-                'provider_type': PaymentProvider.ProviderType.MPESA,
-                'is_active': True,
-            },
-        )
-        payment = Transaction.objects.create(
-            provider=provider,
-            user=member,
-            reference=reference,
-            external_reference=conversation_id,
-            transaction_type=Transaction.TransactionType.LOAN_DISBURSEMENT,
-            amount=amount,
-            status=Transaction.Status.PENDING,
-            description=remarks,
-            metadata={'daraja_response': daraja_response},
-        )
-        MpesaTransaction.objects.create(
-            transaction=payment,
-            phone_number=phone_number,
-            conversation_id=conversation_id,
-            originator_conversation_id=originator_conversation_id,
-            transaction_type=MpesaTransaction.TransactionType.B2C,
-            related_loan=loan,
-        )
-        loan.status = Loan.Status.DISBURSEMENT_PENDING
-        loan.save(update_fields=['status', 'updated_at'])
-
-    return True, {
-        'conversation_id': conversation_id,
-        'message': 'Disbursement initiated.',
-        'status': loan.status,
-    }, 200

@@ -5,6 +5,7 @@ import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from decouple import Csv, config
 from corsheaders.defaults import default_headers
+import os
 
 
 

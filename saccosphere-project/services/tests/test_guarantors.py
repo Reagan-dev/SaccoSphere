@@ -96,7 +96,7 @@ class GuarantorEndpointTestCase(TestCase):
             kwargs={'loan_id': self.loan.id},
         )
 
-        response = self.client.get(url, {'phone': '722222222'})
+        response = self.client.get(url, {'phone': '254722222222'})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(
@@ -107,6 +107,18 @@ class GuarantorEndpointTestCase(TestCase):
         self.assertEqual(response.data['savings_total'], '50000.00')
         self.assertTrue(response.data['can_guarantee'])
 
+    def test_search_rejects_partial_phone_match(self):
+        """Test that guarantor search does not allow partial phone matching."""
+        self.client.force_authenticate(user=self.applicant)
+        url = reverse(
+            'services:guarantor-search',
+            kwargs={'loan_id': self.loan.id},
+        )
+
+        response = self.client.get(url, {'phone': '722222222'})
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
     def test_search_excludes_applicant(self):
         """Test that a loan applicant cannot be returned as guarantor."""
         self.client.force_authenticate(user=self.applicant)
@@ -115,7 +127,7 @@ class GuarantorEndpointTestCase(TestCase):
             kwargs={'loan_id': self.loan.id},
         )
 
-        response = self.client.get(url, {'phone': '711111111'})
+        response = self.client.get(url, {'phone': '254711111111'})
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
