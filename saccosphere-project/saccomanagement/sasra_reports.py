@@ -346,7 +346,6 @@ class SASRAReturnView(SaccoScopedMixin, APIView):
 
     def get(self, request):
         """Generate SASRA return based on query parameters."""
-        self._set_sacco_context()
         report_type = request.query_params.get('type')
         as_of_date_str = request.query_params.get('as_of_date')
         period_start_str = request.query_params.get('period_start')

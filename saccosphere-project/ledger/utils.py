@@ -1,13 +1,15 @@
-import logging
+from decimal import Decimal, ROUND_HALF_UP
+
+from django.db import transaction as db_transaction
 
 from .engines.balance_calculator import (
     generate_reference,
-    get_running_balance,
 )
 from .models import LedgerEntry
 
 
-logger = logging.getLogger('saccosphere.ledger')
+MONEY_QUANTIZER = Decimal('0.01')
+ZERO = Decimal('0.00')
 
 
 CATEGORY_PREFIXES = {
@@ -35,14 +37,42 @@ def create_ledger_entry(
     """
     Create a ledger entry with its running balance.
 
-    This is the only supported way to create ledger entries. It never raises to
-    calling code; failures are logged and None is returned.
+    This is the only supported way to create ledger entries. The membership's
+    existing ledger rows are locked while the new running balance is computed
+    and written, so concurrent writes for the same membership are serialized.
     """
-    try:
+    amount = Decimal(str(amount)).quantize(
+        MONEY_QUANTIZER,
+        rounding=ROUND_HALF_UP,
+    )
+
+    with db_transaction.atomic():
         if reference is None:
             reference = generate_reference(_get_reference_prefix(category))
 
-        balance_before = get_running_balance(membership)
+        locked_entries = list(
+            LedgerEntry.objects.select_for_update()
+            .filter(membership=membership)
+            .only('entry_type', 'amount')
+        )
+        credits = sum(
+            (
+                entry.amount
+                for entry in locked_entries
+                if entry.entry_type == LedgerEntry.EntryType.CREDIT
+            ),
+            ZERO,
+        )
+        debits = sum(
+            (
+                entry.amount
+                for entry in locked_entries
+                if entry.entry_type == LedgerEntry.EntryType.DEBIT
+            ),
+            ZERO,
+        )
+        balance_before = credits - debits
+
         if entry_type == LedgerEntry.EntryType.CREDIT:
             balance_after = balance_before + amount
         else:
@@ -58,12 +88,6 @@ def create_ledger_entry(
             balance_after=balance_after,
             transaction=transaction,
         )
-    except Exception:
-        logger.exception(
-            'Failed to create ledger entry for membership_id=%s.',
-            getattr(membership, 'id', None),
-        )
-        return None
 
 
 def _get_reference_prefix(category):

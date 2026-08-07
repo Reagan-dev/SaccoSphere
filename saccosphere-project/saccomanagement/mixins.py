@@ -23,32 +23,30 @@ class SaccoScopedMixin:
         """
         Set SACCO context from X-Sacco-ID header or first SACCO_ADMIN role.
 
-        Raises PermissionDenied if the current user cannot be scoped to a
-        permitted SACCO. SUPER_ADMIN users are allowed without a SACCO context.
+        Raises PermissionDenied immediately if a valid sacco context cannot be
+        established. SUPER_ADMIN users are allowed without a SACCO context.
         """
         user = self.request.user
-        
-        # Initialize as None
-        self.request.current_sacco = None
-        
-        # SUPER_ADMIN sees all data
+
+        # SUPER_ADMIN sees all data - no context needed
         if user.is_staff or user.roles.filter(name=Role.SUPER_ADMIN).exists():
-            return None
-        
+            self.request.current_sacco = None
+            return
+
         # Get all SACCO_ADMIN roles
         admin_roles = user.roles.filter(
             name=Role.SACCO_ADMIN,
             sacco__isnull=False,
         ).select_related('sacco')
-        
+
         if not admin_roles.exists():
             raise PermissionDenied(
                 'Only SACCO admins can access this resource.'
             )
-        
+
         # Check for X-Sacco-ID header
         sacco_id = self.request.headers.get('X-Sacco-ID')
-        
+
         if sacco_id:
             # Validate the header-specified SACCO
             role = admin_roles.filter(sacco_id=sacco_id).first()
@@ -57,14 +55,16 @@ class SaccoScopedMixin:
                     'You do not have access to this SACCO.'
                 )
             self.request.current_sacco = role.sacco
-            return None
-        
+            return
+
         # No header: use first SACCO_ADMIN role
         role = admin_roles.first()
         if role:
             self.request.current_sacco = role.sacco
-            return None
+            return
 
+        # This should not be reached due to the admin_roles.exists() check
+        # above, but raise for safety.
         raise PermissionDenied('SACCO context is required for this action.')
 
     def get_sacco_context(self):

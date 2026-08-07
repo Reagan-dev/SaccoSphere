@@ -7,7 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 from dateutil.relativedelta import relativedelta
 
-from ledger.engines.balance_calculator import get_balance_at_date
+from ledger.models import LedgerEntry
 from services.models import DividendDeclaration, DividendPayout, Saving
 
 
@@ -20,9 +20,9 @@ def calculate_average_balance(saving, period_start, period_end):
     """
     Calculate the average monthly balance for a saving account.
 
-    Samples the saving's balance at the end of each calendar month in the
-    period using get_balance_at_date(), and returns the simple average of
-    those month-end balances.
+    Samples the saving account's own balance at the end of each calendar
+    month in the period, and returns the simple average of those month-end
+    balances.
 
     NOTE: This uses the average-monthly-balance method. This must be reviewed
     against the SACCO's bylaws, as some SACCOs use a stricter minimum-balance
@@ -62,7 +62,7 @@ def calculate_average_balance(saving, period_start, period_end):
     # dividend method.
     balances = []
     for month_end_date in month_end_dates:
-        balance = get_balance_at_date(saving.membership, month_end_date)
+        balance = _get_saving_balance_at_date(saving, month_end_date)
         balances.append(Decimal(balance))
 
     if not balances:
@@ -72,6 +72,31 @@ def calculate_average_balance(saving, period_start, period_end):
     average = total / Decimal(len(balances))
 
     return average.quantize(MONEY_QUANTIZER, rounding=ROUND_HALF_UP)
+
+
+def _get_saving_balance_at_date(saving, balance_date):
+    entries = LedgerEntry.objects.filter(
+        membership=saving.membership,
+        created_at__date__lte=balance_date,
+        transaction__mpesa__related_saving=saving,
+    )
+    credits = sum(
+        (
+            entry.amount
+            for entry in entries
+            if entry.entry_type == LedgerEntry.EntryType.CREDIT
+        ),
+        Decimal('0.00'),
+    )
+    debits = sum(
+        (
+            entry.amount
+            for entry in entries
+            if entry.entry_type == LedgerEntry.EntryType.DEBIT
+        ),
+        Decimal('0.00'),
+    )
+    return credits - debits
 
 
 def calculate_dividends_for_declaration(declaration):

@@ -20,11 +20,83 @@ from .engines.npl_monitor import (
     get_arrears_bucket,
     resolve_cleared_npl_flags,
 )
-from .models import Guarantor, LiquidityAlert, Loan, NPLFlag, RepaymentSchedule
+from .models import (
+    Guarantor,
+    LiquidityAlert,
+    Loan,
+    NPLFlag,
+    RepaymentSchedule,
+)
 from .reminder_utils import send_sms_notification
 
 
 logger = logging.getLogger('saccosphere.services')
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='services.tasks.notify_guarantor',
+)
+def notify_guarantor_task(self, guarantor_id):
+    """Queue notification delivery for one pending guarantor."""
+    try:
+        guarantor = Guarantor.objects.select_related(
+            'guarantor',
+            'loan',
+            'loan__membership__user',
+        ).get(id=guarantor_id, status=Guarantor.Status.PENDING)
+    except Guarantor.DoesNotExist:
+        logger.warning(
+            'Pending guarantor notification skipped; guarantor_id=%s '
+            'does not exist or is no longer pending.',
+            guarantor_id,
+        )
+        return False
+
+    loan = guarantor.loan
+    applicant_name = (
+        f'{loan.membership.user.first_name} '
+        f'{loan.membership.user.last_name}'
+    )
+    action_url = f'/loans/{loan.id}/guarantors/{guarantor.id}/respond'
+
+    title = f'Guarantor Request - {applicant_name}'
+    message = (
+        f'You have been requested to guarantee a loan of '
+        f'KES {loan.amount:.2f} for {applicant_name}. '
+        f'Please respond in the SaccoSphere app.'
+    )
+
+    try:
+        notify_user_task.delay(
+            user_id=str(guarantor.guarantor.id),
+            title=title,
+            message=message,
+            category='LOAN',
+            action_url=action_url,
+            send_sms=True,
+            send_push=True,
+            create_in_app=True,
+        )
+    except Exception as exc:
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'Guarantor notification failed for guarantor_id=%s. '
+            'Retrying in %s seconds.',
+            guarantor.id,
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
+
+    logger.info(
+        'Guarantor notification queued for guarantor_id=%s, loan_id=%s.',
+        guarantor.id,
+        loan.id,
+    )
+    return True
 
 
 @shared_task(name='services.tasks.notify_guarantors')
@@ -56,42 +128,20 @@ def notify_guarantors_task(loan_id):
     count = 0
     for guarantor in pending_guarantors:
         try:
-            applicant_name = (
-                f'{loan.membership.user.first_name} '
-                f'{loan.membership.user.last_name}'
-            )
-            action_url = (
-                f'/loans/{loan.id}/guarantors/{guarantor.id}/respond'
-            )
-
-            title = f'Guarantor Request — {applicant_name}'
-            message = (
-                f'You have been requested to guarantee a loan of '
-                f'KES {loan.amount:.2f} for {applicant_name}. '
-                f'Please respond in the SaccoSphere app.'
-            )
-
-            notify_user_task.delay(
-                user_id=str(guarantor.guarantor.id),
-                title=title,
-                message=message,
-                category='LOAN',
-                action_url=action_url,
-                send_sms=True,
-                send_push=True,
-                create_in_app=True,
-            )
+            notify_guarantor_task.delay(str(guarantor.id))
 
             count += 1
             logger.info(
-                'Guarantor notification queued for guarantor_id=%s, loan_id=%s.',
+                'Guarantor notification queued for guarantor_id=%s, '
+                'loan_id=%s.',
                 guarantor.id,
                 loan.id,
             )
 
         except Exception as exc:
             logger.error(
-                'Failed to queue guarantor notification for guarantor_id=%s: %s',
+                'Failed to queue guarantor notification for '
+                'guarantor_id=%s: %s',
                 guarantor.id,
                 exc,
                 exc_info=True,

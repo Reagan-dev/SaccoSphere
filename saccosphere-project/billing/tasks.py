@@ -3,6 +3,7 @@
 import logging
 
 from celery import shared_task
+from django.core.mail import mail_admins
 
 from accounts.models import Sacco
 from billing.services import (
@@ -20,18 +21,74 @@ def generate_and_send_monthly_fee_reports():
     """Generate and email monthly SACCO platform fee invoices."""
     period_start, period_end = previous_month_period()
     processed = 0
+    failures = []
 
     for sacco in Sacco.objects.filter(is_active=True):
-        invoice = generate_monthly_sacco_invoice(
-            sacco=sacco,
+        try:
+            invoice = generate_monthly_sacco_invoice(
+                sacco=sacco,
+                period_start=period_start,
+                period_end=period_end,
+            )
+            send_invoice_to_sacco(invoice)
+            processed += 1
+        except Exception as exc:
+            failures.append(
+                {
+                    'sacco_id': str(sacco.id),
+                    'sacco_name': sacco.name,
+                    'error': str(exc),
+                },
+            )
+            logger.exception(
+                'Monthly platform fee report failed for sacco_id=%s.',
+                sacco.id,
+            )
+            continue
+
+    if failures:
+        _notify_platform_admins_of_fee_report_failures(
+            failures=failures,
             period_start=period_start,
             period_end=period_end,
         )
-        send_invoice_to_sacco(invoice)
-        processed += 1
 
     logger.info(
-        'Monthly platform fee reports processed for %s SACCOs.',
+        'Monthly platform fee reports processed for %s SACCOs; '
+        '%s failures.',
         processed,
+        len(failures),
     )
     return processed
+
+
+def _notify_platform_admins_of_fee_report_failures(
+    *,
+    failures,
+    period_start,
+    period_end,
+):
+    failure_lines = [
+        (
+            f'- {failure["sacco_name"]} ({failure["sacco_id"]}): '
+            f'{failure["error"]}'
+        )
+        for failure in failures
+    ]
+    message = (
+        'Monthly platform fee report generation completed with failures.\n\n'
+        f'Billing period: {period_start} to {period_end}\n'
+        f'Failed SACCO count: {len(failures)}\n\n'
+        + '\n'.join(failure_lines)
+    )
+
+    try:
+        mail_admins(
+            subject='SaccoSphere monthly fee report failures',
+            message=message,
+            fail_silently=False,
+        )
+    except Exception:
+        logger.exception(
+            'Failed to notify platform admins about monthly fee failures.',
+        )

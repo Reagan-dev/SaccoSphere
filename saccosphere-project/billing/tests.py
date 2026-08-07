@@ -3,7 +3,10 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
+from rest_framework import status
+from rest_framework.test import APIClient
 
 from accounts.models import Sacco, User
 from billing.models import MonthlySaccoInvoice, PlatformRevenue
@@ -124,3 +127,79 @@ class BillingAutomationTests(TestCase):
         )
         self.assertEqual(invoice.status, MonthlySaccoInvoice.Status.SENT)
         email_send_mock.assert_called()
+
+
+class MonthlyInvoiceAccessTests(TestCase):
+    """Validate invoice object permissions across SACCO tenants."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.sacco_a = Sacco.objects.create(
+            name='Invoice SACCO A',
+            registration_number='INV001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        self.sacco_b = Sacco.objects.create(
+            name='Invoice SACCO B',
+            registration_number='INV002',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        self.admin_a = User.objects.create_user(
+            email='invoice.admin.a@example.com',
+            first_name='Invoice',
+            last_name='Admin',
+            phone_number='254700001144',
+            password='StrongPass1',
+        )
+        Role.objects.create(
+            user=self.admin_a,
+            sacco=self.sacco_a,
+            name=Role.SACCO_ADMIN,
+        )
+        self.invoice_b = MonthlySaccoInvoice.objects.create(
+            sacco=self.sacco_b,
+            period_start=timezone.datetime(2024, 1, 1).date(),
+            period_end=timezone.datetime(2024, 1, 31).date(),
+            amount_due=Decimal('100.00'),
+            report_payload={
+                'period_start': '2024-01-01',
+                'period_end': '2024-01-31',
+                'transaction_count': 1,
+                'total_transacted_amount': '5000.00',
+                'fee_rate': '2%',
+                'amount_due': '100.00',
+                'payment_account_name': 'SaccoSphere Ltd',
+                'payment_account_number': 'N/A',
+                'payment_paybill': 'N/A',
+            },
+        )
+
+    @patch('billing.views.send_invoice_to_sacco')
+    def test_sacco_admin_cannot_resend_other_sacco_invoice(self, send_mock):
+        """SACCO A admin cannot resend SACCO B invoices."""
+        self.client.force_authenticate(user=self.admin_a)
+        response = self.client.post(
+            reverse(
+                'billing:invoice-resend',
+                kwargs={'invoice_id': self.invoice_b.id},
+            ),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        send_mock.assert_not_called()
+
+    def test_sacco_admin_cannot_download_other_sacco_invoice(self):
+        """SACCO A admin cannot download SACCO B invoices."""
+        self.client.force_authenticate(user=self.admin_a)
+        response = self.client.get(
+            reverse(
+                'billing:invoice-download',
+                kwargs={'invoice_id': self.invoice_b.id},
+            ),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

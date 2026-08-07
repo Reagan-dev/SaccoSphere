@@ -3,7 +3,9 @@ import logging
 from decimal import Decimal
 from uuid import uuid4
 
+from amqp.exceptions import ConnectionError as AmqpConnectionError
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction as db_transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
@@ -11,6 +13,9 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
+from kombu.exceptions import OperationalError as KombuOperationalError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from rest_framework import serializers, status
 from rest_framework.generics import CreateAPIView, ListAPIView, RetrieveAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -21,15 +26,14 @@ from accounts.models import Sacco
 from accounts.permissions import IsSaccoAdmin
 from config.response import StandardResponseMixin
 from guarantor.utils import check_loan_guarantors_complete
+from payments.disbursements import initiate_b2c_loan_disbursement
 from payments.providers import get_psp_provider
 from payments.providers.registry import get_provider_class
 from saccomembership.models import Membership
 from services.models import Loan, Saving
 
-from .integrations.mpesa.daraja import DarajaClient, DarajaError
 from .fee_calculator import SaccoInvoiceFeeCalculator
-
-logger = logging.getLogger('saccosphere.payments')
+from .integrations.mpesa.daraja import DarajaClient, DarajaError
 from .integrations.mpesa.security import (
     is_replay_attack,
     is_safaricom_ip,
@@ -43,6 +47,69 @@ from .serializers import (
 )
 from .tasks import process_payment_callback
 from .validators import validate_mpesa_phone
+
+
+logger = logging.getLogger('saccosphere.payments')
+
+
+BROKER_CONNECTION_ERRORS = (
+    AmqpConnectionError,
+    KombuOperationalError,
+    RedisConnectionError,
+    RedisTimeoutError,
+)
+
+
+def _get_mpesa_provider_record():
+    provider, _ = PaymentProvider.objects.get_or_create(
+        name='M-Pesa',
+        defaults={
+            'provider_type': PaymentProvider.ProviderType.MPESA,
+            'is_active': True,
+        },
+    )
+    return provider
+
+
+def _persist_mpesa_enqueue_failure(
+    *,
+    callback_body,
+    error,
+    callback_type,
+    mpesa_transaction=None,
+):
+    transaction = None
+    if mpesa_transaction is not None:
+        transaction = mpesa_transaction.transaction
+
+    return Callback.objects.create(
+        transaction=transaction,
+        provider=_get_mpesa_provider_record(),
+        raw_payload={
+            'callback_type': callback_type,
+            'payload': callback_body,
+        },
+        processed=False,
+        processing_error=str(error),
+    )
+
+
+def _retry_mpesa_response(result_desc='Temporary processing unavailable'):
+    return JsonResponse(
+        {'ResultCode': 1, 'ResultDesc': result_desc},
+        status=503,
+    )
+
+
+def _clear_mpesa_replay_marker(callback_identifier):
+    try:
+        cache.delete(f'mpesa_replay:{callback_identifier}')
+    except Exception:
+        logger.warning(
+            'Failed to clear M-Pesa replay marker for %s.',
+            callback_identifier,
+            exc_info=True,
+        )
 
 
 class DepositRequestSerializer(serializers.Serializer):
@@ -645,26 +712,25 @@ class MPesaSTKCallbackView(APIView):
                 )
                 return JsonResponse({'detail': 'Forbidden'}, status=403)
 
-            # Check if transaction exists, with short timeout
             try:
-                transaction_exists = MpesaTransaction.objects.filter(
+                mpesa_transaction = MpesaTransaction.objects.select_related(
+                    'transaction',
+                ).get(
                     checkout_request_id=checkout_request_id,
-                ).exists()
+                )
             except Exception as exc:
                 logger.error(
                     'M-Pesa STK callback transaction lookup error: %s',
                     exc,
                     exc_info=True,
                 )
-                # Accept callback to prevent retry, but log error
-                return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
-
-            if not transaction_exists:
-                logger.debug(
-                    'M-Pesa STK callback transaction not found: %s',
-                    checkout_request_id,
+                _persist_mpesa_enqueue_failure(
+                    callback_body=callback_body,
+                    error=exc,
+                    callback_type='STK',
                 )
-                return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+                _clear_mpesa_replay_marker(checkout_request_id)
+                return _retry_mpesa_response()
 
             result_code = stk_callback.get('ResultCode')
 
@@ -676,14 +742,20 @@ class MPesaSTKCallbackView(APIView):
                     result_code,
                     callback_body,
                 )
-            except Exception as exc:
+            except BROKER_CONNECTION_ERRORS as exc:
                 logger.error(
                     'M-Pesa STK callback task enqueue error: %s',
                     exc,
                     exc_info=True,
                 )
-                # Still return success to prevent M-Pesa retry
-                return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+                _persist_mpesa_enqueue_failure(
+                    callback_body=callback_body,
+                    error=exc,
+                    callback_type='STK',
+                    mpesa_transaction=mpesa_transaction,
+                )
+                _clear_mpesa_replay_marker(checkout_request_id)
+                return _retry_mpesa_response()
 
             logger.info(
                 'M-Pesa STK callback enqueued: %s',
@@ -697,8 +769,7 @@ class MPesaSTKCallbackView(APIView):
                 exc,
                 exc_info=True,
             )
-            # Return success anyway to prevent M-Pesa from retrying
-            return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+            return _retry_mpesa_response()
 
     def _get_stk_callback(self, callback_body):
         body = callback_body.get('Body') or callback_body.get('body') or {}
@@ -745,79 +816,16 @@ class B2CDisbursementView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        reference = self._build_reference()
         remarks = data['remarks']
-        callback_url = DarajaClient()._build_callback_url(
-            '/api/v1/payments/callback/mpesa/b2c/'
+
+        _success, payload, http_status = initiate_b2c_loan_disbursement(
+            loan=loan,
+            phone_number=data['phone_number'],
+            amount=data['amount'],
+            remarks=remarks,
         )
 
-        try:
-            daraja_response = DarajaClient().initiate_b2c(
-                phone_number=data['phone_number'],
-                amount=data['amount'],
-                occasion='Loan Disbursement',
-                remarks=remarks,
-                result_url=callback_url,
-                timeout_url=callback_url,
-            )
-        except DarajaError as exc:
-            return Response(
-                {
-                    'error': exc.message,
-                    'response_code': exc.response_code,
-                },
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        conversation_id = daraja_response.get('ConversationID')
-        originator_conversation_id = daraja_response.get(
-            'OriginatorConversationID'
-        )
-
-        with db_transaction.atomic():
-            provider = self._get_mpesa_provider()
-            payment = Transaction.objects.create(
-                provider=provider,
-                user=loan.membership.user,
-                reference=reference,
-                external_reference=conversation_id,
-                transaction_type=Transaction.TransactionType.LOAN_DISBURSEMENT,
-                amount=data['amount'],
-                status=Transaction.Status.PENDING,
-                description=remarks,
-                metadata={'daraja_response': daraja_response},
-            )
-            MpesaTransaction.objects.create(
-                transaction=payment,
-                phone_number=data['phone_number'],
-                conversation_id=conversation_id,
-                originator_conversation_id=originator_conversation_id,
-                transaction_type=MpesaTransaction.TransactionType.B2C,
-                related_loan=loan,
-            )
-            loan.status = Loan.Status.DISBURSEMENT_PENDING
-            loan.save(update_fields=['status', 'updated_at'])
-
-        return Response(
-            {
-                'conversation_id': conversation_id,
-                'message': 'Disbursement initiated.',
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-    def _build_reference(self):
-        return f'SS-B2C-{uuid4().hex[:18].upper()}'
-
-    def _get_mpesa_provider(self):
-        provider, _ = PaymentProvider.objects.get_or_create(
-            name='M-Pesa',
-            defaults={
-                'provider_type': PaymentProvider.ProviderType.MPESA,
-                'is_active': True,
-            },
-        )
-        return provider
+        return Response(payload, status=http_status)
 
 
 class B2CCallbackView(APIView):
@@ -868,6 +876,27 @@ class B2CCallbackView(APIView):
 
             result_code = result.get('ResultCode')
 
+            try:
+                mpesa_transaction = MpesaTransaction.objects.select_related(
+                    'transaction',
+                ).get(
+                    conversation_id=conversation_id,
+                    transaction_type=MpesaTransaction.TransactionType.B2C,
+                )
+            except Exception as exc:
+                logger.error(
+                    'M-Pesa B2C callback transaction lookup error: %s',
+                    exc,
+                    exc_info=True,
+                )
+                _persist_mpesa_enqueue_failure(
+                    callback_body=callback_body,
+                    error=exc,
+                    callback_type='B2C',
+                )
+                _clear_mpesa_replay_marker(conversation_id)
+                return _retry_mpesa_response()
+
             from .tasks import process_b2c_callback_task
 
             try:
@@ -876,14 +905,20 @@ class B2CCallbackView(APIView):
                     result_code,
                     callback_body,
                 )
-            except Exception as exc:
+            except BROKER_CONNECTION_ERRORS as exc:
                 logger.error(
                     'M-Pesa B2C callback task enqueue error: %s',
                     exc,
                     exc_info=True,
                 )
-                # Still return success to prevent M-Pesa retry
-                return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+                _persist_mpesa_enqueue_failure(
+                    callback_body=callback_body,
+                    error=exc,
+                    callback_type='B2C',
+                    mpesa_transaction=mpesa_transaction,
+                )
+                _clear_mpesa_replay_marker(conversation_id)
+                return _retry_mpesa_response()
 
             logger.info(
                 'M-Pesa B2C callback enqueued: %s',
@@ -897,8 +932,7 @@ class B2CCallbackView(APIView):
                 exc,
                 exc_info=True,
             )
-            # Return success anyway to prevent M-Pesa from retrying
-            return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+            return _retry_mpesa_response()
 
 
 class B2CStatusView(APIView):

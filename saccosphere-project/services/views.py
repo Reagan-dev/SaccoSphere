@@ -83,6 +83,12 @@ class SavingsTypeViewSet(SaccoScopedMixin, ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+
+        # For write actions, enforce strict SACCO scoping from context
+        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+            return self.apply_sacco_scope(queryset)
+
+        # For read actions, allow query param filtering
         sacco = self.request.query_params.get('sacco')
         sacco_id = self.request.query_params.get('sacco_id')
 
@@ -358,7 +364,12 @@ class GuarantorSearchView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def _find_guarantor_user(self, loan, phone=None, member_number=None):
-        """Find a possible guarantor user by phone or member number."""
+        """Find a possible guarantor user by phone or member number.
+
+        Uses exact matching only for security. Partial matching was removed to
+        prevent accidental selection of the wrong guarantor. Users must know
+        the exact phone number or member number to search for a guarantor.
+        """
         memberships = Membership.objects.select_related('user').filter(
             sacco=loan.membership.sacco,
             status=Membership.Status.APPROVED,
@@ -367,13 +378,6 @@ class GuarantorSearchView(APIView):
         if phone:
             membership = memberships.filter(
                 user__phone_number=phone,
-            ).first()
-
-            if membership is not None:
-                return membership.user
-
-            membership = memberships.filter(
-                user__phone_number__icontains=phone,
             ).first()
 
             if membership is not None:

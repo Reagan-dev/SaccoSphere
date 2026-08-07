@@ -16,51 +16,74 @@ from .providers.registry import get_provider_class
 logger = logging.getLogger('saccosphere.payments')
 
 
-@shared_task(name='payments.tasks.process_stk_callback')
-def process_stk_callback_task(checkout_request_id, result_code, callback_body):
-    with db_transaction.atomic():
-        try:
-            mpesa_transaction = MpesaTransaction.objects.select_for_update(
-                of=('self',),
-            ).select_related(
-                'transaction',
-                'transaction__user',
-                'related_saving',
-                'related_saving__membership',
-                'related_loan',
-                'related_loan__membership',
-            ).get(checkout_request_id=checkout_request_id)
-        except MpesaTransaction.DoesNotExist:
-            logger.warning(
-                'M-Pesa STK callback ignored. Transaction not found: %s.',
-                checkout_request_id,
-            )
-            return False
+@shared_task(
+    bind=True,
+    name='payments.tasks.process_stk_callback',
+    max_retries=3,
+    default_retry_delay=60,
+)
+def process_stk_callback_task(
+    self,
+    checkout_request_id,
+    result_code,
+    callback_body,
+):
+    try:
+        with db_transaction.atomic():
+            try:
+                mpesa_transaction = MpesaTransaction.objects.select_for_update(
+                    of=('self',),
+                ).select_related(
+                    'transaction',
+                    'transaction__user',
+                    'related_saving',
+                    'related_saving__membership',
+                    'related_loan',
+                    'related_loan__membership',
+                ).get(checkout_request_id=checkout_request_id)
+            except MpesaTransaction.DoesNotExist:
+                logger.warning(
+                    'M-Pesa STK callback ignored. Transaction not found: %s.',
+                    checkout_request_id,
+                )
+                return False
 
-        transaction = mpesa_transaction.transaction
-        if _callback_already_processed(mpesa_transaction, transaction):
-            logger.info(
-                'M-Pesa STK callback already processed: %s.',
-                checkout_request_id,
-            )
-            return True
+            transaction = mpesa_transaction.transaction
+            if _callback_already_processed(mpesa_transaction, transaction):
+                logger.info(
+                    'M-Pesa STK callback already processed: '
+                    'checkout_request_id=%s transaction_reference=%s.',
+                    checkout_request_id,
+                    transaction.reference,
+                )
+                return True
 
-        stk_callback = _get_stk_callback(callback_body)
-        normalized_result_code = _normalize_result_code(result_code)
+            stk_callback = _get_stk_callback(callback_body)
+            normalized_result_code = _normalize_result_code(result_code)
 
-        if normalized_result_code == 0:
-            _process_successful_callback(
-                mpesa_transaction,
-                transaction,
-                stk_callback,
-            )
-        else:
-            _process_failed_callback(
-                mpesa_transaction,
-                transaction,
-                stk_callback,
-                normalized_result_code,
-            )
+            if normalized_result_code == 0:
+                _process_successful_callback(
+                    mpesa_transaction,
+                    transaction,
+                    stk_callback,
+                )
+            else:
+                _process_failed_callback(
+                    mpesa_transaction,
+                    transaction,
+                    stk_callback,
+                    normalized_result_code,
+                )
+    except Exception as exc:
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'M-Pesa STK callback processing failed for '
+            'checkout_request_id=%s. Retrying in %s seconds.',
+            checkout_request_id,
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
 
     logger.info(
         'M-Pesa STK callback processed for checkout_request_id=%s.',
@@ -69,11 +92,18 @@ def process_stk_callback_task(checkout_request_id, result_code, callback_body):
     return True
 
 
-@shared_task(bind=True, name='payments.tasks.process_payment_callback', max_retries=3, default_retry_delay=60)
+@shared_task(
+    bind=True,
+    name='payments.tasks.process_payment_callback',
+    max_retries=3,
+    default_retry_delay=60,
+)
 def process_payment_callback(self, callback_id):
-    """Process a PSP callback by dispatching to the provider-specific parser."""
+    """Process a PSP callback through the provider-specific parser."""
     try:
-        callback = Callback.objects.select_related('provider').get(id=callback_id)
+        callback = Callback.objects.select_related('provider').get(
+            id=callback_id,
+        )
     except Callback.DoesNotExist:
         logger.error('Payment callback not found: %s', callback_id)
         return False
@@ -116,14 +146,20 @@ def process_payment_callback(self, callback_id):
                     transaction=transaction,
                 )
             else:
-                logger.warning('No membership found for transaction %s', transaction.id)
+                logger.warning(
+                    'No membership found for transaction %s',
+                    transaction.id,
+                )
             notify_user_task.delay(
                 str(transaction.user_id),
                 'Deposit Confirmed',
                 'Your deposit has been confirmed.',
                 'payment',
             )
-            logger.info('Transaction %s completed via callback', transaction.id)
+            logger.info(
+                'Transaction %s completed via callback',
+                transaction.id,
+            )
         elif result.is_failed:
             transaction.status = Transaction.Status.FAILED
             transaction.save(update_fields=['status', 'updated_at'])
@@ -147,7 +183,7 @@ def process_payment_callback(self, callback_id):
 
 @shared_task(name='payments.tasks.reconcile_pending_transactions')
 def reconcile_pending_transactions():
-    """Query pending transactions and reconcile them with the provider status API."""
+    """Query pending transactions and reconcile them with provider status."""
     cutoff = timezone.now() - timezone.timedelta(minutes=10)
     pending_transactions = Transaction.objects.filter(
         status=Transaction.Status.PENDING,
@@ -160,10 +196,18 @@ def reconcile_pending_transactions():
             provider = get_provider_class(transaction.provider.name)()
             result = provider.query_status(str(transaction.id))
         except Exception as exc:
-            logger.warning('Reconciliation failed for transaction %s: %s', transaction.id, exc)
+            logger.warning(
+                'Reconciliation failed for transaction %s: %s',
+                transaction.id,
+                exc,
+            )
             continue
 
-        if not result.is_successful and not result.is_failed and not result.is_pending:
+        if (
+            not result.is_successful
+            and not result.is_failed
+            and not result.is_pending
+        ):
             continue
 
         callback_payload = {
@@ -182,56 +226,79 @@ def reconcile_pending_transactions():
     return True
 
 
-@shared_task(name='payments.tasks.process_b2c_callback')
-def process_b2c_callback_task(conversation_id, result_code, callback_body):
-    with db_transaction.atomic():
-        try:
-            mpesa_transaction = MpesaTransaction.objects.select_for_update(
-                of=('self',),
-            ).select_related(
-                'transaction',
-                'transaction__user',
-                'related_loan',
-                'related_loan__membership',
-            ).get(
-                conversation_id=conversation_id,
-                transaction_type=MpesaTransaction.TransactionType.B2C,
-            )
-        except MpesaTransaction.DoesNotExist:
-            logger.warning(
-                'M-Pesa B2C callback ignored. Transaction not found: %s.',
-                conversation_id,
-            )
-            return False
+@shared_task(
+    bind=True,
+    name='payments.tasks.process_b2c_callback',
+    max_retries=3,
+    default_retry_delay=60,
+)
+def process_b2c_callback_task(
+    self,
+    conversation_id,
+    result_code,
+    callback_body,
+):
+    try:
+        with db_transaction.atomic():
+            try:
+                mpesa_transaction = MpesaTransaction.objects.select_for_update(
+                    of=('self',),
+                ).select_related(
+                    'transaction',
+                    'transaction__user',
+                    'related_loan',
+                    'related_loan__membership',
+                ).get(
+                    conversation_id=conversation_id,
+                    transaction_type=MpesaTransaction.TransactionType.B2C,
+                )
+            except MpesaTransaction.DoesNotExist:
+                logger.warning(
+                    'M-Pesa B2C callback ignored. Transaction not found: %s.',
+                    conversation_id,
+                )
+                return False
 
-        transaction = mpesa_transaction.transaction
-        if _callback_already_processed(mpesa_transaction, transaction):
-            logger.info(
-                'M-Pesa B2C callback already processed: %s.',
-                conversation_id,
-            )
-            return True
+            transaction = mpesa_transaction.transaction
+            if _callback_already_processed(mpesa_transaction, transaction):
+                logger.info(
+                    'M-Pesa B2C callback already processed: '
+                    'conversation_id=%s transaction_reference=%s.',
+                    conversation_id,
+                    transaction.reference,
+                )
+                return True
 
-        result = (
-            callback_body.get('Result')
-            or callback_body.get('result')
-            or {}
+            result = (
+                callback_body.get('Result')
+                or callback_body.get('result')
+                or {}
+            )
+            normalized_result_code = _normalize_result_code(result_code)
+
+            if normalized_result_code == 0:
+                _process_successful_b2c_callback(
+                    mpesa_transaction,
+                    transaction,
+                    result,
+                )
+            else:
+                _process_failed_b2c_callback(
+                    mpesa_transaction,
+                    transaction,
+                    result,
+                    normalized_result_code,
+                )
+    except Exception as exc:
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'M-Pesa B2C callback processing failed for '
+            'conversation_id=%s. Retrying in %s seconds.',
+            conversation_id,
+            countdown,
+            exc_info=True,
         )
-        normalized_result_code = _normalize_result_code(result_code)
-
-        if normalized_result_code == 0:
-            _process_successful_b2c_callback(
-                mpesa_transaction,
-                transaction,
-                result,
-            )
-        else:
-            _process_failed_b2c_callback(
-                mpesa_transaction,
-                transaction,
-                result,
-                normalized_result_code,
-            )
+        raise self.retry(exc=exc, countdown=countdown)
 
     logger.info(
         'M-Pesa B2C callback processed for conversation_id=%s.',
@@ -246,6 +313,7 @@ def _callback_already_processed(mpesa_transaction, transaction):
         and transaction.status in {
             Transaction.Status.COMPLETED,
             Transaction.Status.FAILED,
+            Transaction.Status.AMOUNT_MISMATCH,
         }
     )
 
@@ -278,6 +346,19 @@ def _process_successful_callback(
         ]
     )
 
+    expected_amount = _get_expected_gross_amount(transaction)
+    amount_difference = abs(callback_amount - expected_amount)
+    if amount_difference > Decimal('0.01'):
+        _handle_amount_mismatch(
+            mpesa_transaction,
+            transaction,
+            receipt_number,
+            callback_amount,
+            expected_amount,
+            amount_difference,
+        )
+        return
+
     transaction.status = Transaction.Status.COMPLETED
     transaction.external_reference = (
         receipt_number or transaction.external_reference
@@ -286,28 +367,14 @@ def _process_successful_callback(
         update_fields=['status', 'external_reference', 'updated_at']
     )
 
-    # Reconcile callback amount with expected transaction amount
-    expected_amount = transaction.amount
-    amount_difference = abs(callback_amount - expected_amount)
-    if amount_difference > Decimal('0.01'):
-        logger.warning(
-            'M-Pesa callback amount mismatch for transaction_id=%s: '
-            'callback_amount=%s, expected_amount=%s, difference=%s',
-            transaction.id,
-            callback_amount,
-            expected_amount,
-            amount_difference,
-        )
-    else:
-        logger.info(
-            'M-Pesa callback amount reconciled for transaction_id=%s: '
-            'callback_amount=%s matches expected_amount=%s',
-            transaction.id,
-            callback_amount,
-            expected_amount,
-        )
+    logger.info(
+        'M-Pesa callback amount reconciled for transaction_id=%s: '
+        'callback_amount=%s matches expected_amount=%s',
+        transaction.id,
+        callback_amount,
+        expected_amount,
+    )
 
-    # Use net amount (transaction.amount) for crediting, not gross callback amount
     net_amount = transaction.amount
 
     if mpesa_transaction.related_saving_id:
@@ -325,6 +392,107 @@ def _process_successful_callback(
         )
 
     _notify_payment_success(mpesa_transaction, transaction, net_amount)
+
+
+def _get_expected_gross_amount(transaction):
+    gross_amount = transaction.metadata.get('gross_amount')
+    if gross_amount is None:
+        return transaction.amount
+
+    return _to_decimal(gross_amount)
+
+
+def _handle_amount_mismatch(
+    mpesa_transaction,
+    transaction,
+    receipt_number,
+    callback_amount,
+    expected_amount,
+    amount_difference,
+):
+    logger.warning(
+        'M-Pesa callback amount mismatch for transaction_id=%s: '
+        'callback_amount=%s, expected_amount=%s, difference=%s',
+        transaction.id,
+        callback_amount,
+        expected_amount,
+        amount_difference,
+    )
+
+    transaction.status = Transaction.Status.AMOUNT_MISMATCH
+    transaction.external_reference = (
+        receipt_number or transaction.external_reference
+    )
+    transaction.metadata = {
+        **transaction.metadata,
+        'amount_mismatch': {
+            'callback_amount': str(callback_amount),
+            'expected_gross_amount': str(expected_amount),
+            'difference': str(amount_difference),
+        },
+    }
+    transaction.save(
+        update_fields=[
+            'status',
+            'external_reference',
+            'metadata',
+            'updated_at',
+        ]
+    )
+
+    _notify_sacco_admin_amount_mismatch(
+        mpesa_transaction,
+        transaction,
+        callback_amount,
+        expected_amount,
+    )
+
+
+def _notify_sacco_admin_amount_mismatch(
+    mpesa_transaction,
+    transaction,
+    callback_amount,
+    expected_amount,
+):
+    from notifications.models import Notification
+    from notifications.utils import create_notification
+    from saccomanagement.models import Role
+
+    sacco = _get_related_sacco(mpesa_transaction)
+    if sacco is None:
+        logger.warning(
+            'Amount mismatch has no SACCO context for transaction_id=%s.',
+            transaction.id,
+        )
+        return
+
+    admin_roles = Role.objects.select_related('user').filter(
+        sacco=sacco,
+        name=Role.SACCO_ADMIN,
+    )
+    for role in admin_roles:
+        create_notification(
+            user=role.user,
+            title='Payment amount mismatch',
+            message=(
+                f'M-Pesa callback amount KES {callback_amount} did not '
+                f'match expected amount KES {expected_amount}.'
+            ),
+            category=Notification.Category.PAYMENT,
+            related_object_type='Transaction',
+            related_object_id=str(transaction.id),
+            dispatch_async=False,
+        )
+
+
+def _get_related_sacco(mpesa_transaction):
+    if mpesa_transaction.related_saving_id:
+        return mpesa_transaction.related_saving.membership.sacco
+
+    if mpesa_transaction.related_loan_id:
+        return mpesa_transaction.related_loan.membership.sacco
+
+    return None
 
 
 def _process_failed_callback(
@@ -352,7 +520,11 @@ def _process_failed_callback(
     transaction.status = Transaction.Status.FAILED
     transaction.save(update_fields=['status', 'updated_at'])
 
-    _notify_payment_failure(mpesa_transaction, transaction, result_description)
+    _notify_payment_failure(
+        mpesa_transaction,
+        transaction,
+        result_description,
+    )
     logger.info(
         'M-Pesa STK callback failed for checkout_request_id=%s: %s.',
         mpesa_transaction.checkout_request_id,
@@ -457,65 +629,140 @@ def _process_failed_b2c_callback(
 def _apply_saving_deposit(mpesa_transaction, transaction, amount):
     from ledger.models import LedgerEntry
     from ledger.utils import create_ledger_entry
+    from services.models import Saving
 
-    saving = mpesa_transaction.related_saving
-    saving.amount += amount
-    saving.total_contributions += amount
-    saving.last_transaction_date = timezone.localdate()
-    saving.save(
-        update_fields=[
-            'amount',
-            'total_contributions',
-            'last_transaction_date',
-            'updated_at',
-        ]
-    )
+    with db_transaction.atomic():
+        saving = Saving.objects.select_for_update().select_related(
+            'membership',
+        ).get(id=mpesa_transaction.related_saving_id)
+        saving.amount += amount
+        saving.total_contributions += amount
+        saving.last_transaction_date = timezone.localdate()
+        saving.save(
+            update_fields=[
+                'amount',
+                'total_contributions',
+                'last_transaction_date',
+                'updated_at',
+            ]
+        )
 
-    create_ledger_entry(
-        membership=saving.membership,
-        entry_type=LedgerEntry.EntryType.CREDIT,
-        category=LedgerEntry.Category.SAVING_DEPOSIT,
-        amount=amount,
-        description='M-Pesa saving deposit',
-        reference=(
-            mpesa_transaction.mpesa_receipt_number
-            or transaction.external_reference
-        ),
-        transaction=transaction,
-    )
+        create_ledger_entry(
+            membership=saving.membership,
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.SAVING_DEPOSIT,
+            amount=amount,
+            description='M-Pesa saving deposit',
+            reference=(
+                mpesa_transaction.mpesa_receipt_number
+                or transaction.external_reference
+            ),
+            transaction=transaction,
+        )
 
 
 def _apply_loan_repayment(mpesa_transaction, transaction, amount):
     from ledger.models import LedgerEntry
-    from services.models import RepaymentSchedule
+    from services.models import Loan, RepaymentSchedule
 
-    loan = mpesa_transaction.related_loan
-    loan.outstanding_balance = max(
-        Decimal('0.00'),
-        loan.outstanding_balance - amount,
-    )
-    loan.save(update_fields=['outstanding_balance', 'updated_at'])
-
-    if mpesa_transaction.related_instalment_number:
-        RepaymentSchedule.objects.filter(
-            loan=loan,
-            instalment_number=mpesa_transaction.related_instalment_number,
-        ).update(
-            status=RepaymentSchedule.Status.PAID,
-            paid_date=timezone.localdate(),
-            paid_amount=amount,
+    with db_transaction.atomic():
+        loan = Loan.objects.select_for_update().get(
+            id=mpesa_transaction.related_loan_id,
+        )
+        applied_amount, unapplied_amount = _apply_amount_to_instalments(
+            loan,
+            mpesa_transaction.related_instalment_number,
+            amount,
+            RepaymentSchedule,
         )
 
-    LedgerEntry.objects.create(
-        membership=loan.membership,
-        entry_type=LedgerEntry.EntryType.CREDIT,
-        category=LedgerEntry.Category.LOAN_REPAYMENT,
-        amount=amount,
-        reference=f'{transaction.reference}-LEDGER',
-        description='M-Pesa loan repayment',
-        balance_after=loan.outstanding_balance,
-        transaction=transaction,
+        if unapplied_amount > Decimal('0.00'):
+            logger.warning(
+                'Loan repayment has unapplied excess for transaction_id=%s: '
+                'amount=%s, applied=%s, unapplied=%s.',
+                transaction.id,
+                amount,
+                applied_amount,
+                unapplied_amount,
+            )
+
+        if applied_amount <= Decimal('0.00'):
+            return
+
+        loan.outstanding_balance = max(
+            Decimal('0.00'),
+            loan.outstanding_balance - applied_amount,
+        )
+        loan.save(update_fields=['outstanding_balance', 'updated_at'])
+
+        LedgerEntry.objects.create(
+            membership=loan.membership,
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.LOAN_REPAYMENT,
+            amount=applied_amount,
+            reference=f'{transaction.reference}-LEDGER',
+            description='M-Pesa loan repayment',
+            balance_after=loan.outstanding_balance,
+            transaction=transaction,
+        )
+
+
+def _apply_amount_to_instalments(
+    loan,
+    starting_instalment_number,
+    amount,
+    repayment_schedule_model,
+):
+    remaining_amount = amount
+    applied_amount = Decimal('0.00')
+    unpaid_statuses = [
+        repayment_schedule_model.Status.PENDING,
+        repayment_schedule_model.Status.OVERDUE,
+        repayment_schedule_model.Status.PARTIAL,
+    ]
+    instalments = repayment_schedule_model.objects.select_for_update().filter(
+        loan=loan,
+        status__in=unpaid_statuses,
     )
+
+    if starting_instalment_number:
+        instalments = instalments.filter(
+            instalment_number__gte=starting_instalment_number,
+        )
+
+    for instalment in instalments.order_by('instalment_number'):
+        if remaining_amount <= Decimal('0.00'):
+            break
+
+        already_paid = instalment.paid_amount or Decimal('0.00')
+        amount_due = max(
+            Decimal('0.00'),
+            instalment.amount - already_paid,
+        )
+        if amount_due <= Decimal('0.00'):
+            continue
+
+        instalment_payment = min(remaining_amount, amount_due)
+        new_paid_amount = already_paid + instalment_payment
+        remaining_amount -= instalment_payment
+        applied_amount += instalment_payment
+
+        if new_paid_amount < instalment.amount:
+            instalment.status = repayment_schedule_model.Status.PARTIAL
+        else:
+            instalment.status = repayment_schedule_model.Status.PAID
+
+        instalment.paid_amount = new_paid_amount
+        instalment.paid_date = timezone.localdate()
+        instalment.save(
+            update_fields=[
+                'status',
+                'paid_amount',
+                'paid_date',
+            ]
+        )
+
+    return applied_amount, remaining_amount
 
 
 def _create_loan_disbursement_ledger(
@@ -644,7 +891,10 @@ def _normalize_result_code(result_code):
     try:
         return int(result_code)
     except (TypeError, ValueError):
-        logger.warning('Invalid M-Pesa result code received: %s.', result_code)
+        logger.warning(
+            'Invalid M-Pesa result code received: %s.',
+            result_code,
+        )
         return -1
 
 
