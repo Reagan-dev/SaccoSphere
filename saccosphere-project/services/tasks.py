@@ -5,7 +5,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from celery import shared_task
-from django.db import transaction
+from django.db import DatabaseError, InterfaceError, OperationalError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -99,14 +99,23 @@ def notify_guarantor_task(self, guarantor_id):
     return True
 
 
-@shared_task(name='services.tasks.notify_guarantors')
-def notify_guarantors_task(loan_id):
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='services.tasks.notify_guarantors',
+)
+def notify_guarantors_task(self, loan_id):
     """
     Notify all pending guarantors about a loan guarantee request.
 
     Retrieves the loan with related guarantors and sends notification
     to each guarantor with PENDING status via the notification system.
     Includes SMS notification for high-priority guarantor requests.
+
+    Individual guarantor notification failures are isolated and logged
+    without blocking other guarantors. The task itself retries only on
+    transient errors (e.g., database connection issues).
 
     Args:
         loan_id (str): UUID of the Loan object.
@@ -117,38 +126,59 @@ def notify_guarantors_task(loan_id):
     Raises:
         Loan.DoesNotExist: If the loan is not found.
     """
-    loan = get_object_or_404(Loan, id=loan_id)
-    loan = loan.refresh_from_db() or loan
+    TRANSIENT_ERRORS = (DatabaseError, InterfaceError, OperationalError)
 
-    pending_guarantors = Guarantor.objects.filter(
-        loan=loan,
-        status=Guarantor.Status.PENDING,
-    ).select_related('guarantor')
+    try:
+        loan = get_object_or_404(Loan, id=loan_id)
+        loan = loan.refresh_from_db() or loan
 
-    count = 0
-    for guarantor in pending_guarantors:
-        try:
-            notify_guarantor_task.delay(str(guarantor.id))
+        pending_guarantors = Guarantor.objects.filter(
+            loan=loan,
+            status=Guarantor.Status.PENDING,
+        ).select_related('guarantor')
 
-            count += 1
-            logger.info(
-                'Guarantor notification queued for guarantor_id=%s, '
-                'loan_id=%s.',
-                guarantor.id,
-                loan.id,
+        count = 0
+        for guarantor in pending_guarantors:
+            try:
+                notify_guarantor_task.delay(str(guarantor.id))
+
+                count += 1
+                logger.info(
+                    'Guarantor notification queued for guarantor_id=%s, '
+                    'loan_id=%s.',
+                    guarantor.id,
+                    loan.id,
+                )
+
+            except Exception as exc:
+                logger.error(
+                    'Failed to queue guarantor notification for '
+                    'guarantor_id=%s: %s',
+                    guarantor.id,
+                    exc,
+                    exc_info=True,
+                )
+                continue
+
+        return count
+    except TRANSIENT_ERRORS as exc:
+        if self.request.retries >= self.max_retries:
+            logger.exception(
+                'Guarantor notification task exhausted transient retries '
+                'for loan_id=%s.',
+                loan_id,
             )
+            raise
 
-        except Exception as exc:
-            logger.error(
-                'Failed to queue guarantor notification for '
-                'guarantor_id=%s: %s',
-                guarantor.id,
-                exc,
-                exc_info=True,
-            )
-            continue
-
-    return count
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'Guarantor notification task hit transient DB/connection error '
+            'for loan_id=%s. Retrying in %s seconds.',
+            loan_id,
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
 
 
 @shared_task(
