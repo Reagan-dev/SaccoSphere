@@ -33,12 +33,17 @@ def generate_and_send_monthly_fee_reports():
             send_invoice_to_sacco(invoice)
             processed += 1
         except Exception as exc:
-            failures.append(
-                {
-                    'sacco_id': str(sacco.id),
-                    'sacco_name': sacco.name,
-                    'error': str(exc),
-                },
+            failure_entry = {
+                'sacco_id': str(sacco.id),
+                'sacco_name': sacco.name,
+                'error': str(exc),
+            }
+            failures.append(failure_entry)
+            logger.error(
+                'Monthly invoice generation failed for SACCO %s: %s',
+                sacco.name,
+                exc,
+                exc_info=True,
             )
             logger.exception(
                 'Monthly platform fee report failed for sacco_id=%s.',
