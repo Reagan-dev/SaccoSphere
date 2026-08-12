@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import dj_database_url
@@ -296,6 +297,13 @@ MPESA_B2C_SECURITY_CREDENTIAL = config(
 BILLING_ACCOUNT_NAME = config('BILLING_ACCOUNT_NAME', default='')
 BILLING_ACCOUNT_NUMBER = config('BILLING_ACCOUNT_NUMBER', default='')
 BILLING_PAYBILL = config('BILLING_PAYBILL', default='')
+
+PLATFORM_FEES = {
+    'deposit': Decimal('0.01'),
+    'repayment': Decimal('0.01'),
+    'disbursement': Decimal('0.0035'),
+    'withdrawal': Decimal('0.0035'),
+}
 
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 

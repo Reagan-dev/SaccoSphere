@@ -41,7 +41,7 @@ class BasePSPProvider(ABC):
         self,
         transaction_id: str,
         phone: str,
-        amount: Decimal,
+        gross_amount: Decimal,
         sacco: "Sacco",
         **kwargs,
     ) -> CheckoutResult:
