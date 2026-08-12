@@ -20,7 +20,7 @@ class MockPSPProvider(BasePSPProvider):
         self,
         transaction_id: str,
         phone: str,
-        amount: Decimal,
+        gross_amount: Decimal,
         sacco,
         **kwargs,
     ) -> CheckoutResult:
@@ -37,7 +37,7 @@ class MockPSPProvider(BasePSPProvider):
             raw_response={
                 "transaction_id": transaction_id,
                 "provider_reference": provider_reference,
-                "amount": str(amount),
+                "gross_amount": str(gross_amount),
             },
             success=True,
         )

@@ -152,6 +152,74 @@ class DepositInitiateViewTests(TestCase):
         self.assertIn('approved membership', response.data['detail'])
         self.assertFalse(Transaction.objects.exists())
 
+    @override_settings(DEBUG=True, PAYMENT_PROVIDER='')
+    def test_deposit_charges_gross_and_records_net_fee_breakdown(self):
+        """Deposit initiation charges gross while recording net and fee."""
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(
+            reverse('payments:deposit-initiate'),
+            {
+                'phone_number': '254712345678',
+                'amount': '1000.00',
+                'sacco_id': str(self.member_sacco.id),
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['amount_depositing'], 'KES 1,000.00')
+        self.assertEqual(response.data['platform_fee'], 'KES 10.00')
+        self.assertEqual(response.data['total_charged'], 'KES 1,010.00')
+        self.assertEqual(response.data['savings_credited'], 'KES 1,000.00')
+        self.assertEqual(response.data['status'], Transaction.Status.PENDING)
+
+        transaction = Transaction.objects.get()
+        self.assertEqual(transaction.amount, Decimal('1000.00'))
+        self.assertEqual(transaction.fee_amount, Decimal('10.00'))
+        self.assertEqual(transaction.metadata['net_amount'], '1000.00')
+        self.assertEqual(transaction.metadata['platform_fee'], '10.00')
+        self.assertEqual(transaction.metadata['gross_amount'], '1010.00')
+
+
+class FeePreviewViewTests(TestCase):
+    """Validate fee preview summaries before payment initiation."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='fee.preview@example.com',
+            phone_number='254712345679',
+            password='StrongPass1',
+        )
+
+    def test_fee_preview_requires_authentication(self):
+        response = self.client.get(
+            reverse('payments:fee-preview'),
+            {'type': 'deposit', 'amount': '1000'},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_deposit_fee_preview_returns_gross_payment_summary(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get(
+            reverse('payments:fee-preview'),
+            {'type': 'deposit', 'amount': '1000'},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['platform_fee'], Decimal('10.00'))
+        self.assertEqual(response.data['gross_amount'], Decimal('1010.00'))
+        self.assertEqual(response.data['net_amount'], Decimal('1000'))
+        self.assertEqual(
+            response.data['summary']['you_pay'],
+            'KES 1,010.00',
+        )
+        self.assertEqual(
+            response.data['summary']['credited_to_you'],
+            'KES 1,000.00',
+        )
+
 
 class CallbackCreateViewTests(TestCase):
     """Validate generic PSP callback verification and async dispatch."""
