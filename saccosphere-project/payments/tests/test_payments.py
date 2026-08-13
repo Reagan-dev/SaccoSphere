@@ -31,7 +31,7 @@ from saccomembership.models import Membership
 from services.models import Loan, LoanType, RepaymentSchedule, Saving
 from services.models import SavingsType
 
-from .integrations.mpesa.daraja import DarajaClient, DarajaError
+from payments.integrations.mpesa.daraja import DarajaClient, DarajaError
 
 
 class FakeResponse:
@@ -237,7 +237,7 @@ class CallbackCreateViewTests(TestCase):
         self,
         get_provider_class_mock,
     ):
-        """Failed provider verification rejects callback before persistence."""
+        """Failed provider verification rejects the callback."""
 
         class RejectingProvider:
             def verify_webhook(self, request):

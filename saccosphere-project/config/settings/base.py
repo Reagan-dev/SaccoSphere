@@ -300,10 +300,25 @@ BILLING_PAYBILL = config('BILLING_PAYBILL', default='')
 
 PLATFORM_FEES = {
     'deposit': Decimal('0.01'),
-    'repayment': Decimal('0.01'),
-    'disbursement': Decimal('0.0035'),
-    'withdrawal': Decimal('0.0035'),
+    'repayment': Decimal('0.005'),
 }
+
+DISBURSEMENT_TIERS = [
+    (10_000, Decimal('50')),
+    (30_000, Decimal('100')),
+    (70_000, Decimal('200')),
+    (150_000, Decimal('350')),
+    (300_000, Decimal('500')),
+    (None, Decimal('750')),
+]
+
+WITHDRAWAL_TIERS = [
+    (2_000, Decimal('15')),
+    (5_000, Decimal('25')),
+    (10_000, Decimal('40')),
+    (20_000, Decimal('60')),
+    (None, Decimal('100')),
+]
 
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
