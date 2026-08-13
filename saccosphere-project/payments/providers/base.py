@@ -30,6 +30,11 @@ class DisbursementResult:
     success: bool
     error_message: str = ""
 
+    @property
+    def conversation_id(self) -> str:
+        """Return the provider reference using M-Pesa B2C naming."""
+        return self.provider_reference
+
 
 @dataclass(slots=True)
 class StatusResult:
@@ -40,6 +45,11 @@ class StatusResult:
     is_pending: bool
     provider_status: str
     amount_confirmed: Decimal | None = None
+
+    @property
+    def is_delivered(self) -> bool:
+        """Return whether the outbound payment reached the recipient."""
+        return self.is_successful
 
 
 class BasePSPProvider(ABC):
@@ -82,6 +92,10 @@ class BasePSPProvider(ABC):
     @abstractmethod
     def query_status(self, transaction_id: str) -> StatusResult:
         """Fetch the latest known payment status for a transaction."""
+
+    def query_b2c_status(self, conversation_id: str) -> StatusResult:
+        """Fetch B2C delivery status by provider conversation identifier."""
+        return self.query_status(conversation_id)
 
     def get_provider_name(self) -> str:
         """Return the provider identifier used by the registry."""

@@ -2,6 +2,7 @@ from decimal import Decimal, InvalidOperation
 from datetime import timedelta
 
 from django.core.cache import cache
+from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 from django.db import transaction
 from django.db.models import Count, Sum
 from django.shortcuts import get_object_or_404
@@ -35,6 +36,7 @@ from .engines.loan_limits import calculate_loan_limit
 from .engines.liquidity_monitor import check_liquidity_risk
 from .models import (
     CRBCheck,
+    DisbursementAuditLog,
     DividendDeclaration,
     DividendPayout,
     GuaranteeCapacity,
@@ -61,6 +63,11 @@ from .serializers import (
     SavingSerializer,
     SavingsTypeSerializer,
     SavingsTypeWriteSerializer,
+)
+from .tasks import (
+    _notify_sacco_admins,
+    _notify_superadmins,
+    _record_disbursement_invoice_item,
 )
 
 
@@ -297,6 +304,207 @@ class LoanDetailView(RetrieveAPIView):
         ).select_related(
             'membership__sacco',
             'loan_type',
+        )
+
+
+class ConfirmDisbursementView(APIView):
+    """Confirm that a member received a disbursed loan."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        loan = self._get_loan_from_token(request)
+        if isinstance(loan, Response):
+            return loan
+
+        with transaction.atomic():
+            loan = (
+                Loan.objects.select_for_update()
+                .select_related('membership', 'membership__sacco')
+                .get(id=loan.id)
+            )
+            if loan.disbursement_status == Loan.DisbursementStatus.DISPUTED:
+                return Response(
+                    {'detail': 'This disbursement is already disputed.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if loan.disbursement_status in [
+                Loan.DisbursementStatus.MEMBER_CONFIRMED,
+                Loan.DisbursementStatus.AUTO_CONFIRMED,
+            ]:
+                return Response(
+                    {
+                        'status': 'confirmed',
+                        'message': 'Thank you for confirming',
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+            loan.disbursement_status = Loan.DisbursementStatus.MEMBER_CONFIRMED
+            loan.member_confirmed_at = timezone.now()
+            loan.save(
+                update_fields=[
+                    'disbursement_status',
+                    'member_confirmed_at',
+                    'updated_at',
+                ],
+            )
+
+            DisbursementAuditLog.objects.create(
+                loan=loan,
+                event='MEMBER_CONFIRMED',
+                actor=None,
+                actor_role='member',
+                ip_address=self._get_ip(request),
+                details={
+                    'confirmed_at': loan.member_confirmed_at.isoformat(),
+                },
+            )
+
+            _record_disbursement_invoice_item(loan)
+
+        return Response(
+            {
+                'status': 'confirmed',
+                'message': 'Thank you for confirming',
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def _get_loan_from_token(self, request):
+        token = request.query_params.get('token')
+        if not token:
+            return Response(
+                {'detail': 'token query parameter is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        signer = TimestampSigner()
+        try:
+            loan_id = signer.unsign(token, max_age=86400)
+        except SignatureExpired:
+            return Response(
+                {'detail': 'Disbursement confirmation link has expired.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except BadSignature:
+            return Response(
+                {'detail': 'Invalid disbursement confirmation token.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return get_object_or_404(Loan, id=loan_id)
+
+    def _get_ip(self, request) -> str:
+        x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded:
+            return x_forwarded.split(',')[0].strip()
+        return request.META.get('REMOTE_ADDR', '')
+
+
+class DisputeDisbursementView(ConfirmDisbursementView):
+    """Record that a member did not receive a disbursed loan."""
+
+    def get(self, request):
+        loan = self._get_loan_from_token(request)
+        if isinstance(loan, Response):
+            return loan
+
+        reason = request.query_params.get('reason', '')
+
+        with transaction.atomic():
+            loan = (
+                Loan.objects.select_for_update()
+                .select_related(
+                    'membership',
+                    'membership__sacco',
+                    'membership__user',
+                )
+                .get(id=loan.id)
+            )
+            if loan.disbursement_status == Loan.DisbursementStatus.DISPUTED:
+                return Response(
+                    {
+                        'status': 'disputed',
+                        'message': (
+                            'Your dispute has been logged. '
+                            'We will investigate.'
+                        ),
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            if loan.disbursement_status in [
+                Loan.DisbursementStatus.MEMBER_CONFIRMED,
+                Loan.DisbursementStatus.AUTO_CONFIRMED,
+            ]:
+                return Response(
+                    {
+                        'detail': (
+                            'This disbursement has already been confirmed.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            loan.disbursement_status = Loan.DisbursementStatus.DISPUTED
+            loan.member_disputed_at = timezone.now()
+            loan.dispute_reason = reason
+            loan.save(
+                update_fields=[
+                    'disbursement_status',
+                    'member_disputed_at',
+                    'dispute_reason',
+                    'updated_at',
+                ],
+            )
+
+            details = {
+                'reason': reason,
+                'disputed_at': loan.member_disputed_at.isoformat(),
+            }
+            DisbursementAuditLog.objects.create(
+                loan=loan,
+                event='MEMBER_DISPUTED',
+                actor=None,
+                actor_role='member',
+                ip_address=self._get_ip(request),
+                details=details,
+            )
+            DisbursementAuditLog.objects.create(
+                loan=loan,
+                event='ESCALATED_TO_SUPERADMIN',
+                actor=None,
+                actor_role='system',
+                details={
+                    'reason': 'member disputed receipt',
+                    'member_reason': reason,
+                },
+            )
+
+        title = 'Disbursement Dispute Raised'
+        message = (
+            f'Member {loan.membership.user.email} reported non-receipt '
+            f'for loan {loan.id} at {loan.membership.sacco.name}.'
+        )
+        _notify_superadmins(title, message, related_loan_id=str(loan.id))
+        _notify_sacco_admins(
+            loan.membership.sacco,
+            title,
+            (
+                f'Loan {loan.id} is under member dispute. Please preserve '
+                f'all disbursement records for investigation.'
+            ),
+        )
+
+        return Response(
+            {
+                'status': 'disputed',
+                'message': (
+                    'Your dispute has been logged. We will investigate.'
+                ),
+            },
+            status=status.HTTP_200_OK,
         )
 
 

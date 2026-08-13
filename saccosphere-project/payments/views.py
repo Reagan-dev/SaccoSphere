@@ -1004,14 +1004,25 @@ class B2CCallbackView(APIView):
                 _clear_mpesa_replay_marker(conversation_id)
                 return _retry_mpesa_response()
 
-            from .tasks import process_b2c_callback_task
-
             try:
-                process_b2c_callback_task.delay(
-                    conversation_id,
-                    result_code,
-                    callback_body,
-                )
+                if (
+                    mpesa_transaction.related_loan_id
+                    and mpesa_transaction.related_loan.disbursement_transaction_id
+                ):
+                    from services.tasks import on_disbursement_b2c_callback
+
+                    on_disbursement_b2c_callback.delay(
+                        str(mpesa_transaction.related_loan_id),
+                        result,
+                    )
+                else:
+                    from .tasks import process_b2c_callback_task
+
+                    process_b2c_callback_task.delay(
+                        conversation_id,
+                        result_code,
+                        callback_body,
+                    )
             except BROKER_CONNECTION_ERRORS as exc:
                 logger.error(
                     'M-Pesa B2C callback task enqueue error: %s',

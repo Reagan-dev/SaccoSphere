@@ -102,6 +102,9 @@ def notify_user_task(
     message,
     category,
     action_url=None,
+    action_label=None,
+    secondary_url=None,
+    secondary_label=None,
     send_sms=False,
     send_push=True,
     create_in_app=True,
@@ -129,12 +132,23 @@ def notify_user_task(
 
     task_signatures = []
     if send_push:
+        push_data = {
+            'category': category,
+            'action_url': action_url or '',
+        }
+        if action_label:
+            push_data['action_label'] = action_label
+        if secondary_url:
+            push_data['secondary_url'] = secondary_url
+        if secondary_label:
+            push_data['secondary_label'] = secondary_label
+
         task_signatures.append(
             send_push_notification_task.s(
                 str(user_id),
                 title,
                 message,
-                {'category': category, 'action_url': action_url or ''},
+                push_data,
             )
         )
 

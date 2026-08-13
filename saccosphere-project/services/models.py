@@ -428,6 +428,16 @@ class Loan(models.Model):
 
         DEFAULTED = 'DEFAULTED', 'Defaulted'
 
+    class DisbursementStatus(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        INITIATED = 'INITIATED', 'B2C Initiated'
+        DISBURSED = 'DISBURSED', 'M-Pesa Confirmed'
+        MEMBER_CONFIRMED = 'MEMBER_CONFIRMED', 'Member Confirmed'
+        AUTO_CONFIRMED = 'AUTO_CONFIRMED', 'Auto-Confirmed by M-Pesa'
+        DISPUTED = 'DISPUTED', 'Member Disputed'
+        FAILED = 'FAILED', 'Disbursement Failed'
+        UNDER_REVIEW = 'UNDER_REVIEW', 'Under Admin Review'
+
 
 
     id = models.UUIDField(
@@ -526,6 +536,49 @@ class Loan(models.Model):
 
     )
 
+    disbursement_status = models.CharField(
+        max_length=30,
+        choices=DisbursementStatus.choices,
+        default=DisbursementStatus.PENDING,
+        help_text='Current fraud-aware disbursement status.',
+    )
+
+    mpesa_conversation_id = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text='M-Pesa B2C ConversationID returned at initiation.',
+    )
+
+    mpesa_transaction_id = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text='M-Pesa transaction receipt returned on successful callback.',
+    )
+
+    disbursement_transaction = models.ForeignKey(
+        'payments.Transaction',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='loan_disbursements',
+        help_text='Transaction carrying gross, net, and platform fee amounts.',
+    )
+
+    disbursement_initiated_at = models.DateTimeField(null=True, blank=True)
+
+    disbursement_confirmed_at = models.DateTimeField(null=True, blank=True)
+
+    member_confirmation_sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    member_confirmed_at = models.DateTimeField(null=True, blank=True)
+
+    member_disputed_at = models.DateTimeField(null=True, blank=True)
+
+    dispute_reason = models.TextField(blank=True)
+
     status = models.CharField(
 
         max_length=30,
@@ -584,7 +637,7 @@ class Loan(models.Model):
 
     )
 
-    mpesa_transaction = models.ForeignKey(
+    mpesa_transaction_record = models.ForeignKey(
 
         'payments.MpesaTransaction',
 
@@ -594,7 +647,7 @@ class Loan(models.Model):
 
         on_delete=models.SET_NULL,
 
-        related_name='disbursed_loans',
+        related_name='disbursement_records',
 
         help_text='M-Pesa transaction used to disburse this loan.',
 
@@ -639,7 +692,64 @@ class Loan(models.Model):
         )
 
 
+class DisbursementAuditLog(models.Model):
+    """
+    Append-only evidence trail for loan disbursement state changes.
 
+    Rows in this table must never be updated or deleted.
+    """
+
+    EVENTS = [
+        ('LOAN_APPROVED', 'Loan Approved by Admin'),
+        ('B2C_INITIATED', 'M-Pesa B2C API Called'),
+        ('B2C_CALLBACK_RECEIVED', 'M-Pesa B2C Callback Received'),
+        ('MEMBER_NOTIFIED', 'Member Confirmation Sent'),
+        ('MEMBER_CONFIRMED', 'Member Confirmed Receipt'),
+        ('MEMBER_DISPUTED', 'Member Reported Non-Receipt'),
+        ('AUTO_CONFIRMED', 'Auto-Confirmed via M-Pesa API'),
+        ('ESCALATED_TO_SUPERADMIN', 'Escalated to Super Admin'),
+        ('RESOLVED_BY_ADMIN', 'Dispute Resolved by Super Admin'),
+        ('DISBURSEMENT_FAILED', 'B2C Payment Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    loan = models.ForeignKey(
+        Loan,
+        on_delete=models.PROTECT,
+        related_name='disbursement_audit_logs',
+    )
+    event = models.CharField(max_length=40, choices=EVENTS)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='disbursement_audit_logs',
+    )
+    actor_role = models.CharField(max_length=30)
+    details = models.JSONField(default=dict)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    mpesa_ref = models.CharField(max_length=100, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'disbursement_audit_logs'
+        ordering = ['created_at']
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise PermissionError(
+                'DisbursementAuditLog is append-only. Never update.'
+            )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise PermissionError(
+            'DisbursementAuditLog is append-only. Never delete.'
+        )
+
+    def __str__(self):
+        return f'{self.event} - {self.loan_id} - {self.created_at}'
 
 
 class RepaymentSchedule(models.Model):

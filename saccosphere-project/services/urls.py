@@ -5,6 +5,8 @@ from guarantor.external_views import ExternalGuarantorCollectionView
 
 from .views import (
     CRBCheckView,
+    ConfirmDisbursementView,
+    DisputeDisbursementView,
     DividendApproveView,
     DividendCalculateView,
     DividendDeclarationDetailView,
@@ -50,6 +52,16 @@ urlpatterns = [
     ),
     path('loans/apply/', LoanApplyView.as_view(), name='loan-apply'),
     path('loans/list/', LoanListView.as_view(), name='loan-list'),
+    path(
+        'loans/confirm-disbursement/',
+        ConfirmDisbursementView.as_view(),
+        name='confirm-disbursement',
+    ),
+    path(
+        'loans/dispute-disbursement/',
+        DisputeDisbursementView.as_view(),
+        name='dispute-disbursement',
+    ),
     path('loans/<uuid:id>/', LoanDetailView.as_view(), name='loan-detail'),
     path(
         'loans/<uuid:id>/schedule/',
