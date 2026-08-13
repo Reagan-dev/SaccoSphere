@@ -99,37 +99,31 @@ def persist_loan_repayment_schedule(loan):
         loan.save(update_fields=['outstanding_balance', 'updated_at'])
 
 
-def initiate_loan_disbursement(loan):
+def initiate_loan_disbursement(loan, admin_user=None, request=None):
     """
-    Validate and initiate M-Pesa B2C disbursement for an approved loan.
+    Validate and initiate fraud-aware M-Pesa B2C disbursement.
 
     Returns (success: bool, payload: dict, http_status: int).
     """
-    from django.conf import settings
-
-    from payments.disbursements import initiate_b2c_loan_disbursement
+    from services.disbursement_service import DisbursementService
 
     member = loan.membership.user
-    phone_number = member.phone_number
-    if not phone_number:
+    if not member.phone_number:
         return False, {
             'detail': (
                 'Member phone number is required before disbursement.'
             ),
         }, 400
 
-    if not all([
-        settings.MPESA_CONSUMER_KEY,
-        settings.MPESA_CONSUMER_SECRET,
-        settings.MPESA_SHORTCODE,
-    ]):
+    try:
+        payload = DisbursementService().initiate(
+            loan=loan,
+            admin_user=admin_user,
+            request=request,
+        )
+    except ValueError as exc:
         return False, {
-            'detail': 'M-Pesa is not configured for disbursements.',
-        }, 503
+            'detail': str(exc),
+        }, 400
 
-    return initiate_b2c_loan_disbursement(
-        loan=loan,
-        phone_number=phone_number,
-        amount=loan.amount,
-        remarks=f'Loan disbursement - {loan.id}',
-    )
+    return True, payload, 201

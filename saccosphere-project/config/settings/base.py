@@ -32,6 +32,10 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + [
     'x-request-id',
 ]
+FRONTEND_BASE_URL = config(
+    'FRONTEND_BASE_URL',
+    default=config('FRONTEND_URL', default='http://localhost:3000'),
+)
 
 INSTALLED_APPS = [
     'django.contrib.admin',

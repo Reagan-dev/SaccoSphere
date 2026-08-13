@@ -260,6 +260,8 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
             elif new_status == Loan.Status.DISBURSED:
                 success, payload, http_status = initiate_loan_disbursement(
                     loan,
+                    admin_user=request.user,
+                    request=request,
                 )
                 if not success:
                     return Response(payload, status=http_status)

@@ -1,6 +1,7 @@
 from django.contrib import admin
 
 from .models import (
+    DisbursementAuditLog,
     DividendDeclaration,
     DividendPayout,
     GuaranteeCapacity,
@@ -115,6 +116,41 @@ class LoanAdmin(admin.ModelAdmin):
         'membership__member_number',
         'membership__sacco__name',
     )
+
+
+@admin.register(DisbursementAuditLog)
+class DisbursementAuditLogAdmin(admin.ModelAdmin):
+    list_display = (
+        'loan',
+        'event',
+        'actor',
+        'actor_role',
+        'mpesa_ref',
+        'created_at',
+    )
+    list_filter = ('event', 'actor_role', 'created_at')
+    search_fields = (
+        'loan__id',
+        'actor__email',
+        'mpesa_ref',
+    )
+    readonly_fields = (
+        'id',
+        'loan',
+        'event',
+        'actor',
+        'actor_role',
+        'details',
+        'ip_address',
+        'mpesa_ref',
+        'created_at',
+    )
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(RepaymentSchedule)
