@@ -4,7 +4,12 @@ import logging
 from decimal import Decimal
 from uuid import uuid4
 
-from .base import BasePSPProvider, CheckoutResult, StatusResult
+from .base import (
+    BasePSPProvider,
+    CheckoutResult,
+    DisbursementResult,
+    StatusResult,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +51,33 @@ class MockPSPProvider(BasePSPProvider):
         """Accept mock webhook payloads as valid for local and test flows."""
         logger.debug("Mock PSP webhook verification for request %s", request)
         return True
+
+    def disburse(
+        self,
+        transaction_id: str,
+        phone: str,
+        amount: Decimal,
+        reference: str,
+        **kwargs,
+    ) -> DisbursementResult:
+        """Create a fake outbound payment response for local withdrawals."""
+        logger.info(
+            "Creating mock disbursement for transaction %s with phone %s",
+            transaction_id,
+            phone,
+        )
+        provider_reference = f"MOCK-B2C-{uuid4().hex[:12]}"
+        return DisbursementResult(
+            provider_reference=provider_reference,
+            status="PENDING",
+            raw_response={
+                "transaction_id": transaction_id,
+                "provider_reference": provider_reference,
+                "amount": str(amount),
+                "reference": reference,
+            },
+            success=True,
+        )
 
     def parse_callback(self, payload: dict) -> StatusResult:
         """Translate a mock callback payload into a normalized status result."""

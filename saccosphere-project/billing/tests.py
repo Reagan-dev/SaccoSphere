@@ -9,13 +9,21 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, User
-from billing.models import MonthlySaccoInvoice, PlatformRevenue
+from billing.models import (
+    Invoice,
+    InvoiceLineItem,
+    MonthlySaccoInvoice,
+    PlatformRevenue,
+)
 from billing.services import (
     generate_monthly_sacco_invoice,
     previous_month_period,
     record_transaction_fee,
 )
-from billing.tasks import generate_and_send_monthly_fee_reports
+from billing.tasks import (
+    generate_and_send_monthly_fee_reports,
+    generate_monthly_invoices,
+)
 from payments.models import PaymentProvider, PlatformFee, Transaction
 from saccomanagement.models import Role
 from saccomembership.models import Membership
@@ -127,6 +135,41 @@ class BillingAutomationTests(TestCase):
         )
         self.assertEqual(invoice.status, MonthlySaccoInvoice.Status.SENT)
         email_send_mock.assert_called()
+
+    def test_new_monthly_invoice_task_sums_invoice_line_item_fees(self):
+        """New invoice task totals platform_fee from append-only line items."""
+        billing_month = timezone.localdate().replace(day=1)
+        self.transaction.gross_amount = Decimal('1010.00')
+        self.transaction.platform_fee = Decimal('10.00')
+        self.transaction.sacco = self.sacco
+        self.transaction.save(
+            update_fields=[
+                'gross_amount',
+                'platform_fee',
+                'sacco',
+                'updated_at',
+            ]
+        )
+        InvoiceLineItem.objects.create(
+            sacco=self.sacco,
+            transaction=self.transaction,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            gross_amount=Decimal('1010.00'),
+            net_amount=Decimal('1000.00'),
+            platform_fee=Decimal('10.00'),
+            fee_model='percentage',
+            rate_applied='1.0% of deposit amount',
+            billing_month=billing_month,
+            invoiced=False,
+        )
+
+        result = generate_monthly_invoices.apply()
+
+        invoice = Invoice.objects.get(sacco=self.sacco)
+        self.assertEqual(result.result, [str(invoice.id)])
+        self.assertEqual(invoice.billing_month, billing_month)
+        self.assertEqual(invoice.total_amount, Decimal('10.00'))
+        self.assertEqual(invoice.line_items_count, 1)
 
 
 class MonthlyInvoiceAccessTests(TestCase):

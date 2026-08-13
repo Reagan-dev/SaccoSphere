@@ -136,20 +136,11 @@ def process_payment_callback(self, callback_id):
         if result.is_successful:
             transaction.status = Transaction.Status.COMPLETED
             transaction.save(update_fields=['status', 'updated_at'])
-            if getattr(transaction, 'membership', None) is not None:
-                create_ledger_entry(
-                    membership=transaction.membership,
-                    entry_type='CREDIT',
-                    category='SAVING_DEPOSIT',
-                    amount=transaction.amount,
-                    description='Deposit confirmed',
-                    transaction=transaction,
-                )
-            else:
-                logger.warning(
-                    'No membership found for transaction %s',
-                    transaction.id,
-                )
+            _create_callback_ledger_entry(transaction)
+            _record_platform_fee_for_sacco(
+                transaction,
+                _get_transaction_sacco(transaction),
+            )
             notify_user_task.delay(
                 str(transaction.user_id),
                 'Deposit Confirmed',
@@ -395,6 +386,9 @@ def _process_successful_callback(
 
 
 def _get_expected_gross_amount(transaction):
+    if transaction.gross_amount is not None:
+        return transaction.gross_amount
+
     gross_amount = transaction.metadata.get('gross_amount')
     if gross_amount is None:
         return transaction.amount
@@ -581,7 +575,6 @@ def _process_successful_b2c_callback(
     )
 
     _create_loan_disbursement_ledger(mpesa_transaction, transaction, amount)
-    _record_platform_fee_for_sacco(transaction, loan.membership.sacco)
     _notify_disbursement_success(mpesa_transaction, transaction, amount)
 
 
@@ -652,11 +645,13 @@ def _apply_saving_deposit(mpesa_transaction, transaction, amount):
             entry_type=LedgerEntry.EntryType.CREDIT,
             category=LedgerEntry.Category.SAVING_DEPOSIT,
             amount=amount,
-            description='M-Pesa saving deposit',
-            reference=(
-                mpesa_transaction.mpesa_receipt_number
-                or transaction.external_reference
+            description=(
+                f'Deposit -- member paid KES '
+                f'{_get_authoritative_gross_amount(transaction):,.2f}. '
+                f'KES {_get_authoritative_platform_fee(transaction):,.2f} '
+                f'platform fee included.'
             ),
+            reference=str(transaction.id),
             transaction=transaction,
         )
 
@@ -700,8 +695,12 @@ def _apply_loan_repayment(mpesa_transaction, transaction, amount):
             entry_type=LedgerEntry.EntryType.CREDIT,
             category=LedgerEntry.Category.LOAN_REPAYMENT,
             amount=applied_amount,
-            reference=f'{transaction.reference}-LEDGER',
-            description='M-Pesa loan repayment',
+            reference=str(transaction.id),
+            description=(
+                f'Loan repayment -- member paid KES '
+                f'{_get_authoritative_gross_amount(transaction):,.2f}. '
+                f'Instalment: KES {transaction.amount:,.2f}.'
+            ),
             balance_after=loan.outstanding_balance,
             transaction=transaction,
         )
@@ -898,18 +897,170 @@ def _normalize_result_code(result_code):
         return -1
 
 
-def _record_platform_fee_for_sacco(transaction, sacco):
-    """Record the platform fee for completed transaction once."""
-    if sacco is None:
-        return
-    try:
-        from billing.services import record_collected_fee
+def _create_callback_ledger_entry(transaction):
+    """Create generic provider ledger entries for supported transactions."""
+    from ledger.models import LedgerEntry
 
-        record_collected_fee(transaction, sacco)
-    except Exception:
-        logger.exception(
-            'Failed to record platform fee for transaction_id=%s.',
+    tx_type = _normalize_transaction_type(transaction.transaction_type)
+    if tx_type not in {'deposit', 'repayment', 'withdrawal'}:
+        return
+
+    sacco = _get_transaction_sacco(transaction)
+    membership = _get_transaction_membership(transaction, sacco)
+    if membership is None:
+        logger.warning(
+            'No membership found for transaction %s',
             transaction.id,
         )
+        return
+
+    if tx_type == 'deposit':
+        create_ledger_entry(
+            membership=membership,
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.SAVING_DEPOSIT,
+            amount=transaction.amount,
+            reference=str(transaction.id),
+            description=(
+                f'Deposit -- member paid KES '
+                f'{_get_authoritative_gross_amount(transaction):,.2f}. '
+                f'KES {_get_authoritative_platform_fee(transaction):,.2f} '
+                f'platform fee included.'
+            ),
+            transaction=transaction,
+        )
+        return
+
+    if tx_type == 'repayment':
+        create_ledger_entry(
+            membership=membership,
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.LOAN_REPAYMENT,
+            amount=transaction.amount,
+            reference=str(transaction.id),
+            description=(
+                f'Loan repayment -- member paid KES '
+                f'{_get_authoritative_gross_amount(transaction):,.2f}. '
+                f'Instalment: KES {transaction.amount:,.2f}.'
+            ),
+            transaction=transaction,
+        )
+        return
+
+    create_ledger_entry(
+        membership=membership,
+        entry_type=LedgerEntry.EntryType.DEBIT,
+        category=LedgerEntry.Category.SAVING_WITHDRAWAL,
+        amount=_get_authoritative_gross_amount(transaction),
+        reference=str(transaction.id),
+        description=(
+            f'Withdrawal. Received: KES {transaction.amount:,.2f}. '
+            f'Processing fee: KES '
+            f'{_get_authoritative_platform_fee(transaction):,.2f}.'
+        ),
+        transaction=transaction,
+    )
+
+
+def _record_platform_fee_for_sacco(transaction, sacco):
+    """Record the SACCO invoice line item for a completed transaction once."""
+    if sacco is None:
+        return
+
+    tx_type = _normalize_transaction_type(transaction.transaction_type)
+    if tx_type not in {'deposit', 'repayment', 'withdrawal'}:
+        return
+
+    from billing.models import InvoiceLineItem
+    from payments.fee_calculator import SaccoInvoiceFeeCalculator
+
+    if InvoiceLineItem.objects.filter(transaction=transaction).exists():
+        return
+
+    calc = SaccoInvoiceFeeCalculator()
+    calculator_input = (
+        transaction.amount
+        if tx_type in calc.INFLOW_TYPES
+        else _get_authoritative_gross_amount(transaction)
+    )
+    fee_breakdown = calc.calculate(tx_type, calculator_input)
+    today = timezone.now().date()
+    billing_month = today.replace(day=1)
+
+    InvoiceLineItem.objects.create(
+        sacco=sacco,
+        transaction=transaction,
+        transaction_type=tx_type,
+        gross_amount=_get_authoritative_gross_amount(transaction),
+        net_amount=transaction.amount,
+        platform_fee=_get_authoritative_platform_fee(transaction),
+        fee_model=fee_breakdown['fee_model'],
+        rate_applied=fee_breakdown['rate_applied'],
+        tier_applied=fee_breakdown['tier_applied'],
+        billing_month=billing_month,
+        invoiced=False,
+    )
+
+
+def _get_transaction_sacco(transaction):
+    if transaction.sacco_id:
+        return transaction.sacco
+
+    sacco_id = transaction.metadata.get('sacco_id')
+    if not sacco_id:
+        return None
+
+    from accounts.models import Sacco
+
+    return Sacco.objects.filter(id=sacco_id).first()
+
+
+def _get_transaction_membership(transaction, sacco):
+    if sacco is None:
+        return None
+
+    membership = getattr(transaction, 'membership', None)
+    if membership is not None:
+        return membership
+
+    from saccomembership.models import Membership
+
+    return Membership.objects.filter(
+        user=transaction.user,
+        sacco=sacco,
+        status=Membership.Status.APPROVED,
+    ).first()
+
+
+def _get_authoritative_gross_amount(transaction):
+    if transaction.gross_amount is not None:
+        return transaction.gross_amount
+
+    gross_amount = transaction.metadata.get('gross_amount')
+    if gross_amount is not None:
+        return _to_decimal(gross_amount)
+
+    return transaction.amount
+
+
+def _get_authoritative_platform_fee(transaction):
+    if transaction.platform_fee is not None:
+        return transaction.platform_fee
+
+    platform_fee = transaction.metadata.get('platform_fee')
+    if platform_fee is not None:
+        return _to_decimal(platform_fee)
+
+    return transaction.fee_amount or Decimal('0.00')
+
+
+def _normalize_transaction_type(transaction_type):
+    aliases = {
+        'DEPOSIT': 'deposit',
+        'LOAN_REPAYMENT': 'repayment',
+        'LOAN_DISBURSEMENT': 'disbursement',
+        'WITHDRAWAL': 'withdrawal',
+    }
+    return aliases.get(transaction_type, transaction_type)
 
 

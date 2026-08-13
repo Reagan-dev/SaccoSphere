@@ -55,6 +55,7 @@ class SaccoInvoiceFeeCalculator:
             'net_amount': net_amount,
             'platform_fee': platform_fee,
             'gross_amount': gross_amount,
+            'fee_rate': rate,
             'fee_model': 'percentage',
             'rate_applied': (
                 f'{rate * Decimal("100"):.1f}% of {transaction_type} amount'
@@ -81,6 +82,7 @@ class SaccoInvoiceFeeCalculator:
             'gross_amount': gross_amount,
             'platform_fee': platform_fee,
             'net_amount': net_amount,
+            'fee_rate': None,
             'fee_model': 'tiered_flat',
             'rate_applied': f'Flat KES {platform_fee} (tiered)',
             'tier_applied': tier_desc,

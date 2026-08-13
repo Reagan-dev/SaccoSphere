@@ -21,6 +21,17 @@ class CheckoutResult:
 
 
 @dataclass(slots=True)
+class DisbursementResult:
+    """Represents an outbound payment response returned by a PSP provider."""
+
+    provider_reference: str
+    status: str
+    raw_response: dict
+    success: bool
+    error_message: str = ""
+
+
+@dataclass(slots=True)
 class StatusResult:
     """Represents the status payload returned by a PSP provider."""
 
@@ -46,6 +57,19 @@ class BasePSPProvider(ABC):
         **kwargs,
     ) -> CheckoutResult:
         """Create a checkout request for a payment transaction."""
+
+    def disburse(
+        self,
+        transaction_id: str,
+        phone: str,
+        amount: Decimal,
+        reference: str,
+        **kwargs,
+    ) -> DisbursementResult:
+        """Create an outbound payment request for a withdrawal."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support disbursements."
+        )
 
     @abstractmethod
     def verify_webhook(self, request) -> bool:
