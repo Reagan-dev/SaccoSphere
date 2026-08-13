@@ -42,6 +42,7 @@ from .serializers import (
     DepositRequestSerializer,
     MpesaTransactionSerializer,
     TransactionSerializer,
+    WithdrawalRequestSerializer,
 )
 from .tasks import process_payment_callback
 from .validators import validate_mpesa_phone
@@ -233,6 +234,10 @@ class DepositInitiateView(APIView):
             reference=f'SS-{uuid4().hex[:20].upper()}',
             transaction_type=Transaction.TransactionType.DEPOSIT,
             amount=data['net_amount'],
+            gross_amount=data['gross_amount'],
+            platform_fee=data['platform_fee'],
+            fee_rate=data['fee_rate'],
+            sacco=sacco,
             fee_amount=data['platform_fee'],
             currency='KES',
             status=Transaction.Status.PENDING,
@@ -259,15 +264,23 @@ class DepositInitiateView(APIView):
                     platform_fee=data['platform_fee'],
                 )
                 transaction.external_reference = result.provider_reference
-                transaction.save(update_fields=['external_reference', 'updated_at'])
+                transaction.save(
+                    update_fields=['external_reference', 'updated_at'],
+                )
         except Exception:
-            logger.exception('Deposit initiation failed for transaction %s', transaction.id)
+            logger.exception(
+                'Deposit initiation failed for transaction %s',
+                transaction.id,
+            )
             try:
                 with db_transaction.atomic():
                     transaction.status = Transaction.Status.FAILED
                     transaction.save(update_fields=['status', 'updated_at'])
             except Exception:
-                logger.exception('Failed to update transaction %s to FAILED', transaction.id)
+                logger.exception(
+                    'Failed to update transaction %s to FAILED',
+                    transaction.id,
+                )
             return Response(
                 {'detail': 'Deposit initiation failed.'},
                 status=status.HTTP_502_BAD_GATEWAY,
@@ -287,6 +300,138 @@ class DepositInitiateView(APIView):
                 'status': transaction.status,
             },
             status=status.HTTP_200_OK,
+        )
+
+
+class WithdrawalInitiateView(APIView):
+    """Initiate a PSP-backed savings withdrawal for the authenticated user."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = WithdrawalRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        is_valid, detail = serializer.validate_withdrawal_context(
+            request.user,
+        )
+        if not is_valid:
+            return Response(
+                {'detail': detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = serializer.validated_data
+        sacco = data['sacco']
+        saving = data['saving']
+        provider = get_psp_provider(sacco=sacco)
+        provider_record, _ = PaymentProvider.objects.get_or_create(
+            name=provider.provider_name,
+            defaults={
+                'provider_type': PaymentProvider.ProviderType.INTERNAL,
+                'is_active': True,
+            },
+        )
+
+        transaction = Transaction(
+            provider=provider_record,
+            user=request.user,
+            reference=f'SS-WD-{uuid4().hex[:18].upper()}',
+            transaction_type=Transaction.TransactionType.WITHDRAWAL,
+            amount=data['net_amount'],
+            gross_amount=data['gross_amount'],
+            platform_fee=data['platform_fee'],
+            fee_rate=data['fee_rate'],
+            sacco=sacco,
+            fee_amount=data['platform_fee'],
+            currency='KES',
+            status=Transaction.Status.PENDING,
+            description='Savings withdrawal initiated',
+            metadata={
+                'sacco_id': str(sacco.id),
+                'saving_id': str(saving.id),
+                'amount': str(data['net_amount']),
+                'net_amount': str(data['net_amount']),
+                'platform_fee': str(data['platform_fee']),
+                'gross_amount': str(data['gross_amount']),
+                'fee_rate': str(data['fee_rate']),
+            },
+        )
+
+        try:
+            with db_transaction.atomic():
+                transaction.save()
+                result = provider.disburse(
+                    transaction_id=str(transaction.id),
+                    phone=data['phone_number'],
+                    amount=data['net_amount'],
+                    reference=f'WD-{transaction.id}',
+                    sacco=sacco,
+                    saving=saving,
+                )
+                if not result.success:
+                    transaction.status = Transaction.Status.FAILED
+                    transaction.metadata = {
+                        **transaction.metadata,
+                        'provider_error': result.error_message,
+                        'provider_response': result.raw_response,
+                    }
+                    transaction.save(
+                        update_fields=[
+                            'status',
+                            'metadata',
+                            'updated_at',
+                        ],
+                    )
+                    return Response(
+                        {'detail': 'Withdrawal initiation failed.'},
+                        status=status.HTTP_502_BAD_GATEWAY,
+                    )
+
+                transaction.status = Transaction.Status.SENT
+                transaction.external_reference = result.provider_reference
+                transaction.metadata = {
+                    **transaction.metadata,
+                    'provider_response': result.raw_response,
+                }
+                transaction.save(
+                    update_fields=[
+                        'status',
+                        'external_reference',
+                        'metadata',
+                        'updated_at',
+                    ],
+                )
+        except Exception:
+            logger.exception(
+                'Withdrawal initiation failed for transaction %s',
+                transaction.id,
+            )
+            try:
+                with db_transaction.atomic():
+                    transaction.status = Transaction.Status.FAILED
+                    transaction.save(update_fields=['status', 'updated_at'])
+            except Exception:
+                logger.exception(
+                    'Failed to update transaction %s to FAILED',
+                    transaction.id,
+                )
+            return Response(
+                {'detail': 'Withdrawal initiation failed.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        def fmt(value):
+            return f"KES {value:,.2f}"
+
+        return Response(
+            {
+                'transaction_id': str(transaction.id),
+                'amount_requested': fmt(data['gross_amount']),
+                'platform_fee': fmt(data['platform_fee']),
+                'amount_to_member': fmt(data['net_amount']),
+                'status': transaction.status,
+            },
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -428,12 +573,21 @@ class STKPushView(APIView):
 
         reference = self._build_reference()
 
-        amount = data['amount']
+        net_amount = data['amount']
+        business_type = (
+            'deposit'
+            if transaction_type == Transaction.TransactionType.DEPOSIT
+            else 'repayment'
+        )
+        fee_breakdown = SaccoInvoiceFeeCalculator().calculate(
+            business_type,
+            net_amount,
+        )
 
         try:
             daraja_response = DarajaClient().initiate_stk_push(
                 phone_number=data['phone_number'],
-                amount=amount,
+                amount=fee_breakdown['gross_amount'],
                 account_reference=reference,
                 description=description,
                 callback_path='/api/v1/payments/callback/mpesa/stk/',
@@ -456,6 +610,11 @@ class STKPushView(APIView):
 
         merchant_request_id = daraja_response.get('MerchantRequestID')
         checkout_request_id = daraja_response.get('CheckoutRequestID')
+        sacco = (
+            related_saving.membership.sacco
+            if related_saving
+            else related_loan.membership.sacco
+        )
 
         with db_transaction.atomic():
             provider = self._get_mpesa_provider()
@@ -465,13 +624,22 @@ class STKPushView(APIView):
                 reference=reference,
                 external_reference=checkout_request_id,
                 transaction_type=transaction_type,
-                amount=amount,
+                amount=fee_breakdown['net_amount'],
+                gross_amount=fee_breakdown['gross_amount'],
+                platform_fee=fee_breakdown['platform_fee'],
+                fee_rate=fee_breakdown['fee_rate'],
+                sacco=sacco,
+                fee_amount=fee_breakdown['platform_fee'],
                 status=Transaction.Status.PENDING,
                 description=description,
                 metadata={
                     'purpose': data['purpose'],
                     'sacco_id': str(data['sacco_id']),
-                    'amount': str(amount),
+                    'amount': str(fee_breakdown['net_amount']),
+                    'net_amount': str(fee_breakdown['net_amount']),
+                    'platform_fee': str(fee_breakdown['platform_fee']),
+                    'gross_amount': str(fee_breakdown['gross_amount']),
+                    'fee_rate': str(fee_breakdown['fee_rate']),
                     'daraja_response': daraja_response,
                 },
             )
@@ -487,20 +655,23 @@ class STKPushView(APIView):
 
         # Build clear message showing total charge breakdown
         if transaction_type == Transaction.TransactionType.DEPOSIT:
-            amount_description = f'saving deposit'
+            amount_description = 'saving deposit'
         else:
-            amount_description = f'loan repayment'
+            amount_description = 'loan repayment'
 
         message = (
             f'Check your phone to enter your M-Pesa PIN. '
-            f'You will be charged KES {amount} for {amount_description}.'
+            f'You will be charged KES {fee_breakdown["gross_amount"]} '
+            f'for {amount_description}.'
         )
 
         return Response(
             {
                 'checkout_request_id': checkout_request_id,
                 'merchant_request_id': merchant_request_id,
-                'amount': str(amount),
+                'amount': str(fee_breakdown['net_amount']),
+                'gross_amount': str(fee_breakdown['gross_amount']),
+                'platform_fee': str(fee_breakdown['platform_fee']),
                 'message': message,
             },
             status=status.HTTP_201_CREATED,

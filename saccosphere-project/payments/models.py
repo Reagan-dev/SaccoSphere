@@ -52,12 +52,10 @@ class PaymentProvider(models.Model):
 
 class Transaction(models.Model):
     class TransactionType(models.TextChoices):
-        DEPOSIT = 'DEPOSIT', 'Deposit'
-        WITHDRAWAL = 'WITHDRAWAL', 'Withdrawal'
-        TRANSFER = 'TRANSFER', 'Transfer'
-        LOAN_REPAYMENT = 'LOAN_REPAYMENT', 'Loan repayment'
-        LOAN_DISBURSEMENT = 'LOAN_DISBURSEMENT', 'Loan disbursement'
-        FEE = 'FEE', 'Fee'
+        DEPOSIT = 'deposit', 'Deposit'
+        LOAN_REPAYMENT = 'repayment', 'Loan Repayment'
+        LOAN_DISBURSEMENT = 'disbursement', 'Loan Disbursement'
+        WITHDRAWAL = 'withdrawal', 'Savings Withdrawal'
 
     class Status(models.TextChoices):
         PENDING = 'PENDING', 'Pending'
@@ -100,7 +98,7 @@ class Transaction(models.Model):
         help_text='External provider transaction reference.',
     )
     transaction_type = models.CharField(
-        max_length=30,
+        max_length=20,
         choices=TransactionType.choices,
         default=TransactionType.DEPOSIT,
         help_text='Business purpose of this transaction.',
@@ -108,7 +106,32 @@ class Transaction(models.Model):
     amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
-        help_text='Transaction amount.',
+        help_text='Net transaction amount.',
+    )
+    gross_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        help_text='Gross amount paid or approved before platform fee.',
+    )
+    platform_fee = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        help_text='Platform fee charged or retained for this transaction.',
+    )
+    fee_rate = models.DecimalField(
+        max_digits=8,
+        decimal_places=6,
+        null=True,
+        help_text='Percentage fee rate applied, null for tiered flat fees.',
+    )
+    sacco = models.ForeignKey(
+        'accounts.Sacco',
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        help_text='SACCO responsible for this transaction.',
     )
     fee_amount = models.DecimalField(
         max_digits=10,

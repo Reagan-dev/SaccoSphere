@@ -12,7 +12,13 @@ from django.db import transaction as db_transaction
 from django.db.models import Sum
 from django.utils import timezone
 
-from billing.models import MonthlySaccoInvoice, PlatformRevenue
+from accounts.models import Sacco
+from billing.models import (
+    Invoice,
+    InvoiceLineItem,
+    MonthlySaccoInvoice,
+    PlatformRevenue,
+)
 from payments.models import PlatformFee, Transaction
 from saccomanagement.models import Role
 
@@ -187,6 +193,66 @@ def generate_monthly_sacco_invoice(sacco, period_start, period_end):
         },
     )
     return invoice
+
+
+def generate_invoice_number(sacco, billing_month):
+    """Return a stable invoice number for a SACCO billing month."""
+    sacco_key = getattr(sacco.id, 'hex', str(sacco.id).replace('-', ''))
+    return f'SS-{billing_month:%Y%m}-{sacco_key[:10].upper()}'
+
+
+def generate_monthly_invoice(sacco, billing_month):
+    """Create or update one new-style invoice from invoice line items."""
+    billing_month = billing_month.replace(day=1)
+    line_items = InvoiceLineItem.objects.filter(
+        sacco=sacco,
+        billing_month=billing_month,
+    )
+    total_amount = (
+        line_items.aggregate(total=Sum('platform_fee'))['total']
+        or Decimal('0.00')
+    )
+    line_items_count = line_items.count()
+    due_date = _last_day_of_month(billing_month) + timedelta(days=14)
+
+    invoice, _created = Invoice.objects.update_or_create(
+        sacco=sacco,
+        billing_month=billing_month,
+        defaults={
+            'invoice_number': generate_invoice_number(sacco, billing_month),
+            'total_amount': total_amount,
+            'line_items_count': line_items_count,
+            'due_date': due_date,
+        },
+    )
+    return invoice
+
+
+def generate_monthly_invoices_for_month(billing_month=None):
+    """Generate new-style SACCO invoices for a billing month."""
+    if billing_month is None:
+        billing_month = timezone.localdate()
+
+    billing_month = billing_month.replace(day=1)
+    sacco_ids = (
+        InvoiceLineItem.objects.filter(billing_month=billing_month)
+        .values_list('sacco_id', flat=True)
+        .distinct()
+    )
+    invoices = [
+        generate_monthly_invoice(sacco, billing_month)
+        for sacco in Sacco.objects.filter(id__in=sacco_ids)
+    ]
+    return invoices
+
+
+def _last_day_of_month(month):
+    if month.month == 12:
+        next_month = month.replace(year=month.year + 1, month=1, day=1)
+    else:
+        next_month = month.replace(month=month.month + 1, day=1)
+
+    return next_month - timedelta(days=1)
 
 
 def send_invoice_to_sacco(invoice):

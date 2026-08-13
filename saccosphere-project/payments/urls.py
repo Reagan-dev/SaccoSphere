@@ -15,6 +15,7 @@ from .views import (
     STKStatusView,
     TransactionDetailView,
     TransactionListView,
+    WithdrawalInitiateView,
 )
 
 
@@ -45,6 +46,11 @@ urlpatterns = [
         'deposit/',
         DepositInitiateView.as_view(),
         name='deposit-initiate',
+    ),
+    path(
+        'withdrawal/',
+        WithdrawalInitiateView.as_view(),
+        name='withdrawal-initiate',
     ),
     path(
         'callback/',

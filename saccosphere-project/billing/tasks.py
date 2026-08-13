@@ -7,6 +7,7 @@ from django.core.mail import mail_admins
 
 from accounts.models import Sacco
 from billing.services import (
+    generate_monthly_invoices_for_month,
     generate_monthly_sacco_invoice,
     previous_month_period,
     send_invoice_to_sacco,
@@ -14,6 +15,13 @@ from billing.services import (
 
 
 logger = logging.getLogger('saccosphere.billing')
+
+
+@shared_task(name='billing.tasks.generate_monthly_invoices')
+def generate_monthly_invoices(billing_month=None):
+    """Generate new-style monthly invoices from invoice line items."""
+    invoices = generate_monthly_invoices_for_month(billing_month)
+    return [str(invoice.id) for invoice in invoices]
 
 
 @shared_task(name='billing.tasks.generate_and_send_monthly_fee_reports')

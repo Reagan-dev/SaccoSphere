@@ -10,6 +10,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, User
+from billing.models import InvoiceLineItem
 from ledger.models import LedgerEntry
 from notifications.models import Notification
 from payments.disbursements import initiate_b2c_loan_disbursement
@@ -22,7 +23,9 @@ from payments.models import (
 from payments.tasks import (
     _apply_loan_repayment,
     _apply_saving_deposit,
+    _create_callback_ledger_entry,
     _process_successful_callback,
+    _record_platform_fee_for_sacco,
     process_b2c_callback_task,
     process_stk_callback_task,
 )
@@ -179,6 +182,75 @@ class DepositInitiateViewTests(TestCase):
         self.assertEqual(transaction.metadata['net_amount'], '1000.00')
         self.assertEqual(transaction.metadata['platform_fee'], '10.00')
         self.assertEqual(transaction.metadata['gross_amount'], '1010.00')
+
+
+class WithdrawalInitiateViewTests(TestCase):
+    """Validate withdrawal initiation deducts the platform fee from B2C."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='withdrawal.member@example.com',
+            first_name='Withdrawal',
+            last_name='Member',
+            phone_number='254712345680',
+            password='StrongPass1',
+        )
+        self.sacco = Sacco.objects.create(
+            name='Withdrawal SACCO',
+            registration_number='WD001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        self.membership = Membership.objects.create(
+            user=self.user,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number='WD-M-001',
+        )
+        self.savings_type = SavingsType.objects.create(
+            sacco=self.sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('100.00'),
+        )
+        self.saving = Saving.objects.create(
+            membership=self.membership,
+            savings_type=self.savings_type,
+            amount=Decimal('6000.00'),
+            total_contributions=Decimal('6000.00'),
+            status=Saving.Status.ACTIVE,
+        )
+
+    @override_settings(DEBUG=True, PAYMENT_PROVIDER='')
+    def test_withdrawal_sends_net_and_records_gross_fee_breakdown(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(
+            reverse('payments:withdrawal-initiate'),
+            {
+                'phone_number': '254712345680',
+                'amount': '5000.00',
+                'sacco_id': str(self.sacco.id),
+                'saving_id': str(self.saving.id),
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['amount_requested'], 'KES 5,000.00')
+        self.assertEqual(response.data['platform_fee'], 'KES 25.00')
+        self.assertEqual(response.data['amount_to_member'], 'KES 4,975.00')
+
+        transaction = Transaction.objects.get(
+            transaction_type=Transaction.TransactionType.WITHDRAWAL,
+        )
+        self.assertEqual(transaction.amount, Decimal('4975.00'))
+        self.assertEqual(transaction.gross_amount, Decimal('5000.00'))
+        self.assertEqual(transaction.platform_fee, Decimal('25.00'))
+        self.assertEqual(transaction.fee_rate, None)
+        self.assertEqual(transaction.sacco, self.sacco)
+        self.assertEqual(transaction.status, Transaction.Status.SENT)
+        self.assertEqual(transaction.metadata['saving_id'], str(self.saving.id))
 
 
 class FeePreviewViewTests(TestCase):
@@ -544,6 +616,7 @@ class PaymentTaskHardeningTests(TestCase):
             reference=reference,
             transaction_type=transaction_type,
             amount=amount,
+            sacco=self.sacco,
             status=Transaction.Status.PENDING,
             description='Payment hardening test',
         )
@@ -748,6 +821,79 @@ class PaymentTaskHardeningTests(TestCase):
         self.assertEqual(
             LedgerEntry.objects.filter(transaction=transaction).count(),
             1,
+        )
+
+    def test_generic_deposit_callback_records_net_ledger_and_invoice_fee(self):
+        transaction = self._transaction(
+            Decimal('1000.00'),
+            Transaction.TransactionType.DEPOSIT,
+            'PAY-HARD-GENERIC-DEP-001',
+        )
+        transaction.gross_amount = Decimal('1010.00')
+        transaction.platform_fee = Decimal('10.00')
+        transaction.fee_rate = Decimal('0.010000')
+        transaction.save(
+            update_fields=[
+                'gross_amount',
+                'platform_fee',
+                'fee_rate',
+                'updated_at',
+            ]
+        )
+
+        _create_callback_ledger_entry(transaction)
+        _record_platform_fee_for_sacco(transaction, self.sacco)
+
+        ledger_entry = LedgerEntry.objects.get(transaction=transaction)
+        line_item = InvoiceLineItem.objects.get(transaction=transaction)
+        self.assertEqual(ledger_entry.entry_type, LedgerEntry.EntryType.CREDIT)
+        self.assertEqual(ledger_entry.amount, Decimal('1000.00'))
+        self.assertIsInstance(ledger_entry.description, str)
+        self.assertNotIn("('", ledger_entry.description)
+        self.assertEqual(line_item.platform_fee, Decimal('10.00'))
+        self.assertEqual(line_item.gross_amount, Decimal('1010.00'))
+        self.assertEqual(line_item.net_amount, Decimal('1000.00'))
+        self.assertEqual(line_item.billing_month.day, 1)
+
+    def test_generic_withdrawal_callback_debits_gross_and_invoices_fee(self):
+        transaction = self._transaction(
+            Decimal('4975.00'),
+            Transaction.TransactionType.WITHDRAWAL,
+            'PAY-HARD-GENERIC-WD-001',
+        )
+        transaction.gross_amount = Decimal('5000.00')
+        transaction.platform_fee = Decimal('25.00')
+        transaction.save(
+            update_fields=[
+                'gross_amount',
+                'platform_fee',
+                'updated_at',
+            ]
+        )
+
+        _create_callback_ledger_entry(transaction)
+        _record_platform_fee_for_sacco(transaction, self.sacco)
+
+        ledger_entry = LedgerEntry.objects.get(transaction=transaction)
+        line_item = InvoiceLineItem.objects.get(transaction=transaction)
+        self.assertEqual(ledger_entry.entry_type, LedgerEntry.EntryType.DEBIT)
+        self.assertEqual(ledger_entry.amount, Decimal('5000.00'))
+        self.assertEqual(line_item.platform_fee, Decimal('25.00'))
+        self.assertEqual(line_item.gross_amount, Decimal('5000.00'))
+        self.assertEqual(line_item.net_amount, Decimal('4975.00'))
+        self.assertEqual(line_item.fee_model, 'tiered_flat')
+
+    def test_disbursement_is_not_invoiced_by_generic_callback_helper(self):
+        transaction = self._transaction(
+            Decimal('100000.00'),
+            Transaction.TransactionType.LOAN_DISBURSEMENT,
+            'PAY-HARD-GENERIC-DISB-001',
+        )
+
+        _record_platform_fee_for_sacco(transaction, self.sacco)
+
+        self.assertFalse(
+            InvoiceLineItem.objects.filter(transaction=transaction).exists()
         )
 
 

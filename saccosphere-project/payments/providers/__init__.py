@@ -4,7 +4,12 @@ from typing import TYPE_CHECKING
 
 from django.conf import settings
 
-from .base import BasePSPProvider, CheckoutResult, StatusResult
+from .base import (
+    BasePSPProvider,
+    CheckoutResult,
+    DisbursementResult,
+    StatusResult,
+)
 from .registry import get_provider_class
 
 if TYPE_CHECKING:
@@ -28,4 +33,10 @@ def get_psp_provider(sacco: "Sacco | None" = None) -> BasePSPProvider:
     return get_provider_class(provider_name)()
 
 
-__all__ = ["get_psp_provider", "BasePSPProvider", "CheckoutResult", "StatusResult"]
+__all__ = [
+    "get_psp_provider",
+    "BasePSPProvider",
+    "CheckoutResult",
+    "DisbursementResult",
+    "StatusResult",
+]

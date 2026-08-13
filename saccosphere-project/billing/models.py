@@ -142,3 +142,145 @@ class MonthlySaccoInvoice(models.Model):
             f'Invoice {self.sacco.name} '
             f'({self.period_start} to {self.period_end})'
         )
+
+
+class InvoiceLineItem(models.Model):
+    """
+    One record per successful transaction.
+
+    Records what one SACCO owes SaccoSphere for one transaction.
+    Accumulated during the month, aggregated into a monthly Invoice.
+    APPEND-ONLY -- never update or delete rows.
+    """
+
+    TRANSACTION_TYPES = [
+        ('deposit', 'Member Deposit'),
+        ('repayment', 'Loan Repayment'),
+        ('disbursement', 'Loan Disbursement'),
+        ('withdrawal', 'Savings Withdrawal'),
+    ]
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    sacco = models.ForeignKey(
+        'accounts.Sacco',
+        on_delete=models.PROTECT,
+    )
+    transaction = models.OneToOneField(
+        'payments.Transaction',
+        on_delete=models.PROTECT,
+    )
+    transaction_type = models.CharField(
+        max_length=20,
+        choices=TRANSACTION_TYPES,
+    )
+    gross_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    net_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    platform_fee = models.DecimalField(max_digits=10, decimal_places=2)
+    fee_model = models.CharField(max_length=30)
+    rate_applied = models.CharField(max_length=80)
+    tier_applied = models.CharField(
+        max_length=120,
+        null=True,
+        blank=True,
+    )
+    billing_month = models.DateField()
+    invoiced = models.BooleanField(default=False)
+    invoice = models.ForeignKey(
+        'Invoice',
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'billing_invoice_line_items'
+        indexes = [
+            models.Index(fields=['sacco', 'billing_month', 'invoiced']),
+            models.Index(fields=['transaction_type', 'billing_month']),
+        ]
+
+    def __str__(self):
+        return (
+            f'{self.transaction_type} | {self.sacco.name} | '
+            f'KES {self.platform_fee} | {self.billing_month}'
+        )
+
+
+class Invoice(models.Model):
+    STATUS = [
+        ('draft', 'Draft'),
+        ('sent', 'Sent'),
+        ('paid', 'Paid'),
+        ('overdue', 'Overdue'),
+        ('suspended', 'SACCO Suspended'),
+    ]
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    sacco = models.ForeignKey(
+        'accounts.Sacco',
+        on_delete=models.PROTECT,
+    )
+    invoice_number = models.CharField(max_length=30, unique=True)
+    billing_month = models.DateField()
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2)
+    line_items_count = models.PositiveIntegerField(default=0)
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS,
+        default='draft',
+    )
+    sent_at = models.DateTimeField(null=True, blank=True)
+    due_date = models.DateField()
+    paid_at = models.DateTimeField(null=True, blank=True)
+    pdf_path = models.CharField(max_length=500, blank=True)
+    payment_reference = models.CharField(max_length=100, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'billing_invoices'
+        unique_together = [['sacco', 'billing_month']]
+        ordering = ['-billing_month']
+
+    @property
+    def is_overdue(self) -> bool:
+        from django.utils import timezone
+
+        return self.status == 'sent' and self.due_date < timezone.now().date()
+
+
+class InvoicePayment(models.Model):
+    METHODS = [
+        ('mpesa', 'M-Pesa'),
+        ('bank', 'Bank Transfer'),
+        ('internal', 'Internal'),
+    ]
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    invoice = models.ForeignKey(
+        Invoice,
+        on_delete=models.PROTECT,
+    )
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_method = models.CharField(max_length=20, choices=METHODS)
+    payment_ref = models.CharField(max_length=100)
+    recorded_by = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.PROTECT,
+    )
+    recorded_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True)
