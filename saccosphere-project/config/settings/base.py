@@ -3,6 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import dj_database_url
+from celery.schedules import crontab
 from django.core.exceptions import ImproperlyConfigured
 from decouple import Csv, config
 from corsheaders.defaults import default_headers
@@ -365,6 +366,16 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Nairobi'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+CELERY_BEAT_SCHEDULE = {
+    'generate-monthly-invoices': {
+        'task': 'billing.generate_monthly_invoices',
+        'schedule': crontab(minute=0, hour=0, day_of_month=1),
+    },
+    'check-overdue-invoices': {
+        'task': 'billing.update_overdue_invoices',
+        'schedule': crontab(minute=0, hour=8),
+    },
+}
 
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
 
