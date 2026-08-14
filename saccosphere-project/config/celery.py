@@ -29,13 +29,10 @@ app.conf.task_routes = {
     'ledger.tasks.*': {'queue': 'reports'},
 }
 app.conf.beat_schedule = {
+    **settings.CELERY_BEAT_SCHEDULE,
     'cleanup-expired-otps': {
         'task': 'accounts.tasks.cleanup_expired_otps',
         'schedule': 300.0,
-    },
-    'monthly-sacco-platform-fee-reports': {
-        'task': 'billing.tasks.generate_and_send_monthly_fee_reports',
-        'schedule': crontab(minute=0, hour=0, day_of_month='1'),
     },
     'hourly-sacco-liquidity-check': {
         'task': 'services.tasks.check_all_sacco_liquidity',

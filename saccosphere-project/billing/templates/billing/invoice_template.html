@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Invoice {{ invoice.invoice_number }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 18mm 16mm;
+        }
+
+        body {
+            color: #1f2933;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 12px;
+            line-height: 1.45;
+            margin: 0;
+        }
+
+        .header {
+            align-items: flex-start;
+            border-bottom: 2px solid #0f766e;
+            display: flex;
+            justify-content: space-between;
+            padding-bottom: 18px;
+        }
+
+        .brand {
+            align-items: center;
+            display: flex;
+            gap: 12px;
+        }
+
+        .logo {
+            align-items: center;
+            background: #0f766e;
+            color: #ffffff;
+            display: flex;
+            font-size: 18px;
+            font-weight: 700;
+            height: 48px;
+            justify-content: center;
+            width: 48px;
+        }
+
+        .brand-name {
+            color: #0f172a;
+            font-size: 22px;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .brand-subtitle {
+            color: #52606d;
+            margin: 2px 0 0;
+        }
+
+        .invoice-title {
+            color: #0f172a;
+            font-size: 24px;
+            font-weight: 700;
+            margin: 0 0 6px;
+            text-align: right;
+        }
+
+        .meta {
+            color: #3e4c59;
+            text-align: right;
+        }
+
+        .section {
+            margin-top: 24px;
+        }
+
+        .two-column {
+            display: flex;
+            gap: 28px;
+            justify-content: space-between;
+        }
+
+        .column {
+            width: 48%;
+        }
+
+        h2 {
+            color: #0f172a;
+            font-size: 14px;
+            margin: 0 0 8px;
+            text-transform: uppercase;
+        }
+
+        p {
+            margin: 0 0 4px;
+        }
+
+        table {
+            border-collapse: collapse;
+            margin-top: 8px;
+            width: 100%;
+        }
+
+        th {
+            background: #e6fffa;
+            color: #134e4a;
+            font-size: 11px;
+            padding: 8px;
+            text-align: left;
+            text-transform: uppercase;
+        }
+
+        td {
+            border-bottom: 1px solid #d9e2ec;
+            padding: 8px;
+            vertical-align: top;
+        }
+
+        thead {
+            display: table-header-group;
+        }
+
+        tr {
+            page-break-inside: avoid;
+        }
+
+        .amount {
+            text-align: right;
+            white-space: nowrap;
+        }
+
+        .page-break td {
+            border: 0;
+            page-break-after: always;
+            padding: 0;
+        }
+
+        .total {
+            background: #f8fafc;
+            border-top: 2px solid #0f766e;
+            font-size: 16px;
+            font-weight: 700;
+            margin-top: 18px;
+            padding: 12px;
+            text-align: right;
+        }
+
+        .footer {
+            border-top: 1px solid #d9e2ec;
+            color: #52606d;
+            font-size: 11px;
+            margin-top: 28px;
+            padding-top: 10px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="brand">
+            <div class="logo">SS</div>
+            <div>
+                <p class="brand-name">SaccoSphere</p>
+                <p class="brand-subtitle">Platform transaction billing</p>
+            </div>
+        </div>
+        <div>
+            <p class="invoice-title">Invoice</p>
+            <p class="meta"><strong>No:</strong> {{ invoice.invoice_number }}</p>
+            <p class="meta"><strong>Date:</strong> {{ generated_at|date:"d M Y" }}</p>
+            <p class="meta"><strong>Due:</strong> {{ due_date|date:"d M Y" }}</p>
+        </div>
+    </header>
+
+    <section class="section two-column">
+        <div class="column">
+            <h2>Bill To</h2>
+            <p><strong>{{ sacco.name }}</strong></p>
+            {% if sacco.registration_number %}
+                <p>Registration: {{ sacco.registration_number }}</p>
+            {% endif %}
+            {% if sacco.email %}
+                <p>Email: {{ sacco.email }}</p>
+            {% endif %}
+            {% if sacco.phone %}
+                <p>Phone: {{ sacco.phone }}</p>
+            {% endif %}
+            <p>{{ sacco.county }}</p>
+        </div>
+        <div class="column">
+            <h2>Payment Instructions</h2>
+            <p><strong>Paybill:</strong> {{ payment_paybill|default:"N/A" }}</p>
+            <p><strong>Account Number:</strong> {{ payment_account_no|default:"N/A" }}</p>
+            <p><strong>Account Name:</strong> {{ payment_account_name|default:"SaccoSphere" }}</p>
+        </div>
+    </section>
+
+    <section class="section">
+        <h2>Summary</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Transaction Type</th>
+                    <th class="amount">Count</th>
+                    <th class="amount">Total Gross Amount</th>
+                    <th class="amount">Fee</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for transaction_type, summary in by_type.items %}
+                    <tr>
+                        <td>{{ transaction_type|title }}</td>
+                        <td class="amount">{{ summary.count }}</td>
+                        <td class="amount">KES {{ summary.total_gross_amount|floatformat:2 }}</td>
+                        <td class="amount">KES {{ summary.total_fee|floatformat:2 }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    <section class="section">
+        <h2>Line Items</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Type</th>
+                    <th>Reference</th>
+                    <th class="amount">Gross Amount</th>
+                    <th class="amount">Platform Fee</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in line_items %}
+                    {% if forloop.counter0 and forloop.counter0|divisibleby:50 %}
+                        <tr class="page-break"><td colspan="5"></td></tr>
+                    {% endif %}
+                    <tr>
+                        <td>{{ item.created_at|date:"d M Y H:i" }}</td>
+                        <td>{{ item.transaction_type|title }}</td>
+                        <td>{{ item.transaction.reference|default:item.id }}</td>
+                        <td class="amount">KES {{ item.gross_amount|floatformat:2 }}</td>
+                        <td class="amount">KES {{ item.platform_fee|floatformat:2 }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+
+    <div class="total">
+        Total Amount Due: KES {{ invoice.total_amount|floatformat:2 }}
+    </div>
+
+    <footer class="footer">
+        Payment due by {{ due_date|date:"d M Y" }}. Late payment: 2% per month.
+    </footer>
+</body>
+</html>

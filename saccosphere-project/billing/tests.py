@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -136,9 +136,26 @@ class BillingAutomationTests(TestCase):
         self.assertEqual(invoice.status, MonthlySaccoInvoice.Status.SENT)
         email_send_mock.assert_called()
 
-    def test_new_monthly_invoice_task_sums_invoice_line_item_fees(self):
+    @patch('billing.tasks.update_overdue_invoices.delay')
+    @patch('billing.tasks.send_invoice_email.delay')
+    @patch('billing.pdf_generator.InvoicePDFGenerator.save')
+    @patch('billing.pdf_generator.InvoicePDFGenerator.generate')
+    def test_new_monthly_invoice_task_sums_invoice_line_item_fees(
+        self,
+        pdf_generate_mock,
+        pdf_save_mock,
+        email_delay_mock,
+        overdue_delay_mock,
+    ):
         """New invoice task totals platform_fee from append-only line items."""
-        billing_month = timezone.localdate().replace(day=1)
+        today = timezone.localdate()
+        first_of_current_month = today.replace(day=1)
+        billing_month = (
+            first_of_current_month - timedelta(days=1)
+        ).replace(day=1)
+        pdf_generate_mock.return_value = b'%PDF-1.4 test'
+        pdf_save_mock.return_value = '/tmp/test-invoice.pdf'
+
         self.transaction.gross_amount = Decimal('1010.00')
         self.transaction.platform_fee = Decimal('10.00')
         self.transaction.sacco = self.sacco
@@ -166,10 +183,13 @@ class BillingAutomationTests(TestCase):
         result = generate_monthly_invoices.apply()
 
         invoice = Invoice.objects.get(sacco=self.sacco)
-        self.assertEqual(result.result, [str(invoice.id)])
+        self.assertIsNone(result.result)
         self.assertEqual(invoice.billing_month, billing_month)
         self.assertEqual(invoice.total_amount, Decimal('10.00'))
         self.assertEqual(invoice.line_items_count, 1)
+        self.assertFalse(result.failed())
+        email_delay_mock.assert_called_once_with(str(invoice.id))
+        overdue_delay_mock.assert_called_once_with()
 
 
 class MonthlyInvoiceAccessTests(TestCase):
