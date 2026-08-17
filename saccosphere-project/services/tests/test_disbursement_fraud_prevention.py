@@ -5,12 +5,14 @@ from unittest.mock import patch
 from django.core.signing import TimestampSigner
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, User
 from billing.models import InvoiceLineItem
 from ledger.models import LedgerEntry
 from payments.models import Transaction
+from saccomanagement.models import Role
 from saccomembership.models import Membership
 from services.disbursement_service import DisbursementService
 from services.models import DisbursementAuditLog, Loan, LoanType
@@ -61,6 +63,12 @@ class DisbursementFraudPreventionTests(TestCase):
             last_name='Admin',
             password='StrongPass1',
         )
+        self.super_admin = User.objects.create_user(
+            email='superadmin@example.com',
+            first_name='Super',
+            last_name='Admin',
+            password='StrongPass1',
+        )
         self.sacco = Sacco.objects.create(
             name='Fraud Guard SACCO',
             registration_number='FG001',
@@ -73,6 +81,16 @@ class DisbursementFraudPreventionTests(TestCase):
             sacco=self.sacco,
             status=Membership.Status.APPROVED,
             member_number='FG001-M001',
+        )
+        Role.objects.create(
+            user=self.admin,
+            sacco=self.sacco,
+            name=Role.SACCO_ADMIN,
+        )
+        Role.objects.create(
+            user=self.super_admin,
+            sacco=None,
+            name=Role.SUPER_ADMIN,
         )
         self.loan_type = LoanType.objects.create(
             sacco=self.sacco,
@@ -227,6 +245,85 @@ class DisbursementFraudPreventionTests(TestCase):
 
         with self.assertRaises(PermissionError):
             log.delete()
+
+    def test_admin_can_view_own_sacco_disbursement_audit(self):
+        DisbursementAuditLog.objects.create(
+            loan=self.loan,
+            event='LOAN_APPROVED',
+            actor=self.admin,
+            actor_role='sacco_admin',
+            details={'loan_amount': str(self.loan.amount)},
+            mpesa_ref='CONV-123',
+        )
+        self.loan.mpesa_conversation_id = 'CONV-123'
+        self.loan.mpesa_transaction_id = 'MPESA-TX-123'
+        self.loan.save(
+            update_fields=[
+                'mpesa_conversation_id',
+                'mpesa_transaction_id',
+                'updated_at',
+            ],
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(
+            reverse(
+                'services:loan-disbursement-audit',
+                kwargs={'loan_id': self.loan.id},
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['loan_id'], str(self.loan.id))
+        self.assertEqual(response.data['current_status'], 'PENDING')
+        self.assertEqual(response.data['mpesa_conversation_id'], 'CONV-123')
+        self.assertEqual(len(response.data['audit_log']), 1)
+        self.assertEqual(
+            response.data['audit_log'][0]['event'],
+            'LOAN_APPROVED',
+        )
+
+    def test_super_admin_dispute_list_returns_review_loans(self):
+        self.loan.disbursement_status = Loan.DisbursementStatus.DISPUTED
+        self.loan.member_disputed_at = timezone.now()
+        self.loan.dispute_reason = 'Member reports non-receipt'
+        self.loan.mpesa_conversation_id = 'CONV-123'
+        self.loan.save(
+            update_fields=[
+                'disbursement_status',
+                'member_disputed_at',
+                'dispute_reason',
+                'mpesa_conversation_id',
+                'updated_at',
+            ],
+        )
+        DisbursementAuditLog.objects.create(
+            loan=self.loan,
+            event='MEMBER_DISPUTED',
+            actor_role='member',
+            details={'reason': self.loan.dispute_reason},
+        )
+        self.client.force_authenticate(user=self.super_admin)
+
+        response = self.client.get(
+            reverse('services:loan-disbursement-disputes')
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['loan_id'], str(self.loan.id))
+        self.assertEqual(response.data[0]['sacco'], self.sacco.name)
+        self.assertEqual(response.data[0]['status'], 'DISPUTED')
+        self.assertEqual(response.data[0]['audit_log_count'], 1)
+
+    def test_sacco_admin_cannot_view_super_admin_dispute_list(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(
+            reverse('services:loan-disbursement-disputes')
+        )
+
+        self.assertEqual(response.status_code, 403)
 
     def _attach_disbursement_transaction(self, disbursement_status=None):
         tx = Transaction.objects.create(

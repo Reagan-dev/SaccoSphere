@@ -223,10 +223,109 @@ class MonthlyInvoiceAccessTests(TestCase):
             phone_number='254700001144',
             password='StrongPass1',
         )
+        self.super_admin = User.objects.create_user(
+            email='invoice.superadmin@example.com',
+            first_name='Invoice',
+            last_name='Superadmin',
+            phone_number='254700001145',
+            password='StrongPass1',
+        )
+        self.member_a = User.objects.create_user(
+            email='invoice.member.a@example.com',
+            first_name='Invoice',
+            last_name='Member',
+            phone_number='254700001146',
+            password='StrongPass1',
+        )
         Role.objects.create(
             user=self.admin_a,
             sacco=self.sacco_a,
             name=Role.SACCO_ADMIN,
+        )
+        Role.objects.create(
+            user=self.super_admin,
+            sacco=None,
+            name=Role.SUPER_ADMIN,
+        )
+        Membership.objects.create(
+            user=self.member_a,
+            sacco=self.sacco_a,
+            status=Membership.Status.APPROVED,
+            member_number='INV-M-001',
+        )
+        provider, _ = PaymentProvider.objects.get_or_create(
+            name='M-Pesa',
+            defaults={
+                'provider_type': PaymentProvider.ProviderType.MPESA,
+                'is_active': True,
+            },
+        )
+        self.transaction = Transaction.objects.create(
+            provider=provider,
+            user=self.member_a,
+            reference='INV-TXN-001',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=Decimal('1000.00'),
+            gross_amount=Decimal('1010.00'),
+            platform_fee=Decimal('10.00'),
+            status=Transaction.Status.COMPLETED,
+            sacco=self.sacco_a,
+        )
+        self.preview_transaction = Transaction.objects.create(
+            provider=provider,
+            user=self.member_a,
+            reference='INV-TXN-PREVIEW',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=Decimal('1000.00'),
+            gross_amount=Decimal('1010.00'),
+            platform_fee=Decimal('10.00'),
+            status=Transaction.Status.COMPLETED,
+            sacco=self.sacco_a,
+        )
+        current_month = timezone.localdate().replace(day=1)
+        self.invoice_a = Invoice.objects.create(
+            sacco=self.sacco_a,
+            invoice_number='SS-2026-07-A',
+            billing_month=current_month,
+            total_amount=Decimal('10.00'),
+            line_items_count=1,
+            status='sent',
+            due_date=timezone.localdate() + timedelta(days=5),
+        )
+        self.invoice_b_new = Invoice.objects.create(
+            sacco=self.sacco_b,
+            invoice_number='SS-2026-07-B',
+            billing_month=current_month,
+            total_amount=Decimal('20.00'),
+            line_items_count=0,
+            status='paid',
+            due_date=timezone.localdate(),
+            paid_at=timezone.now(),
+        )
+        InvoiceLineItem.objects.create(
+            sacco=self.sacco_a,
+            transaction=self.transaction,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            gross_amount=Decimal('1010.00'),
+            net_amount=Decimal('1000.00'),
+            platform_fee=Decimal('10.00'),
+            fee_model='percentage',
+            rate_applied='1.0% of deposit amount',
+            billing_month=current_month,
+            invoiced=True,
+            invoice=self.invoice_a,
+        )
+        InvoiceLineItem.objects.create(
+            sacco=self.sacco_a,
+            transaction=self.preview_transaction,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            gross_amount=Decimal('1010.00'),
+            net_amount=Decimal('1000.00'),
+            platform_fee=Decimal('10.00'),
+            fee_model='percentage',
+            rate_applied='1.0% of deposit amount',
+            billing_month=current_month,
+            invoiced=False,
         )
         self.invoice_b = MonthlySaccoInvoice.objects.create(
             sacco=self.sacco_b,
@@ -265,11 +364,74 @@ class MonthlyInvoiceAccessTests(TestCase):
         response = self.client.get(
             reverse(
                 'billing:invoice-download',
-                kwargs={'invoice_id': self.invoice_b.id},
+                kwargs={'invoice_id': self.invoice_b_new.id},
             ),
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_sacco_admin_invoice_list_is_sacco_scoped(self):
+        self.client.force_authenticate(user=self.admin_a)
+
+        response = self.client.get(reverse('billing:invoice-list'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        invoice_ids = {item['id'] for item in response.data}
+        self.assertIn(str(self.invoice_a.id), invoice_ids)
+        self.assertNotIn(str(self.invoice_b_new.id), invoice_ids)
+
+    def test_super_admin_invoice_list_can_filter_by_sacco(self):
+        self.client.force_authenticate(user=self.super_admin)
+
+        response = self.client.get(
+            reverse('billing:invoice-list'),
+            {'sacco_id': str(self.sacco_b.id)},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id'], str(self.invoice_b_new.id))
+
+    def test_invoice_detail_returns_line_items_and_by_type_summary(self):
+        self.client.force_authenticate(user=self.admin_a)
+
+        response = self.client.get(
+            reverse('billing:invoice-detail', kwargs={'id': self.invoice_a.id}),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['line_items']), 1)
+        self.assertEqual(
+            response.data['line_items'][0]['transaction_ref'],
+            'INV-TXN-001',
+        )
+        self.assertEqual(response.data['by_type']['deposit']['count'], 1)
+        self.assertEqual(
+            Decimal(response.data['by_type']['deposit']['total_fee']),
+            Decimal('10.00'),
+        )
+
+    def test_revenue_summary_is_super_admin_only(self):
+        self.client.force_authenticate(user=self.admin_a)
+
+        response = self.client.get(reverse('billing:revenue-summary'))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_current_month_preview_returns_uninvoiced_running_total(self):
+        self.client.force_authenticate(user=self.admin_a)
+
+        response = self.client.get(
+            reverse('billing:current-month-transactions'),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['transactions_count'], 1)
+        self.assertEqual(
+            Decimal(response.data['projected_invoice_total']),
+            Decimal('10.00'),
+        )
+        self.assertEqual(response.data['by_type']['deposit']['count'], 1)
 
 
 class BillingSuspensionTests(TestCase):
