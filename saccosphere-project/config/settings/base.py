@@ -1,13 +1,13 @@
+import json
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import dj_database_url
+from corsheaders.defaults import default_headers
 from celery.schedules import crontab
 from django.core.exceptions import ImproperlyConfigured
 from decouple import Csv, config
-from corsheaders.defaults import default_headers
-import os
 
 
 
@@ -303,28 +303,46 @@ MPESA_B2C_SECURITY_CREDENTIAL = config(
 BILLING_ACCOUNT_NAME = config('BILLING_ACCOUNT_NAME', default='')
 BILLING_ACCOUNT_NUMBER = config('BILLING_ACCOUNT_NUMBER', default='')
 BILLING_PAYBILL = config('BILLING_PAYBILL', default='')
+BILLING_SUPPORT_EMAIL = config('BILLING_SUPPORT_EMAIL', default='')
 
 PLATFORM_FEES = {
-    'deposit': Decimal('0.01'),
-    'repayment': Decimal('0.005'),
+    'deposit': config(
+        'FEE_DEPOSIT_RATE',
+        default='0.01',
+        cast=lambda value: Decimal(value),
+    ),
+    'repayment': config(
+        'FEE_REPAYMENT_RATE',
+        default='0.005',
+        cast=lambda value: Decimal(value),
+    ),
 }
 
+_raw_disbursement_tiers = config(
+    'DISBURSEMENT_TIERS',
+    default=(
+        '[[10000,"50"],[30000,"100"],[70000,"200"],'
+        '[150000,"350"],[300000,"500"],[null,"750"]]'
+    ),
+)
 DISBURSEMENT_TIERS = [
-    (10_000, Decimal('50')),
-    (30_000, Decimal('100')),
-    (70_000, Decimal('200')),
-    (150_000, Decimal('350')),
-    (300_000, Decimal('500')),
-    (None, Decimal('750')),
+    (int(ceiling) if ceiling else None, Decimal(fee))
+    for ceiling, fee in json.loads(_raw_disbursement_tiers)
 ]
 
+_raw_withdrawal_tiers = config(
+    'WITHDRAWAL_TIERS',
+    default=(
+        '[[2000,"15"],[5000,"25"],[10000,"40"],'
+        '[20000,"60"],[null,"100"]]'
+    ),
+)
 WITHDRAWAL_TIERS = [
-    (2_000, Decimal('15')),
-    (5_000, Decimal('25')),
-    (10_000, Decimal('40')),
-    (20_000, Decimal('60')),
-    (None, Decimal('100')),
+    (int(ceiling) if ceiling else None, Decimal(fee))
+    for ceiling, fee in json.loads(_raw_withdrawal_tiers)
 ]
+
+PAYMENT_PROVIDER = config('PAYMENT_PROVIDER', default='')
 
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
