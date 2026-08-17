@@ -74,6 +74,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'saccomanagement.middleware.BillingSuspensionMiddleware',
     'saccomanagement.middleware.SaccoContextMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
 
@@ -374,6 +375,10 @@ CELERY_BEAT_SCHEDULE = {
     'check-overdue-invoices': {
         'task': 'billing.update_overdue_invoices',
         'schedule': crontab(minute=0, hour=8),
+    },
+    'suspend-overdue-saccos': {
+        'task': 'billing.suspend_overdue_saccos',
+        'schedule': crontab(minute=0, hour=9),
     },
 }
 

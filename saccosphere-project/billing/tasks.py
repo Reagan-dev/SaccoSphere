@@ -1,7 +1,7 @@
 """Billing automation tasks."""
 
 import logging
-from datetime import date, timedelta
+from datetime import timedelta
 
 from celery import shared_task
 from django.conf import settings
@@ -147,7 +147,7 @@ def update_overdue_invoices():
     """Mark invoices as overdue if past due date and unpaid."""
     overdue = Invoice.objects.filter(
         status='sent',
-        due_date__lt=date.today(),
+        due_date__lt=timezone.localdate(),
     )
     count = overdue.update(status='overdue')
 
@@ -163,6 +163,118 @@ def update_overdue_invoices():
 def notify_superadmin(subject: str, message: str):
     """Notify platform admins about billing events."""
     mail_admins(subject=subject, message=message, fail_silently=True)
+
+
+@shared_task(name='billing.suspend_overdue_saccos')
+def suspend_overdue_saccos():
+    """Suspend SACCO admin writes for invoices overdue beyond grace period."""
+    today = timezone.localdate()
+    cutoff = today - timedelta(days=8)
+    overdue_invoices = Invoice.objects.filter(
+        status='overdue',
+        due_date__lte=cutoff,
+    ).select_related('sacco')
+
+    suspended_count = 0
+    for invoice in overdue_invoices:
+        sacco = invoice.sacco
+        if sacco.is_billing_suspended:
+            continue
+
+        sacco.is_billing_suspended = True
+        sacco.suspended_at = timezone.now()
+        sacco.suspension_reason = (
+            f'Invoice {invoice.invoice_number} overdue by '
+            f'{(today - invoice.due_date).days} days'
+        )
+        sacco.save(
+            update_fields=[
+                'is_billing_suspended',
+                'suspended_at',
+                'suspension_reason',
+                'updated_at',
+            ],
+        )
+
+        invoice.status = 'suspended'
+        invoice.save(update_fields=['status', 'updated_at'])
+        send_suspension_notice.delay(str(sacco.id), str(invoice.id))
+        suspended_count += 1
+
+    if suspended_count:
+        logger.warning(
+            '%d SACCOs suspended for overdue billing',
+            suspended_count,
+        )
+
+    return suspended_count
+
+
+@shared_task(name='billing.send_suspension_notice')
+def send_suspension_notice(sacco_id: str, invoice_id: str):
+    """Notify SACCO admins that billing suspension has been applied."""
+    sacco = Sacco.objects.get(id=sacco_id)
+    invoice = Invoice.objects.get(id=invoice_id)
+    admin_emails = _get_sacco_admin_emails(sacco)
+
+    if not admin_emails:
+        logger.warning('No admin emails found for SACCO %s', sacco.name)
+        return
+
+    subject = f'SaccoSphere access suspended for {sacco.name}'
+    body = (
+        f'Dear {sacco.name} Admin,\n\n'
+        'Your SACCO admin portal write access has been suspended because '
+        f'invoice {invoice.invoice_number} remains unpaid after its due '
+        f'date of {invoice.due_date:%d %B %Y}.\n\n'
+        'Please pay the outstanding invoice to restore full admin access.\n'
+    )
+    EmailMessage(
+        subject,
+        body,
+        settings.DEFAULT_FROM_EMAIL,
+        admin_emails,
+    ).send()
+
+
+@shared_task(name='billing.send_payment_received_notice')
+def send_payment_received_notice(sacco_id: str, invoice_id: str):
+    """Notify SACCO admins that payment was received and access restored."""
+    sacco = Sacco.objects.get(id=sacco_id)
+    invoice = Invoice.objects.get(id=invoice_id)
+    admin_emails = _get_sacco_admin_emails(sacco)
+
+    if not admin_emails:
+        logger.warning('No admin emails found for SACCO %s', sacco.name)
+        return
+
+    subject = f'Payment received for invoice {invoice.invoice_number}'
+    body = (
+        f'Dear {sacco.name} Admin,\n\n'
+        'Payment received. Account restored.\n\n'
+        f'Invoice {invoice.invoice_number} has been marked paid, and your '
+        'SACCO admin portal access has been restored.\n\n'
+        'Thank you for using SaccoSphere.\n'
+    )
+    EmailMessage(
+        subject,
+        body,
+        settings.DEFAULT_FROM_EMAIL,
+        admin_emails,
+    ).send()
+
+
+def _get_sacco_admin_emails(sacco):
+    from saccomanagement.models import Role
+
+    return list(
+        Role.objects.filter(
+            sacco=sacco,
+            name=Role.SACCO_ADMIN,
+        )
+        .exclude(user__email='')
+        .values_list('user__email', flat=True)
+    )
 
 
 @shared_task(name='billing.tasks.generate_monthly_invoices')
