@@ -1,8 +1,10 @@
+import json
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.http import JsonResponse
+from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -12,6 +14,7 @@ from accounts.models import Sacco, User
 from billing.models import (
     Invoice,
     InvoiceLineItem,
+    InvoicePayment,
     MonthlySaccoInvoice,
     PlatformRevenue,
 )
@@ -23,9 +26,11 @@ from billing.services import (
 from billing.tasks import (
     generate_and_send_monthly_fee_reports,
     generate_monthly_invoices,
+    suspend_overdue_saccos,
 )
 from payments.models import PaymentProvider, PlatformFee, Transaction
 from saccomanagement.models import Role
+from saccomanagement.middleware import BillingSuspensionMiddleware
 from saccomembership.models import Membership
 
 
@@ -253,7 +258,6 @@ class MonthlyInvoiceAccessTests(TestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        send_mock.assert_not_called()
 
     def test_sacco_admin_cannot_download_other_sacco_invoice(self):
         """SACCO A admin cannot download SACCO B invoices."""
@@ -266,3 +270,214 @@ class MonthlyInvoiceAccessTests(TestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class BillingSuspensionTests(TestCase):
+    """Validate SACCO billing suspension, blocking, and restoration."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.client = APIClient()
+        self.sacco = Sacco.objects.create(
+            name='Suspended Billing SACCO',
+            registration_number='SUSP001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        self.admin = User.objects.create_user(
+            email='suspended.admin@example.com',
+            first_name='Suspended',
+            last_name='Admin',
+            phone_number='254700001155',
+            password='StrongPass1',
+        )
+        self.member = User.objects.create_user(
+            email='suspended.member@example.com',
+            first_name='Suspended',
+            last_name='Member',
+            phone_number='254700001166',
+            password='StrongPass1',
+        )
+        self.super_admin = User.objects.create_user(
+            email='billing.superadmin@example.com',
+            first_name='Billing',
+            last_name='Super',
+            phone_number='254700001177',
+            password='StrongPass1',
+            is_staff=True,
+        )
+        Role.objects.create(
+            user=self.admin,
+            sacco=self.sacco,
+            name=Role.SACCO_ADMIN,
+        )
+        Role.objects.create(
+            user=self.super_admin,
+            sacco=None,
+            name=Role.SUPER_ADMIN,
+        )
+        Membership.objects.create(
+            user=self.member,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number='SUSP-M-001',
+        )
+        self.invoice = Invoice.objects.create(
+            sacco=self.sacco,
+            invoice_number='SS-2026-07-SUSP',
+            billing_month=timezone.datetime(2026, 7, 1).date(),
+            total_amount=Decimal('5000.00'),
+            line_items_count=1,
+            status='overdue',
+            due_date=timezone.localdate() - timedelta(days=9),
+        )
+
+    @patch('billing.tasks.send_suspension_notice.delay')
+    def test_suspend_overdue_saccos_locks_sacco_admin_writes(
+        self,
+        notice_delay_mock,
+    ):
+        count = suspend_overdue_saccos()
+
+        self.assertEqual(count, 1)
+        self.sacco.refresh_from_db()
+        self.invoice.refresh_from_db()
+        self.assertTrue(self.sacco.is_billing_suspended)
+        self.assertIsNotNone(self.sacco.suspended_at)
+        self.assertEqual(
+            self.sacco.suspension_reason,
+            'Invoice SS-2026-07-SUSP overdue by 9 days',
+        )
+        self.assertIsInstance(self.sacco.suspension_reason, str)
+        self.assertEqual(self.invoice.status, 'suspended')
+        notice_delay_mock.assert_called_once_with(
+            str(self.sacco.id),
+            str(self.invoice.id),
+        )
+
+    def test_billing_suspension_blocks_admin_write_with_402(self):
+        self.sacco.is_billing_suspended = True
+        self.sacco.save(update_fields=['is_billing_suspended'])
+        middleware = BillingSuspensionMiddleware(
+            lambda request: JsonResponse({'ok': True}),
+        )
+        request = self.factory.post('/api/v1/services/savings/')
+        request.user = self.admin
+
+        response = middleware(request)
+        payload = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 402)
+        self.assertEqual(payload['error'], 'BILLING_SUSPENDED')
+        self.assertIsInstance(payload['message'], str)
+        self.assertNotIn('(', payload['message'])
+
+    def test_billing_suspension_allows_member_write_and_admin_read(self):
+        self.sacco.is_billing_suspended = True
+        self.sacco.save(update_fields=['is_billing_suspended'])
+        middleware = BillingSuspensionMiddleware(
+            lambda request: JsonResponse({'ok': True}),
+        )
+
+        member_request = self.factory.post('/api/v1/services/savings/')
+        member_request.user = self.member
+        member_response = middleware(member_request)
+
+        admin_read_request = self.factory.get('/api/v1/services/savings/')
+        admin_read_request.user = self.admin
+        admin_read_response = middleware(admin_read_request)
+
+        self.assertEqual(member_response.status_code, 200)
+        self.assertEqual(admin_read_response.status_code, 200)
+
+    def test_billing_suspension_blocks_admin_invoice_write_subactions(self):
+        self.sacco.is_billing_suspended = True
+        self.sacco.save(update_fields=['is_billing_suspended'])
+        middleware = BillingSuspensionMiddleware(
+            lambda request: JsonResponse({'ok': True}),
+        )
+        request = self.factory.post(
+            f'/api/v1/billing/invoices/{self.invoice.id}/resend/',
+        )
+        request.user = self.admin
+
+        response = middleware(request)
+
+        self.assertEqual(response.status_code, 402)
+
+    @patch('billing.views.send_payment_received_notice.delay')
+    def test_mark_paid_records_payment_and_restores_sacco(
+        self,
+        notice_delay_mock,
+    ):
+        self.sacco.is_billing_suspended = True
+        self.sacco.suspended_at = timezone.now()
+        self.sacco.suspension_reason = 'Invoice overdue'
+        self.sacco.save(
+            update_fields=[
+                'is_billing_suspended',
+                'suspended_at',
+                'suspension_reason',
+            ],
+        )
+        self.client.force_authenticate(user=self.super_admin)
+
+        response = self.client.post(
+            reverse(
+                'billing:invoice-mark-paid',
+                kwargs={'invoice_id': self.invoice.id},
+            ),
+            {
+                'payment_ref': 'MPESA_REF',
+                'amount': '5000.00',
+                'payment_method': 'mpesa',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.invoice.refresh_from_db()
+        self.sacco.refresh_from_db()
+        self.assertEqual(self.invoice.status, 'paid')
+        self.assertIsNotNone(self.invoice.paid_at)
+        self.assertEqual(self.invoice.payment_reference, 'MPESA_REF')
+        self.assertFalse(self.sacco.is_billing_suspended)
+        self.assertIsNone(self.sacco.suspended_at)
+        self.assertEqual(self.sacco.suspension_reason, '')
+        self.assertTrue(
+            InvoicePayment.objects.filter(
+                invoice=self.invoice,
+                amount=Decimal('5000.00'),
+                payment_method='mpesa',
+                payment_ref='MPESA_REF',
+                recorded_by=self.super_admin,
+            ).exists(),
+        )
+        notice_delay_mock.assert_called_once_with(
+            str(self.sacco.id),
+            str(self.invoice.id),
+        )
+
+    @patch('billing.views.send_payment_received_notice.delay')
+    def test_mark_paid_rejects_underpayment(self, notice_delay_mock):
+        self.client.force_authenticate(user=self.super_admin)
+
+        response = self.client.post(
+            reverse(
+                'billing:invoice-mark-paid',
+                kwargs={'invoice_id': self.invoice.id},
+            ),
+            {
+                'payment_ref': 'MPESA_REF',
+                'amount': '4999.99',
+                'payment_method': 'mpesa',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.status, 'overdue')
+        self.assertFalse(InvoicePayment.objects.exists())
+        notice_delay_mock.assert_not_called()

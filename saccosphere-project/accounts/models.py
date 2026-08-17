@@ -484,6 +484,12 @@ class Sacco(models.Model):
 
     )
 
+    is_billing_suspended = models.BooleanField(default=False)
+
+    suspended_at = models.DateTimeField(null=True, blank=True)
+
+    suspension_reason = models.TextField(blank=True)
+
     default_interest_rate = models.DecimalField(
 
         max_digits=5,

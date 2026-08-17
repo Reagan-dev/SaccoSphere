@@ -98,3 +98,60 @@ class SaccoContextMiddleware(MiddlewareMixin):
             )
 
         return None
+
+
+class BillingSuspensionMiddleware:
+    """
+    Blocks SACCO admin write operations when billing is suspended.
+
+    Read-only access is always allowed so members can still view balances and
+    other non-mutating data.
+    """
+
+    WRITE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
+    EXEMPT_PATHS = [
+        '/api/v1/accounts/login/',
+        '/api/v1/accounts/logout/',
+        '/api/v1/accounts/token/refresh/',
+        '/api/v1/billing/invoices/',
+        '/api/v1/billing/pay/',
+    ]
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if self._should_block_request(request):
+            return JsonResponse(
+                {
+                    'error': 'BILLING_SUSPENDED',
+                    'message': (
+                        "Your SACCO's account has been suspended due to an "
+                        'outstanding invoice. Please pay your invoice to '
+                        'restore full access.'
+                    ),
+                    'action_url': '/billing/invoices/',
+                },
+                status=402,
+            )
+
+        return self.get_response(request)
+
+    def _should_block_request(self, request):
+        if request.method not in self.WRITE_METHODS:
+            return False
+
+        if self._is_exempt_path(request.path):
+            return False
+
+        if not hasattr(request, 'user') or not request.user.is_authenticated:
+            return False
+
+        return Role.objects.filter(
+            user=request.user,
+            name=Role.SACCO_ADMIN,
+            sacco__is_billing_suspended=True,
+        ).exists()
+
+    def _is_exempt_path(self, path):
+        return path in self.EXEMPT_PATHS
