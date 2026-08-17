@@ -4,7 +4,7 @@ services:
     runtime: python
     plan: free
     buildCommand: ./build.sh
-    startCommand: gunicorn config.wsgi:application
+    startCommand: python manage.py migrate && python manage.py collectstatic --noinput && gunicorn config.wsgi:application
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: config.settings.production
