@@ -22,7 +22,12 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
 from accounts.models import Sacco, User
-from accounts.permissions import IsSaccoAdmin
+from accounts.permissions import (
+    IsSaccoAdmin,
+    IsSaccoAdminOrSuperAdmin,
+    IsSuperAdmin,
+)
+from billing.serializers import DisbursementAuditSerializer
 from notifications.utils import create_notification
 from saccomembership.models import Membership
 from saccomanagement.mixins import SaccoScopedMixin
@@ -305,6 +310,90 @@ class LoanDetailView(RetrieveAPIView):
             'membership__sacco',
             'loan_type',
         )
+
+
+class LoanAdminAccessMixin:
+    """Filter loan querysets to SACCOs administered by the current user."""
+
+    def is_super_admin(self):
+        user = self.request.user
+        return (
+            user.is_staff
+            or user.roles.filter(name=Role.SUPER_ADMIN).exists()
+        )
+
+    def admin_sacco_ids(self):
+        return self.request.user.roles.filter(
+            name=Role.SACCO_ADMIN,
+            sacco__isnull=False,
+        ).values_list('sacco_id', flat=True)
+
+    def filter_for_user_saccos(self, queryset):
+        if self.is_super_admin():
+            return queryset
+        return queryset.filter(membership__sacco_id__in=self.admin_sacco_ids())
+
+
+class LoanDisbursementAuditView(LoanAdminAccessMixin, APIView):
+    """Return the full disbursement audit trail for one loan."""
+
+    permission_classes = [IsAuthenticated, IsSaccoAdminOrSuperAdmin]
+
+    def get(self, request, loan_id):
+        loan = get_object_or_404(
+            self.filter_for_user_saccos(
+                Loan.objects.select_related(
+                    'membership__sacco',
+                    'membership__user',
+                ).prefetch_related('disbursement_audit_logs'),
+            ),
+            id=loan_id,
+        )
+        serializer = DisbursementAuditSerializer(
+            {
+                'loan_id': loan.id,
+                'current_status': loan.disbursement_status,
+                'mpesa_conversation_id': loan.mpesa_conversation_id,
+                'mpesa_transaction_id': loan.mpesa_transaction_id,
+                'audit_log': loan.disbursement_audit_logs.all(),
+            }
+        )
+        return Response(serializer.data)
+
+
+class LoanDisbursementDisputeListView(APIView):
+    """List loans whose disbursement needs super-admin attention."""
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get(self, request):
+        loans = Loan.objects.select_related(
+            'membership__sacco',
+            'membership__user',
+        ).filter(
+            disbursement_status__in=[
+                Loan.DisbursementStatus.DISPUTED,
+                Loan.DisbursementStatus.UNDER_REVIEW,
+            ],
+        ).annotate(
+            audit_log_count=Count('disbursement_audit_logs'),
+        ).order_by('-member_disputed_at', '-updated_at')
+
+        data = [
+            {
+                'loan_id': str(loan.id),
+                'sacco': loan.membership.sacco.name,
+                'member': loan.membership.user.email,
+                'amount': loan.amount,
+                'status': loan.disbursement_status,
+                'disputed_at': loan.member_disputed_at,
+                'dispute_reason': loan.dispute_reason,
+                'mpesa_conversation_id': loan.mpesa_conversation_id,
+                'audit_log_count': loan.audit_log_count,
+            }
+            for loan in loans
+        ]
+        return Response(data)
 
 
 class ConfirmDisbursementView(APIView):

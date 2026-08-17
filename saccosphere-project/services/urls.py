@@ -19,6 +19,8 @@ from .views import (
     LoanApplyView,
     LoanCollectionView,
     LoanDetailView,
+    LoanDisbursementAuditView,
+    LoanDisbursementDisputeListView,
     LoanEligibilityView,
     LoanListView,
     LoanTypeListView,
@@ -53,6 +55,11 @@ urlpatterns = [
     path('loans/apply/', LoanApplyView.as_view(), name='loan-apply'),
     path('loans/list/', LoanListView.as_view(), name='loan-list'),
     path(
+        'loans/disputes/',
+        LoanDisbursementDisputeListView.as_view(),
+        name='loan-disbursement-disputes',
+    ),
+    path(
         'loans/confirm-disbursement/',
         ConfirmDisbursementView.as_view(),
         name='confirm-disbursement',
@@ -63,6 +70,11 @@ urlpatterns = [
         name='dispute-disbursement',
     ),
     path('loans/<uuid:id>/', LoanDetailView.as_view(), name='loan-detail'),
+    path(
+        'loans/<uuid:loan_id>/disbursement-audit/',
+        LoanDisbursementAuditView.as_view(),
+        name='loan-disbursement-audit',
+    ),
     path(
         'loans/<uuid:id>/schedule/',
         RepaymentScheduleView.as_view(),
