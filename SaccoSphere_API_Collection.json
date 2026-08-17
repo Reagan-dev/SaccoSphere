@@ -1354,6 +1354,80 @@
           "response": []
         },
         {
+          "name": "Replace Application Review",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/applications/{{application_id}}/review/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "applications",
+                "{{application_id}}",
+                "review",
+                ""
+              ]
+            },
+            "description": "Approve or reject a SACCO membership application using PUT.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"review_notes\": \"Application approved\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Application Review Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/applications/{{application_id}}/review/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "applications",
+                "{{application_id}}",
+                "review",
+                ""
+              ]
+            },
+            "description": "Retrieve one SACCO membership application and uploaded documents."
+          },
+          "response": []
+        },
+        {
           "name": "List KYC Queue",
           "request": {
             "method": "GET",
@@ -1429,6 +1503,47 @@
               ]
             },
             "description": "Approve or reject a member KYC verification"
+          },
+          "response": []
+        },
+        {
+          "name": "Replace KYC Review",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/management/kyc/{{kyc_id}}/review/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "management",
+                "kyc",
+                "{{kyc_id}}",
+                "review",
+                ""
+              ]
+            },
+            "description": "Approve or reject a member KYC record using PUT.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"manual_verification_reason\": \"Documents verified manually\",\n  \"rejection_reason\": \"\"\n}"
+            }
           },
           "response": []
         },
@@ -2734,6 +2849,129 @@
           "response": []
         },
         {
+          "name": "Get Loan Disbursement Audit",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/disbursement-audit/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "{{loan_id}}",
+                "disbursement-audit",
+                ""
+              ]
+            },
+            "description": "Return the disbursement audit trail for one loan."
+          },
+          "response": []
+        },
+        {
+          "name": "Dispute Loan Disbursement",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/dispute-disbursement/?token={{disbursement_token}}&reason=Funds%20not%20received",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "dispute-disbursement",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "token",
+                  "value": "{{disbursement_token}}"
+                },
+                {
+                  "key": "reason",
+                  "value": "Funds not received"
+                }
+              ]
+            },
+            "description": "Public dispute link used by a member to report a missing disbursement."
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm Loan Disbursement",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/confirm-disbursement/?token={{disbursement_token}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "confirm-disbursement",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "token",
+                  "value": "{{disbursement_token}}"
+                }
+              ]
+            },
+            "description": "Public confirmation link used by a member to confirm loan receipt."
+          },
+          "response": []
+        },
+        {
+          "name": "List Disbursement Disputes",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/services/loans/disputes/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "services",
+                "loans",
+                "disputes",
+                ""
+              ]
+            },
+            "description": "List disputed or under-review loan disbursements for super admins."
+          },
+          "response": []
+        },
+        {
           "name": "Get Repayment Schedule",
           "request": {
             "method": "GET",
@@ -3675,6 +3913,144 @@
           "response": []
         },
         {
+          "name": "Generic Payment Callback",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/callback/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "callback",
+                ""
+              ]
+            },
+            "description": "Receive a generic PSP callback payload.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider_reference\": \"PROVIDER-REF-001\",\n  \"status\": \"COMPLETED\",\n  \"amount\": \"1000.00\",\n  \"metadata\": {}\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Initiate Withdrawal",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/withdrawal/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "withdrawal",
+                ""
+              ]
+            },
+            "description": "Initiate a PSP-backed savings withdrawal.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"amount\": \"1000.00\",\n  \"sacco_id\": \"{{sacco_id}}\",\n  \"saving_id\": \"{{saving_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Initiate Deposit",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/deposit/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "deposit",
+                ""
+              ]
+            },
+            "description": "Initiate a PSP-backed member deposit.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"amount\": \"1000.00\",\n  \"sacco_id\": \"{{sacco_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Preview Transaction Fee",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/fee-preview/?type=deposit&amount=1000",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "fee-preview",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "deposit"
+                },
+                {
+                  "key": "amount",
+                  "value": "1000"
+                }
+              ]
+            },
+            "description": "Preview platform fee breakdown for deposit, repayment, disbursement, or withdrawal."
+          },
+          "response": []
+        },
+        {
           "name": "Initiate STK Push",
           "request": {
             "method": "POST",
@@ -4411,6 +4787,103 @@
             "description": "Download invoice report as CSV or PDF"
           },
           "response": []
+        },
+        {
+          "name": "Preview Current Month Transactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/billing/transactions/current-month/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "billing",
+                "transactions",
+                "current-month",
+                ""
+              ]
+            },
+            "description": "Preview uninvoiced current-month SACCO billing line items."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Revenue Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/billing/revenue/summary/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "billing",
+                "revenue",
+                "summary",
+                ""
+              ]
+            },
+            "description": "Return platform revenue summary for super admins."
+          },
+          "response": []
+        },
+        {
+          "name": "Mark Invoice Paid",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/billing/invoices/{{invoice_id}}/mark-paid/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "billing",
+                "invoices",
+                "{{invoice_id}}",
+                "mark-paid",
+                ""
+              ]
+            },
+            "description": "Super admin endpoint to record invoice payment and restore SACCO access.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"5000.00\",\n  \"payment_method\": \"mpesa\",\n  \"payment_ref\": \"MPESA-REF-001\",\n  \"notes\": \"Payment confirmed by finance team\"\n}"
+            }
+          },
+          "response": []
         }
       ]
     },
@@ -4780,34 +5253,6 @@
             "description": "List all members with pagination (SUPER_ADMIN only)"
           },
           "response": []
-        },
-        {
-          "name": "List All SACCOs",
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{access_token}}"
-              }
-            ],
-            "url": {
-              "raw": "{{base_url}}/api/v1/management/superadmin/saccos/",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "management",
-                "superadmin",
-                "saccos",
-                ""
-              ]
-            },
-            "description": "List all SACCOs with health status (SUPER_ADMIN only)"
-          },
-          "response": []
         }
       ]
     },
@@ -5100,6 +5545,80 @@
           "response": []
         },
         {
+          "name": "Replace Application Review",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/applications/{{application_id}}/review/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "applications",
+                "{{application_id}}",
+                "review",
+                ""
+              ]
+            },
+            "description": "Approve or reject a SACCO membership application using PUT.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"review_notes\": \"Application approved\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Application Review Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/applications/{{application_id}}/review/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "applications",
+                "{{application_id}}",
+                "review",
+                ""
+              ]
+            },
+            "description": "Retrieve one SACCO membership application and uploaded documents."
+          },
+          "response": []
+        },
+        {
           "name": "List KYC Queue",
           "request": {
             "method": "GET",
@@ -5175,6 +5694,47 @@
               ]
             },
             "description": "Approve or reject a member KYC verification"
+          },
+          "response": []
+        },
+        {
+          "name": "Replace KYC Review",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/saccomanagement/kyc/{{kyc_id}}/review/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "saccomanagement",
+                "kyc",
+                "{{kyc_id}}",
+                "review",
+                ""
+              ]
+            },
+            "description": "Approve or reject a member KYC record using PUT.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"APPROVED\",\n  \"manual_verification_reason\": \"Documents verified manually\",\n  \"rejection_reason\": \"\"\n}"
+            }
           },
           "response": []
         },
@@ -6425,34 +6985,6 @@
             "description": "List all members with pagination (SUPER_ADMIN only)"
           },
           "response": []
-        },
-        {
-          "name": "List All SACCOs",
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{access_token}}"
-              }
-            ],
-            "url": {
-              "raw": "{{base_url}}/api/v1/saccomanagement/superadmin/saccos/",
-              "host": [
-                "{{base_url}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "saccomanagement",
-                "superadmin",
-                "saccos",
-                ""
-              ]
-            },
-            "description": "List all SACCOs with health status (SUPER_ADMIN only)"
-          },
-          "response": []
         }
       ]
     }
@@ -6560,6 +7092,10 @@
     },
     {
       "key": "savings_type_id",
+      "value": ""
+    },
+    {
+      "key": "disbursement_token",
       "value": ""
     }
   ]
