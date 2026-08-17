@@ -1,7 +1,15 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
-from .models import KYCVerification, OTPToken, Sacco, User, UserConsent
+from .models import (
+    KYCVerification,
+    OTPToken,
+    Sacco,
+    SaccoSettings,
+    User,
+    UserConsent,
+    UserDevice,
+)
 
 
 @admin.register(User)
@@ -68,6 +76,62 @@ class UserAdmin(DjangoUserAdmin):
             },
         ),
     )
+
+
+@admin.register(UserDevice)
+class UserDeviceAdmin(admin.ModelAdmin):
+    list_display = (
+        'user',
+        'device_name',
+        'platform',
+        'biometric_enabled',
+        'last_seen',
+        'created_at',
+    )
+    list_filter = ('platform', 'biometric_enabled', 'created_at')
+    search_fields = (
+        'user__email',
+        'user__first_name',
+        'user__last_name',
+        'device_id',
+        'device_name',
+        'push_token',
+    )
+    autocomplete_fields = ('user',)
+    readonly_fields = ('last_seen', 'created_at')
+    list_select_related = ('user',)
+    list_per_page = 50
+    ordering = ('-created_at',)
+    fieldsets = (
+        (
+            None,
+            {
+                'fields': (
+                    'user',
+                    'device_id',
+                    'device_name',
+                    'platform',
+                    'biometric_enabled',
+                ),
+            },
+        ),
+        (
+            'Push token',
+            {
+                'classes': ('collapse',),
+                'fields': ('push_token',),
+            },
+        ),
+        (
+            'Audit',
+            {
+                'classes': ('collapse',),
+                'fields': ('last_seen', 'created_at'),
+            },
+        ),
+    )
+
+
 @admin.register(Sacco)
 class SaccoAdmin(admin.ModelAdmin):
     list_display = (
@@ -87,6 +151,61 @@ class SaccoAdmin(admin.ModelAdmin):
         return obj.membership_set.filter(status='APPROVED').count()
     
     member_count.short_description = 'Members'
+
+
+@admin.register(SaccoSettings)
+class SaccoSettingsAdmin(admin.ModelAdmin):
+    list_display = (
+        'sacco',
+        'min_loan_amount',
+        'max_loan_amount',
+        'requires_guarantor',
+        'guarantor_type_allowed',
+        'updated_at',
+    )
+    list_filter = (
+        'sacco',
+        'requires_guarantor',
+        'guarantor_type_allowed',
+    )
+    search_fields = ('sacco__name', 'sacco__registration_number')
+    autocomplete_fields = ('sacco',)
+    readonly_fields = ('created_at', 'updated_at')
+    list_select_related = ('sacco',)
+    ordering = ('sacco__name',)
+    fieldsets = (
+        (
+            None,
+            {
+                'fields': (
+                    'sacco',
+                    'min_loan_amount',
+                    'max_loan_amount',
+                    'loan_multiplier',
+                    'requires_guarantor',
+                    'guarantor_type_allowed',
+                ),
+            },
+        ),
+        (
+            'Contribution and liquidity settings',
+            {
+                'fields': (
+                    'registration_fee',
+                    'monthly_contribution_amount',
+                    'liquidity_threshold_percentage',
+                    'sms_daily_limit',
+                ),
+            },
+        ),
+        (
+            'Audit',
+            {
+                'classes': ('collapse',),
+                'fields': ('created_at', 'updated_at'),
+            },
+        ),
+    )
 
 
 @admin.register(KYCVerification)

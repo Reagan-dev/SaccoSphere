@@ -3,6 +3,7 @@ from django.contrib import admin
 from .models import (
     MemberFieldData,
     Membership,
+    MembershipDocument,
     SaccoApplication,
     SaccoFieldDefinition,
 )
@@ -81,3 +82,56 @@ class SaccoApplicationAdmin(admin.ModelAdmin):
         'employer_name',
     )
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(MembershipDocument)
+class MembershipDocumentAdmin(admin.ModelAdmin):
+    list_display = (
+        'application',
+        'document_type',
+        'file_name',
+        'is_verified',
+        'uploaded_at',
+    )
+    list_filter = ('document_type', 'is_verified', 'uploaded_at')
+    search_fields = (
+        'application__user__email',
+        'application__sacco__name',
+        'file_name',
+        'notes',
+    )
+    autocomplete_fields = ('application',)
+    readonly_fields = ('uploaded_at',)
+    list_select_related = ('application',)
+    ordering = ('-uploaded_at',)
+    fieldsets = (
+        (
+            None,
+            {
+                'fields': (
+                    'application',
+                    'document_type',
+                    'is_verified',
+                ),
+            },
+        ),
+        (
+            'File details',
+            {
+                'classes': ('collapse',),
+                'fields': (
+                    'file',
+                    'file_name',
+                    'file_size_bytes',
+                    'notes',
+                ),
+            },
+        ),
+        (
+            'Audit',
+            {
+                'classes': ('collapse',),
+                'fields': ('uploaded_at',),
+            },
+        ),
+    )
