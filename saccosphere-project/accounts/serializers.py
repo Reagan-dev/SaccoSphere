@@ -364,6 +364,37 @@ class OTPRequestSerializer(serializers.Serializer):
         validators=[validate_kenyan_phone_number],
     )
     purpose = serializers.ChoiceField(choices=OTPToken.Purpose.choices)
+    channel = serializers.ChoiceField(
+        choices=OTPToken.Channel.choices,
+        default=OTPToken.Channel.PHONE,
+        required=False,
+    )
+
+    def validate(self, attrs):
+        channel = attrs.get('channel', OTPToken.Channel.PHONE)
+
+        if channel == OTPToken.Channel.EMAIL:
+            if not settings.OTP_EMAIL_ENABLED:
+                raise serializers.ValidationError(
+                    'Email verification codes are not available yet — please use SMS.'
+                )
+
+            request = self.context.get('request')
+            if request and request.user and request.user.is_authenticated:
+                if not request.user.email:
+                    raise serializers.ValidationError(
+                        'Add an email address to your account before requesting an email code.'
+                    )
+
+        if channel == OTPToken.Channel.PHONE:
+            request = self.context.get('request')
+            if request and request.user and request.user.is_authenticated:
+                if not request.user.phone_number:
+                    raise serializers.ValidationError(
+                        'Add a phone number to your account before requesting an SMS code.'
+                    )
+
+        return attrs
 
 
 class OTPVerifySerializer(serializers.Serializer):
