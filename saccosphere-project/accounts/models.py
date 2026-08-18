@@ -1001,6 +1001,13 @@ class OTPToken(models.Model):
 
         LOGIN = 'LOGIN', 'Login'
 
+    class Channel(models.TextChoices):
+
+        PHONE = 'PHONE', 'Phone (SMS)'
+
+        EMAIL = 'EMAIL', 'Email'
+
+
 
 
     id = models.UUIDField(
@@ -1057,6 +1064,13 @@ class OTPToken(models.Model):
 
         help_text='Reason this OTP was created.',
 
+    )
+
+    channel = models.CharField(
+        max_length=10,
+        choices=Channel.choices,
+        default=Channel.PHONE,
+        help_text='Delivery channel used to send the OTP (SMS or email).',
     )
 
     is_used = models.BooleanField(
