@@ -2,12 +2,15 @@
 
 import abc
 import logging
+import smtplib
 
 from django.conf import settings
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
 
 from .models import OTPToken
 
-logger = logging.getLogger('saccosphere.otp')
+logger = logging.getLogger(__name__)
 
 
 class OTPDeliveryError(Exception):
@@ -171,29 +174,75 @@ class PhoneOTPBackend(BaseOTPBackend):
 
 
 class EmailOTPBackend(BaseOTPBackend):
-    """
-    Email backend for OTP delivery.
-
-    This is a placeholder implementation. The real email sending logic
-    will be implemented in a subsequent step.
-    """
+    """Email backend for OTP delivery using Django's mail system."""
 
     channel = OTPToken.Channel.EMAIL
 
     def send(self, token: OTPToken) -> None:
         """
-        Send OTP code via email.
+        Send OTP code via email using Django's EmailMultiAlternatives.
+
+        Renders both text and HTML email templates and sends them to the
+        user's email address. Validates that the user has an email before
+        attempting to send.
 
         Args:
             token: The OTPToken instance containing the code and delivery details.
 
         Raises:
-            NotImplementedError: This backend is not yet implemented.
+            OTPDeliveryError: If the user has no email or sending fails.
 
         Returns:
             None
         """
-        raise NotImplementedError('Email OTP backend not implemented yet')
+        user = token.user
+        if user is None:
+            raise OTPDeliveryError('This account has no email address on file.')
+
+        if not user.email:
+            raise OTPDeliveryError('This account has no email address on file.')
+
+        expiry_minutes = getattr(settings, 'OTP_EXPIRY_MINUTES', 10)
+
+        context = {
+            'otp_code': token.code,
+            'expiry_minutes': expiry_minutes,
+            'user': user,
+        }
+
+        subject = 'Your SaccoSphere verification code'
+        text_body = render_to_string('accounts/emails/otp_email.txt', context)
+        html_body = render_to_string('accounts/emails/otp_email.html', context)
+
+        from_email = settings.DEFAULT_FROM_EMAIL
+
+        try:
+            email = EmailMultiAlternatives(
+                subject=subject,
+                body=text_body,
+                from_email=from_email,
+                to=[user.email],
+            )
+            email.attach_alternative(html_body, 'text/html')
+            email.send()
+            logger.info(
+                f'OTP email sent successfully to user {user.id} '
+                f'(purpose={token.purpose})'
+            )
+        except smtplib.SMTPException as e:
+            logger.error(
+                f'Failed to send OTP email to user {user.id}: {str(e)}'
+            )
+            raise OTPDeliveryError(
+                'Could not send verification email. Please try again.'
+            ) from e
+        except Exception as e:
+            logger.error(
+                f'Failed to send OTP email to user {user.id}: {str(e)}'
+            )
+            raise OTPDeliveryError(
+                'Could not send verification email. Please try again.'
+            ) from e
 
 
 def get_otp_backend(channel: str) -> BaseOTPBackend:
