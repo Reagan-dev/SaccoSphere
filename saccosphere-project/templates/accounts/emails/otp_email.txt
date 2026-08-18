@@ -1,0 +1,11 @@
+SaccoSphere
+
+Your verification code is:
+
+{{ otp_code }}
+
+This code will expire in {{ expiry_minutes }} minutes.
+
+If you did not request this code, please ignore this email.
+
+This is an automated message from SaccoSphere. Please do not reply to this email.
