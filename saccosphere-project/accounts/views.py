@@ -41,7 +41,46 @@ from .serializers import (
 )
 from .otp_utils import create_otp_token, verify_otp, OTPError, format_phone_number
 from .integrations.otp_service import ATSMSClient, ATSMSError
+from .otp_backends import get_otp_backend, OTPDeliveryError
 from .throttles import OTPSendThrottle
+
+
+def _mask_contact(channel, destination):
+    """
+    Mask contact information for API responses.
+
+    Args:
+        channel: 'PHONE' or 'EMAIL'
+        destination: The phone number or email address to mask
+
+    Returns:
+        str: Masked contact information
+    """
+    if channel == 'EMAIL':
+        # Mask email: j***@example.com
+        if '@' not in destination:
+            return destination
+        local, domain = destination.split('@', 1)
+        if len(local) > 1:
+            masked_local = local[0] + '*' * (len(local) - 1)
+        else:
+            masked_local = local
+        return f'{masked_local}@{domain}'
+    elif channel == 'PHONE':
+        # Mask phone: +254*****23
+        if len(destination) < 4:
+            return destination
+        # Keep country code and last 2 digits
+        if destination.startswith('+'):
+            country_code = destination[:4]  # +254
+            last_digits = destination[-2:]
+            middle = '*' * (len(destination) - len(country_code) - len(last_digits))
+            return f'{country_code}{middle}{last_digits}'
+        else:
+            last_digits = destination[-2:]
+            middle = '*' * (len(destination) - len(last_digits))
+            return f'{middle}{last_digits}'
+    return destination
 
 
 class PublicStatsView(APIView):
@@ -797,7 +836,7 @@ class SaccoDetailView(StandardResponseMixin, RetrieveAPIView):
 
 
 class OTPSendView(APIView):
-    """Send OTP to user's phone number."""
+    """Send OTP to user's phone number or email."""
     permission_classes = [AllowAny]
     throttle_classes = [OTPSendThrottle]
 
@@ -807,16 +846,20 @@ class OTPSendView(APIView):
         responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
     )
     def post(self, request):
-        serializer = account_serializers.OTPRequestSerializer(data=request.data)
+        serializer = account_serializers.OTPRequestSerializer(
+            data=request.data,
+            context={'request': request}
+        )
         serializer.is_valid(raise_exception=True)
-        
+
         phone_number = serializer.validated_data['phone_number']
         purpose = serializer.validated_data['purpose']
+        channel = serializer.validated_data['channel']
         formatted_phone = format_phone_number(phone_number)
-        
+
         # Find user if purpose requires it
         user = None
-        if purpose in ['PASSWORD_RESET', 'LOGIN',]:
+        if purpose in ['PASSWORD_RESET', 'LOGIN']:
             user = get_user_by_phone_number(phone_number)
             if user is None:
                 # For password reset and login, don't reveal if phone exists
@@ -824,30 +867,42 @@ class OTPSendView(APIView):
         elif purpose == 'PHONE_VERIFY':
             # For registration, allow any phone number
             user = get_user_by_phone_number(phone_number)
-        
+
         try:
             # Create OTP token
-        
             token = create_otp_token(user, formatted_phone, purpose)
-            # Send SMS
-            client = ATSMSClient()
-            result = client.send_otp(formatted_phone, token.code, purpose)
-            
-            if result:
-                return Response({'message': 'OTP sent. Check your phone.'}, status=200)
+            # Save channel
+            token.channel = channel
+            token.save(update_fields=['channel'])
+
+            # Get backend and send
+            backend = get_otp_backend(channel)
+            backend.send(token)
+
+            # Determine destination for response
+            if channel == 'EMAIL':
+                destination = user.email if user else None
             else:
-                return Response({'error': 'Failed to send OTP'}, status=502)
-                
-        except ATSMSError as e:
-            import logging
-            logger = logging.getLogger('saccosphere.sms')
-            logger.error(f'ATSMSError: {str(e)}')
-            return Response({'error': str(e)}, status=502)
+                destination = formatted_phone
+
+            masked_destination = _mask_contact(channel, destination) if destination else 'your contact'
+
+            return Response(
+                {
+                    'message': f'OTP sent. Check your {channel.lower()}.',
+                    'channel': channel,
+                    'destination': masked_destination,
+                },
+                status=200
+            )
+
+        except OTPDeliveryError as e:
+            return Response({'detail': str(e)}, status=502)
         except Exception as e:
             import logging
-            logger = logging.getLogger('saccosphere.sms')
+            logger = logging.getLogger('saccosphere.otp')
             logger.exception(f'OTPSendView error: {str(e)}')
-            return Response({'error': 'Internal server error'}, status=500)
+            return Response({'detail': 'Internal server error'}, status=500)
 
 
 class OTPVerifyView(APIView):
@@ -903,62 +958,84 @@ class OTPResendView(APIView):
         }
     )
     def post(self, request):
-        serializer = account_serializers.OTPRequestSerializer(data=request.data)
+        serializer = account_serializers.OTPRequestSerializer(
+            data=request.data,
+            context={'request': request}
+        )
         serializer.is_valid(raise_exception=True)
-        
+
         phone_number = serializer.validated_data['phone_number']
         formatted_phone = format_phone_number(phone_number)
         purpose = serializer.validated_data['purpose']
-        
+        channel = serializer.validated_data['channel']
+
         # Check cooldown
         from django.utils import timezone
         from datetime import timedelta
         from accounts.models import OTPToken
-        
+
         recent_token = OTPToken.objects.filter(
             phone_number=formatted_phone
         ).order_by('-created_at').first()
-        
+
         if recent_token:
             time_passed = timezone.now() - recent_token.created_at
             cooldown_period = timedelta(seconds=720)  # 12 minutes = 5/hour
-            
+
             if time_passed < cooldown_period:
                 remaining_seconds = int((cooldown_period - time_passed).total_seconds())
                 return Response({
                     'error': f'Too many OTP requests. Try again in {remaining_seconds // 60} minutes.',
                     'seconds_remaining': remaining_seconds
                 }, status=429)
-        
+
         # Invalidate old token and create new one
         try:
             user = get_user_by_phone_number(phone_number)
             if user is None:
                 return Response({'error': 'User not found'}, status=400)
-            
+
             # Mark old tokens as used
             OTPToken.objects.filter(
                 phone_number=formatted_phone,
                 purpose=purpose,
                 is_used=False
             ).update(is_used=True)
-            
+
             # Create new token
             token = create_otp_token(user, formatted_phone, purpose)
-            
-            # Send SMS
-            client = ATSMSClient()
-            result = client.send_otp(formatted_phone, token.code, purpose)
-            
-            if result:
-                return Response({'message': 'OTP sent. Check your phone.'}, status=200)
+            # Save channel
+            token.channel = channel
+            token.save(update_fields=['channel'])
+
+            # Get backend and send
+            backend = get_otp_backend(channel)
+            backend.send(token)
+
+            # Determine destination for response
+            if channel == 'EMAIL':
+                destination = user.email if user else None
             else:
-                return Response({'error': 'Failed to send OTP'}, status=502)
-                
-        except ATSMSError as e:
-            return Response({'error': str(e)}, status=502)
+                destination = formatted_phone
+
+            masked_destination = _mask_contact(channel, destination) if destination else 'your contact'
+
+            return Response(
+                {
+                    'message': f'OTP sent. Check your {channel.lower()}.',
+                    'channel': channel,
+                    'destination': masked_destination,
+                },
+                status=200
+            )
+
+        except OTPDeliveryError as e:
+            return Response({'detail': str(e)}, status=502)
         except Exception as e:
-            return Response({'error': 'Internal server error'}, status=500)
+            import logging
+            logger = logging.getLogger('saccosphere.otp')
+            logger.exception(f'OTPResendView error: {str(e)}')
+            return Response({'detail': 'Internal server error'}, status=500)
 
 
 class PasswordResetRequestView(APIView):
