@@ -236,6 +236,7 @@ DEFAULT_FROM_EMAIL = config(
     'DEFAULT_FROM_EMAIL',
     default='SaccoSphere <no-reply@saccosphere.local>',
 )
+OTP_EMAIL_ENABLED = config('OTP_EMAIL_ENABLED', default=False, cast=bool)
 
 # OTP Configuration
 OTP_EXPIRY_MINUTES = 5
