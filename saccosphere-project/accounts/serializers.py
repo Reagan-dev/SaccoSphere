@@ -100,6 +100,7 @@ class GoogleAuthSerializer(serializers.Serializer):
         choices=('login', 'signup'),
         default='login',
     )
+    nonce = serializers.CharField(required=False, allow_blank=True)
 
 
 class UserProfileSerializer(serializers.ModelSerializer):

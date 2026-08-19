@@ -288,6 +288,10 @@ GOOGLE_OAUTH_ALLOWED_CLIENT_IDS = config(
 # If no explicit list is provided, fall back to the single client ID
 if not GOOGLE_OAUTH_ALLOWED_CLIENT_IDS:
     GOOGLE_OAUTH_ALLOWED_CLIENT_IDS = [GOOGLE_OAUTH_CLIENT_ID]
+# Require nonce validation for replay protection.
+# When True, requests without a nonce are rejected with 401.
+# When False (default), requests without a nonce are allowed with a warning log.
+NONCE_REQUIRED = config('NONCE_REQUIRED', cast=bool, default=False)
 
 # M-Pesa Daraja Configuration
 MPESA_CONSUMER_KEY = config('MPESA_CONSUMER_KEY', default='')
