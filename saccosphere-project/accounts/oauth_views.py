@@ -12,6 +12,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import KYCVerification, User
 from .serializers import GoogleAuthSerializer, UserProfileSerializer
+from .throttles import GoogleOAuthThrottle
 
 logger = logging.getLogger('saccosphere.oauth')
 
@@ -68,6 +69,7 @@ def _get_google_allowed_client_ids():
 
 class GoogleOAuthCallbackView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [GoogleOAuthThrottle]
 
     def post(self, request):
         serializer = GoogleAuthSerializer(data=request.data)
