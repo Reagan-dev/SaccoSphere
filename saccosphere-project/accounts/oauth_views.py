@@ -26,7 +26,7 @@ def verify_google_id_token(raw_id_token):
             'Google token verification is not configured.'
         ) from exc
 
-    audience = _get_google_client_id()
+    audience = _get_google_allowed_client_ids()
     try:
         return id_token.verify_oauth2_token(
             raw_id_token,
@@ -37,20 +37,29 @@ def verify_google_id_token(raw_id_token):
         raise AuthenticationFailed('Invalid Google token.') from exc
 
 
-def _get_google_client_id():
-    """Read the Google client id from common allauth/settings locations."""
+def _get_google_allowed_client_ids():
+    """Read the list of allowed Google client IDs from settings."""
+    client_ids = getattr(settings, 'GOOGLE_OAUTH_ALLOWED_CLIENT_IDS', [])
+    if client_ids:
+        return client_ids
+
+    # Fallback to legacy single client ID for backward compatibility
     client_id = getattr(settings, 'GOOGLE_OAUTH_CLIENT_ID', '')
     if client_id:
-        return client_id
+        return [client_id]
 
     client_id = getattr(settings, 'GOOGLE_CLIENT_ID', '')
     if client_id:
-        return client_id
+        return [client_id]
 
     providers = getattr(settings, 'SOCIALACCOUNT_PROVIDERS', {})
     google_settings = providers.get('google', {})
     app_settings = google_settings.get('APP', {})
-    return app_settings.get('client_id')
+    legacy_client_id = app_settings.get('client_id')
+    if legacy_client_id:
+        return [legacy_client_id]
+
+    return []
 
 
 class GoogleOAuthCallbackView(APIView):
