@@ -276,6 +276,18 @@ GOOGLE_OAUTH_CLIENT_SECRET = config(
 # NOTE: GOOGLE_OAUTH_REDIRECT_URI is unused by the current mobile ID-token flow.
 # It is retained here for potential future browser-based OAuth implementation.
 GOOGLE_OAUTH_REDIRECT_URI = config('GOOGLE_OAUTH_REDIRECT_URI', default='')
+# List of allowed Google OAuth client IDs for audience validation.
+# Both Android and iOS apps use a single shared Web-application-type Client ID
+# as the serverClientId, so this list typically has exactly one entry.
+# Supports multiple IDs for future web clients or Google Cloud Console changes.
+GOOGLE_OAUTH_ALLOWED_CLIENT_IDS = config(
+    'GOOGLE_OAUTH_ALLOWED_CLIENT_IDS',
+    default='',
+    cast=Csv(),
+)
+# If no explicit list is provided, fall back to the single client ID
+if not GOOGLE_OAUTH_ALLOWED_CLIENT_IDS:
+    GOOGLE_OAUTH_ALLOWED_CLIENT_IDS = [GOOGLE_OAUTH_CLIENT_ID]
 
 # M-Pesa Daraja Configuration
 MPESA_CONSUMER_KEY = config('MPESA_CONSUMER_KEY', default='')
