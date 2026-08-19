@@ -267,19 +267,15 @@ METROPOL_MOCK = config('METROPOL_MOCK', cast=bool, default=True)
 # Google OAuth Configuration
 OAUTH_MOCK = config('OAUTH_MOCK', cast=bool, default=True)
 GOOGLE_OAUTH_CLIENT_ID = config('GOOGLE_OAUTH_CLIENT_ID', default='')
+# NOTE: GOOGLE_OAUTH_CLIENT_SECRET is unused by the current mobile ID-token flow.
+# It is retained here for potential future browser-based OAuth implementation.
 GOOGLE_OAUTH_CLIENT_SECRET = config(
     'GOOGLE_OAUTH_CLIENT_SECRET',
     default='',
 )
+# NOTE: GOOGLE_OAUTH_REDIRECT_URI is unused by the current mobile ID-token flow.
+# It is retained here for potential future browser-based OAuth implementation.
 GOOGLE_OAUTH_REDIRECT_URI = config('GOOGLE_OAUTH_REDIRECT_URI', default='')
-GOOGLE_OAUTH_TOKEN_URL = config(
-    'GOOGLE_OAUTH_TOKEN_URL',
-    default='https://oauth2.googleapis.com/token',
-)
-GOOGLE_OAUTH_USERINFO_URL = config(
-    'GOOGLE_OAUTH_USERINFO_URL',
-    default='https://www.googleapis.com/oauth2/v3/userinfo',
-)
 
 # M-Pesa Daraja Configuration
 MPESA_CONSUMER_KEY = config('MPESA_CONSUMER_KEY', default='')
