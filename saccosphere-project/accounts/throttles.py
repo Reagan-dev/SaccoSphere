@@ -41,3 +41,14 @@ class OTPSendThrottle(AnonRateThrottle):
             wait=None,
             detail='Too many OTP requests. Please try again later.'
         )
+
+
+class GoogleOAuthThrottle(AnonRateThrottle):
+    """
+    Throttle Google OAuth callback to 10 requests per minute per IP address.
+
+    Allows legitimate retries on flaky connections while preventing abuse.
+    Uses IP-based throttling since mobile apps typically have stable IPs
+    and this endpoint is anonymous (no user authentication yet).
+    """
+    rate = '10/minute'
