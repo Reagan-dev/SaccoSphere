@@ -14,7 +14,43 @@ from .models import KYCVerification, User
 from .serializers import GoogleAuthSerializer, UserProfileSerializer
 from .throttles import GoogleOAuthThrottle
 
-logger = logging.getLogger('saccosphere.oauth')
+logger = logging.getLogger('accounts.oauth')
+
+
+def _mask_email(email):
+    """
+    Mask an email address for logging.
+    
+    Keeps the first character of the local part, masks the rest with asterisks,
+    and keeps the full domain. Example: 'john@example.com' -> 'j***@example.com'.
+    """
+    if not email:
+        return 'unknown'
+    try:
+        local, domain = email.rsplit('@', 1)
+        if len(local) <= 1:
+            masked_local = local
+        else:
+            masked_local = local[0] + '*' * (len(local) - 1)
+        return f'{masked_local}@{domain}'
+    except ValueError:
+        return 'invalid'
+
+
+def _get_client_ip(request):
+    """
+    Get the client IP address from the request.
+    
+    Checks for X-Forwarded-For header first (for reverse proxies),
+    then falls back to REMOTE_ADDR.
+    """
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        # X-Forwarded-For can contain multiple IPs, take the first one
+        ip = x_forwarded_for.split(',')[0].strip()
+    else:
+        ip = request.META.get('REMOTE_ADDR', 'unknown')
+    return ip
 
 LOGIN_ACCOUNT_NOT_FOUND = (
     'No account found with this Google account. Please sign up first.'
@@ -72,25 +108,58 @@ class GoogleOAuthCallbackView(APIView):
     throttle_classes = [GoogleOAuthThrottle]
 
     def post(self, request):
+        ip_address = _get_client_ip(request)
         serializer = GoogleAuthSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         flow = serializer.validated_data['flow']
-        token_payload = verify_google_id_token(
-            serializer.validated_data['id_token'],
-        )
+        
+        try:
+            token_payload = verify_google_id_token(
+                serializer.validated_data['id_token'],
+            )
+        except AuthenticationFailed as exc:
+            logger.warning(
+                'Google OAuth failed: token verification failed',
+                extra={
+                    'outcome': 'token_verification_failed',
+                    'ip_address': ip_address,
+                    'flow': flow,
+                }
+            )
+            raise
         
         # Validate nonce for replay protection
-        self._validate_nonce(
-            serializer.validated_data.get('nonce'),
-            token_payload,
-        )
+        try:
+            self._validate_nonce(
+                serializer.validated_data.get('nonce'),
+                token_payload,
+            )
+        except AuthenticationFailed as exc:
+            logger.warning(
+                'Google OAuth failed: nonce validation failed',
+                extra={
+                    'outcome': 'nonce_validation_failed',
+                    'ip_address': ip_address,
+                    'flow': flow,
+                }
+            )
+            raise
         
         email = token_payload.get('email')
         email_verified = token_payload.get('email_verified', False)
         google_sub = token_payload.get('sub')
+        masked_email = _mask_email(email)
 
         if not email:
+            logger.error(
+                'Google OAuth failed: missing email in token',
+                extra={
+                    'outcome': 'missing_email',
+                    'ip_address': ip_address,
+                    'flow': flow,
+                }
+            )
             return Response(
                 {'error': 'Google account email is required.'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -100,6 +169,15 @@ class GoogleOAuthCallbackView(APIView):
         
         if flow == 'login':
             if user is None:
+                logger.warning(
+                    'Google OAuth login failed: account not found',
+                    extra={
+                        'outcome': 'account_not_found',
+                        'ip_address': ip_address,
+                        'masked_email': masked_email,
+                        'flow': 'login',
+                    }
+                )
                 return Response(
                     {'error': LOGIN_ACCOUNT_NOT_FOUND},
                     status=status.HTTP_404_NOT_FOUND,
@@ -108,12 +186,30 @@ class GoogleOAuthCallbackView(APIView):
             if not user.google_id:
                 # User has password-only account
                 if not email_verified:
+                    logger.warning(
+                        'Google OAuth login failed: email not verified',
+                        extra={
+                            'outcome': 'email_not_verified',
+                            'ip_address': ip_address,
+                            'masked_email': masked_email,
+                            'flow': 'login',
+                        }
+                    )
                     return Response(
                         {'error': 'Google account email is not verified. '
                                  'Please verify your email with Google.'},
                         status=status.HTTP_401_UNAUTHORIZED,
                     )
                 # Return 409 for password-only account
+                logger.warning(
+                    'Google OAuth login failed: password-only account exists',
+                    extra={
+                        'outcome': 'account_exists_password_only',
+                        'ip_address': ip_address,
+                        'masked_email': masked_email,
+                        'flow': 'login',
+                    }
+                )
                 return Response(
                     {
                         'code': 'account_exists_password_only',
@@ -124,12 +220,30 @@ class GoogleOAuthCallbackView(APIView):
                     status=status.HTTP_409_CONFLICT,
                 )
             # User has linked Google account, proceed with login
+            logger.info(
+                'Google OAuth login succeeded',
+                extra={
+                    'outcome': 'success',
+                    'ip_address': ip_address,
+                    'masked_email': masked_email,
+                    'flow': 'login',
+                }
+            )
             return Response(self._build_token_payload(user), status=200)
 
         if user is not None:
             # Signup flow with existing user
             if user.google_id:
                 # User already has Google linked, log them in
+                logger.info(
+                    'Google OAuth signup succeeded: existing Google-linked user',
+                    extra={
+                        'outcome': 'success_existing_user',
+                        'ip_address': ip_address,
+                        'masked_email': masked_email,
+                        'flow': 'signup',
+                    }
+                )
                 payload = self._build_token_payload(user)
                 payload['is_existing_user'] = True
                 payload['message'] = (
@@ -138,12 +252,30 @@ class GoogleOAuthCallbackView(APIView):
                 return Response(payload, status=status.HTTP_200_OK)
             # User has password-only account
             if not email_verified:
+                logger.warning(
+                    'Google OAuth signup failed: email not verified',
+                    extra={
+                        'outcome': 'email_not_verified',
+                        'ip_address': ip_address,
+                        'masked_email': masked_email,
+                        'flow': 'signup',
+                    }
+                )
                 return Response(
                     {'error': 'Google account email is not verified. '
                              'Please verify your email with Google.'},
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
             # Return 409 for password-only account
+            logger.warning(
+                'Google OAuth signup failed: password-only account exists',
+                extra={
+                    'outcome': 'account_exists_password_only',
+                    'ip_address': ip_address,
+                    'masked_email': masked_email,
+                    'flow': 'signup',
+                }
+            )
             return Response(
                 {
                     'code': 'account_exists_password_only',
@@ -155,6 +287,15 @@ class GoogleOAuthCallbackView(APIView):
             )
 
         user = self._create_user_from_google(token_payload, google_sub)
+        logger.info(
+            'Google OAuth signup succeeded: new user created',
+            extra={
+                'outcome': 'success_new_user',
+                'ip_address': ip_address,
+                'masked_email': masked_email,
+                'flow': 'signup',
+            }
+        )
         payload = self._build_token_payload(user)
         payload['is_existing_user'] = False
         return Response(payload, status=status.HTTP_201_CREATED)
@@ -254,30 +395,75 @@ class GoogleOAuthLinkView(APIView):
     throttle_classes = [GoogleOAuthThrottle]
 
     def post(self, request):
+        ip_address = _get_client_ip(request)
         serializer = GoogleAuthSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        token_payload = verify_google_id_token(
-            serializer.validated_data['id_token'],
-        )
+        try:
+            token_payload = verify_google_id_token(
+                serializer.validated_data['id_token'],
+            )
+        except AuthenticationFailed as exc:
+            logger.warning(
+                'Google OAuth link failed: token verification failed',
+                extra={
+                    'outcome': 'token_verification_failed',
+                    'ip_address': ip_address,
+                    'flow': 'link',
+                    'user_email': _mask_email(request.user.email),
+                }
+            )
+            raise
         
         # Validate nonce for replay protection
-        self._validate_nonce(
-            serializer.validated_data.get('nonce'),
-            token_payload,
-        )
+        try:
+            self._validate_nonce(
+                serializer.validated_data.get('nonce'),
+                token_payload,
+            )
+        except AuthenticationFailed as exc:
+            logger.warning(
+                'Google OAuth link failed: nonce validation failed',
+                extra={
+                    'outcome': 'nonce_validation_failed',
+                    'ip_address': ip_address,
+                    'flow': 'link',
+                    'user_email': _mask_email(request.user.email),
+                }
+            )
+            raise
         
         email = token_payload.get('email')
         email_verified = token_payload.get('email_verified', False)
         google_sub = token_payload.get('sub')
+        masked_email = _mask_email(email)
 
         if not email:
+            logger.error(
+                'Google OAuth link failed: missing email in token',
+                extra={
+                    'outcome': 'missing_email',
+                    'ip_address': ip_address,
+                    'flow': 'link',
+                    'user_email': _mask_email(request.user.email),
+                }
+            )
             return Response(
                 {'error': 'Google account email is required.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         if not email_verified:
+            logger.warning(
+                'Google OAuth link failed: email not verified',
+                extra={
+                    'outcome': 'email_not_verified',
+                    'ip_address': ip_address,
+                    'masked_email': masked_email,
+                    'flow': 'link',
+                    'user_email': _mask_email(request.user.email),
+                }
+            )
             return Response(
                 {'error': 'Google account email is not verified. '
                          'Please verify your email with Google.'},
@@ -286,6 +472,16 @@ class GoogleOAuthLinkView(APIView):
 
         # Check if Google email matches current user's email (case-insensitive)
         if email.lower() != request.user.email.lower():
+            logger.warning(
+                'Google OAuth link failed: email mismatch',
+                extra={
+                    'outcome': 'email_mismatch',
+                    'ip_address': ip_address,
+                    'masked_email': masked_email,
+                    'flow': 'link',
+                    'user_email': _mask_email(request.user.email),
+                }
+            )
             return Response(
                 {'error': 'Google account email does not match your account email.'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -294,6 +490,16 @@ class GoogleOAuthLinkView(APIView):
         # Check if Google identity is already linked to another account
         existing_google_user = User.objects.filter(google_id=google_sub).first()
         if existing_google_user and existing_google_user != request.user:
+            logger.warning(
+                'Google OAuth link failed: identity already linked elsewhere',
+                extra={
+                    'outcome': 'google_identity_already_linked',
+                    'ip_address': ip_address,
+                    'masked_email': masked_email,
+                    'flow': 'link',
+                    'user_email': _mask_email(request.user.email),
+                }
+            )
             return Response(
                 {
                     'code': 'google_identity_already_linked',
@@ -305,6 +511,17 @@ class GoogleOAuthLinkView(APIView):
         # Link Google account to current user
         request.user.google_id = google_sub
         request.user.save()
+
+        logger.info(
+            'Google OAuth link succeeded',
+            extra={
+                'outcome': 'success',
+                'ip_address': ip_address,
+                'masked_email': masked_email,
+                'flow': 'link',
+                'user_email': _mask_email(request.user.email),
+            }
+        )
 
         return Response(
             {'message': 'Google account linked successfully.'},
@@ -334,10 +551,6 @@ class GoogleOAuthLinkView(APIView):
                 request_nonce.encode('utf-8'),
                 (token_nonce or '').encode('utf-8'),
             ):
-                logger.warning(
-                    'Nonce mismatch in Google OAuth link: '
-                    'request nonce does not match token nonce.'
-                )
                 raise AuthenticationFailed(
                     'Nonce validation failed. The provided nonce does not '
                     'match the token\'s nonce claim.'
@@ -350,6 +563,6 @@ class GoogleOAuthLinkView(APIView):
                 )
             # Log warning for monitoring - helps identify outdated app versions
             logger.warning(
-                'Google OAuth link received without nonce protection. '
+                'Google OAuth callback received without nonce protection. '
                 'This may indicate an outdated mobile app version.'
             )
