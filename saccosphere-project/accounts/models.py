@@ -226,6 +226,22 @@ class User(AbstractUser):
 
     )
 
+    google_id = models.CharField(
+
+        max_length=255,
+
+        null=True,
+
+        blank=True,
+
+        unique=True,
+
+        db_index=True,
+
+        help_text='Google account identifier (sub claim) for OAuth sign-in.',
+
+    )
+
     phone_number = models.CharField(
 
         max_length=13,

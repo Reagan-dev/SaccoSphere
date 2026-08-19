@@ -5,7 +5,7 @@ from django.conf import settings
 from django.db import transaction
 from rest_framework import status
 from rest_framework.exceptions import AuthenticationFailed
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -87,6 +87,8 @@ class GoogleOAuthCallbackView(APIView):
         )
         
         email = token_payload.get('email')
+        email_verified = token_payload.get('email_verified', False)
+        google_sub = token_payload.get('sub')
 
         if not email:
             return Response(
@@ -95,28 +97,69 @@ class GoogleOAuthCallbackView(APIView):
             )
 
         user = User.objects.filter(email__iexact=email).first()
+        
         if flow == 'login':
             if user is None:
                 return Response(
                     {'error': LOGIN_ACCOUNT_NOT_FOUND},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+            # Check if user has linked Google account
+            if not user.google_id:
+                # User has password-only account
+                if not email_verified:
+                    return Response(
+                        {'error': 'Google account email is not verified. '
+                                 'Please verify your email with Google.'},
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
+                # Return 409 for password-only account
+                return Response(
+                    {
+                        'code': 'account_exists_password_only',
+                        'detail': 'An account already exists with this email. '
+                                  'Log in with your password, then connect Google '
+                                  'from your profile settings.',
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            # User has linked Google account, proceed with login
             return Response(self._build_token_payload(user), status=200)
 
         if user is not None:
-            payload = self._build_token_payload(user)
-            payload['is_existing_user'] = True
-            payload['message'] = (
-                'Account already exists — you have been logged in.'
+            # Signup flow with existing user
+            if user.google_id:
+                # User already has Google linked, log them in
+                payload = self._build_token_payload(user)
+                payload['is_existing_user'] = True
+                payload['message'] = (
+                    'Account already exists — you have been logged in.'
+                )
+                return Response(payload, status=status.HTTP_200_OK)
+            # User has password-only account
+            if not email_verified:
+                return Response(
+                    {'error': 'Google account email is not verified. '
+                             'Please verify your email with Google.'},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            # Return 409 for password-only account
+            return Response(
+                {
+                    'code': 'account_exists_password_only',
+                    'detail': 'An account already exists with this email. '
+                              'Log in with your password, then connect Google '
+                              'from your profile settings.',
+                },
+                status=status.HTTP_409_CONFLICT,
             )
-            return Response(payload, status=status.HTTP_200_OK)
 
-        user = self._create_user_from_google(token_payload)
+        user = self._create_user_from_google(token_payload, google_sub)
         payload = self._build_token_payload(user)
         payload['is_existing_user'] = False
         return Response(payload, status=status.HTTP_201_CREATED)
 
-    def _create_user_from_google(self, token_payload):
+    def _create_user_from_google(self, token_payload, google_sub=None):
         email = token_payload['email']
         first_name, last_name = self._get_names(token_payload)
 
@@ -126,6 +169,7 @@ class GoogleOAuthCallbackView(APIView):
                 password=None,
                 first_name=first_name,
                 last_name=last_name,
+                google_id=google_sub,
             )
             KYCVerification.objects.get_or_create(
                 user=user,
@@ -194,5 +238,118 @@ class GoogleOAuthCallbackView(APIView):
             # Log warning for monitoring - helps identify outdated app versions
             logger.warning(
                 'Google OAuth callback received without nonce protection. '
+                'This may indicate an outdated mobile app version.'
+            )
+
+
+class GoogleOAuthLinkView(APIView):
+    """
+    Link a Google account to an authenticated user's existing account.
+    
+    Requires the user to be authenticated with their existing credentials
+    (password or another method). Verifies the Google ID token and links
+    the Google identity to the current user account.
+    """
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [GoogleOAuthThrottle]
+
+    def post(self, request):
+        serializer = GoogleAuthSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        token_payload = verify_google_id_token(
+            serializer.validated_data['id_token'],
+        )
+        
+        # Validate nonce for replay protection
+        self._validate_nonce(
+            serializer.validated_data.get('nonce'),
+            token_payload,
+        )
+        
+        email = token_payload.get('email')
+        email_verified = token_payload.get('email_verified', False)
+        google_sub = token_payload.get('sub')
+
+        if not email:
+            return Response(
+                {'error': 'Google account email is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not email_verified:
+            return Response(
+                {'error': 'Google account email is not verified. '
+                         'Please verify your email with Google.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Check if Google email matches current user's email (case-insensitive)
+        if email.lower() != request.user.email.lower():
+            return Response(
+                {'error': 'Google account email does not match your account email.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check if Google identity is already linked to another account
+        existing_google_user = User.objects.filter(google_id=google_sub).first()
+        if existing_google_user and existing_google_user != request.user:
+            return Response(
+                {
+                    'code': 'google_identity_already_linked',
+                    'detail': 'This Google account is already linked to another account.',
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Link Google account to current user
+        request.user.google_id = google_sub
+        request.user.save()
+
+        return Response(
+            {'message': 'Google account linked successfully.'},
+            status=status.HTTP_200_OK,
+        )
+
+    def _validate_nonce(self, request_nonce, token_payload):
+        """
+        Validate nonce for replay protection.
+        
+        The mobile app generates a nonce, passes it to Google's SDK when
+        requesting the token, and sends it alongside the ID token. This
+        method verifies that the nonce in the token matches the one sent
+        in the request using constant-time comparison to prevent timing
+        attacks.
+        
+        If no nonce is provided and NONCE_REQUIRED is False, a warning is
+        logged but the request proceeds (for backward compatibility with
+        older mobile app versions). If NONCE_REQUIRED is True, missing
+        nonces are rejected with 401.
+        """
+        token_nonce = token_payload.get('nonce')
+        
+        if request_nonce:
+            # Use constant-time comparison to prevent timing attacks
+            if not hmac.compare_digest(
+                request_nonce.encode('utf-8'),
+                (token_nonce or '').encode('utf-8'),
+            ):
+                logger.warning(
+                    'Nonce mismatch in Google OAuth link: '
+                    'request nonce does not match token nonce.'
+                )
+                raise AuthenticationFailed(
+                    'Nonce validation failed. The provided nonce does not '
+                    'match the token\'s nonce claim.'
+                )
+        else:
+            # No nonce provided in request
+            if getattr(settings, 'NONCE_REQUIRED', False):
+                raise AuthenticationFailed(
+                    'Nonce is required for Google OAuth but was not provided.'
+                )
+            # Log warning for monitoring - helps identify outdated app versions
+            logger.warning(
+                'Google OAuth link received without nonce protection. '
                 'This may indicate an outdated mobile app version.'
             )
