@@ -9,7 +9,7 @@ from .biometric_views import (
     DeviceRegistrationView,
     RevokeDeviceView,
 )
-from .oauth_views import GoogleOAuthCallbackView
+from .oauth_views import GoogleOAuthCallbackView, GoogleOAuthLinkView
 from .views import (
     KYCSubmitIDView,
     KYCStatusView,
@@ -39,6 +39,11 @@ urlpatterns = [
         'oauth/google/callback/',
         GoogleOAuthCallbackView.as_view(),
         name='google-oauth-callback',
+    ),
+    path(
+        'oauth/google/link/',
+        GoogleOAuthLinkView.as_view(),
+        name='google-oauth-link',
     ),
     path('logout/', LogoutView.as_view(), name='logout'),
     path(
