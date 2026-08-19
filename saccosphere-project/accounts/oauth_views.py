@@ -1,3 +1,6 @@
+import logging
+import hmac
+
 from django.conf import settings
 from django.db import transaction
 from rest_framework import status
@@ -10,6 +13,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from .models import KYCVerification, User
 from .serializers import GoogleAuthSerializer, UserProfileSerializer
 
+logger = logging.getLogger('saccosphere.oauth')
 
 LOGIN_ACCOUNT_NOT_FOUND = (
     'No account found with this Google account. Please sign up first.'
@@ -73,6 +77,13 @@ class GoogleOAuthCallbackView(APIView):
         token_payload = verify_google_id_token(
             serializer.validated_data['id_token'],
         )
+        
+        # Validate nonce for replay protection
+        self._validate_nonce(
+            serializer.validated_data.get('nonce'),
+            token_payload,
+        )
+        
         email = token_payload.get('email')
 
         if not email:
@@ -140,3 +151,46 @@ class GoogleOAuthCallbackView(APIView):
             'refresh': str(refresh),
             'user': UserProfileSerializer(user).data,
         }
+
+    def _validate_nonce(self, request_nonce, token_payload):
+        """
+        Validate nonce for replay protection.
+        
+        The mobile app generates a nonce, passes it to Google's SDK when
+        requesting the token, and sends it alongside the ID token. This
+        method verifies that the nonce in the token matches the one sent
+        in the request using constant-time comparison to prevent timing
+        attacks.
+        
+        If no nonce is provided and NONCE_REQUIRED is False, a warning is
+        logged but the request proceeds (for backward compatibility with
+        older mobile app versions). If NONCE_REQUIRED is True, missing
+        nonces are rejected with 401.
+        """
+        token_nonce = token_payload.get('nonce')
+        
+        if request_nonce:
+            # Use constant-time comparison to prevent timing attacks
+            if not hmac.compare_digest(
+                request_nonce.encode('utf-8'),
+                (token_nonce or '').encode('utf-8'),
+            ):
+                logger.warning(
+                    'Nonce mismatch in Google OAuth callback: '
+                    'request nonce does not match token nonce.'
+                )
+                raise AuthenticationFailed(
+                    'Nonce validation failed. The provided nonce does not '
+                    'match the token\'s nonce claim.'
+                )
+        else:
+            # No nonce provided in request
+            if getattr(settings, 'NONCE_REQUIRED', False):
+                raise AuthenticationFailed(
+                    'Nonce is required for Google OAuth but was not provided.'
+                )
+            # Log warning for monitoring - helps identify outdated app versions
+            logger.warning(
+                'Google OAuth callback received without nonce protection. '
+                'This may indicate an outdated mobile app version.'
+            )
