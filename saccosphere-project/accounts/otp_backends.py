@@ -23,6 +23,38 @@ from django.template.loader import render_to_string
 from .models import OTPToken
 
 logger = logging.getLogger(__name__)
+sms_logger = logging.getLogger('accounts.sms')
+
+# In-process counters for SMS delivery metrics
+_sms_delivery_success_count = 0
+_sms_delivery_failure_count = 0
+
+
+def _mask_phone(phone_number: str) -> str:
+    """
+    Mask phone number for logging/monitoring.
+
+    Keeps country code and last 2 digits, masks the middle.
+    Example: +254712345678 -> +254*****78
+
+    Args:
+        phone_number: Phone number in E.164 format (+254XXXXXXXXX)
+
+    Returns:
+        str: Masked phone number
+    """
+    if len(phone_number) < 4:
+        return phone_number
+    if phone_number.startswith('+'):
+        country_code = phone_number[:4]  # +254
+        last_digits = phone_number[-2:]
+        middle = '*' * (len(phone_number) - len(country_code) - len(last_digits))
+        return f'{country_code}{middle}{last_digits}'
+    else:
+        # Fallback for non-standard format
+        last_digits = phone_number[-2:]
+        middle = '*' * (len(phone_number) - len(last_digits))
+        return f'{middle}{last_digits}'
 
 
 class OTPDeliveryError(Exception):
@@ -219,10 +251,12 @@ class PhoneOTPBackend(BaseOTPBackend):
         Returns:
             None
         """
+        global _sms_delivery_success_count, _sms_delivery_failure_count
+
         # In DEBUG mode, log instead of sending
         if settings.DEBUG:
             logger.info(
-                f'[DEBUG MODE] OTP SMS prepared for {token.phone_number} '
+                f'[DEBUG MODE] OTP SMS prepared for {_mask_phone(token.phone_number)} '
                 f'({token.purpose})'
             )
             return
@@ -243,6 +277,8 @@ class PhoneOTPBackend(BaseOTPBackend):
             logger.error(f'Phone normalization failed: {str(e)}')
             raise
 
+        masked_phone = _mask_phone(normalized_phone)
+
         # Send SMS via Africa's Talking with retry for network failures
         last_exception = None
         for attempt in range(2):  # Initial attempt + 1 retry
@@ -254,18 +290,62 @@ class PhoneOTPBackend(BaseOTPBackend):
                 # Classify response into specific error types
                 self._classify_error(response)
 
+                _sms_delivery_success_count += 1
                 logger.info(
-                    f'OTP sent successfully to {normalized_phone} '
-                    f'(purpose={token.purpose})'
+                    f'OTP sent successfully to {masked_phone} '
+                    f'(purpose={token.purpose}, channel={self.channel})'
                 )
                 return
 
             except (InvalidRecipientError, InsufficientBalanceError, RateLimitError) as e:
                 # These errors should not be retried
-                logger.error(
-                    f'Africa\'s Talking error (no retry): {type(e).__name__} - {str(e)}'
+                _sms_delivery_failure_count += 1
+                error_type = type(e).__name__
+
+                # Log to dedicated SMS logger with structured data
+                sms_logger.error(
+                    f'SMS delivery failed: {error_type} | '
+                    f'purpose={token.purpose} | channel={self.channel} | '
+                    f'phone={masked_phone}'
                 )
+
+                # Send to Sentry if configured
+                try:
+                    import sentry_sdk
+                    sentry_sdk.set_context('otp_delivery', {
+                        'purpose': token.purpose,
+                        'channel': self.channel,
+                        'error_type': error_type,
+                    })
+                    sentry_sdk.capture_exception(e)
+                except ImportError:
+                    pass
+
                 raise OTPDeliveryError('Failed to send SMS. Please try again.') from e
+
+            except OTPDeliveryError as e:
+                # Other OTP delivery errors
+                _sms_delivery_failure_count += 1
+                error_type = type(e).__name__
+
+                sms_logger.error(
+                    f'SMS delivery failed: {error_type} | '
+                    f'purpose={token.purpose} | channel={self.channel} | '
+                    f'phone={masked_phone}'
+                )
+
+                try:
+                    import sentry_sdk
+                    sentry_sdk.set_context('otp_delivery', {
+                        'purpose': token.purpose,
+                        'channel': self.channel,
+                        'error_type': error_type,
+                    })
+                    sentry_sdk.capture_exception(e)
+                except ImportError:
+                    pass
+
+                raise
 
             except Exception as e:
                 last_exception = e
@@ -277,9 +357,24 @@ class PhoneOTPBackend(BaseOTPBackend):
                     time.sleep(1)
                 else:
                     # Retry also failed
-                    logger.error(
-                        f'SMS send failed after retry: {str(e)}'
+                    _sms_delivery_failure_count += 1
+                    sms_logger.error(
+                        f'SMS delivery failed after retry: network_error | '
+                        f'purpose={token.purpose} | channel={self.channel} | '
+                        f'phone={masked_phone}'
                     )
+
+                    try:
+                        import sentry_sdk
+                        sentry_sdk.set_context('otp_delivery', {
+                            'purpose': token.purpose,
+                            'channel': self.channel,
+                            'error_type': 'network_error',
+                        })
+                        sentry_sdk.capture_exception(e)
+                    except ImportError:
+                        pass
+
                     raise OTPDeliveryError(
                         'Failed to send SMS. Please try again.'
                     ) from last_exception
