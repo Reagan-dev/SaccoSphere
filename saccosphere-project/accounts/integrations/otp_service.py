@@ -1,4 +1,11 @@
-"""Africa's Talking SMS service for OTP delivery."""
+"""Africa's Talking SMS service for general-purpose messaging.
+
+This module provides ATSMSClient for sending SMS messages outside of OTP flows,
+such as notifications, bulk SMS campaigns, and guarantor communications.
+
+For OTP-specific send/verify/reset flows, use accounts.otp_backends.PhoneOTPBackend
+instead, which is integrated with the unified OTP delivery backend system.
+"""
 import logging
 import re
 
@@ -45,6 +52,7 @@ class ATSMSClient:
 
         api_key = settings.AT_API_KEY
         username = settings.AT_USERNAME
+        environment = settings.AT_ENVIRONMENT
 
         if africastalking is None:
             raise ATSMSError(
@@ -57,6 +65,11 @@ class ATSMSClient:
             )
 
         africastalking.initialize(username, api_key)
+
+        # Enable sandbox mode if configured
+        if environment == 'sandbox':
+            africastalking.set_sandbox(True)
+
         self.sms = africastalking.SMS
 
     def _normalize_phone(self, phone_number):

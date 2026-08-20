@@ -40,7 +40,6 @@ from .serializers import (
     UserRegistrationSerializer,
 )
 from .otp_utils import create_otp_token, verify_otp, OTPError, format_phone_number
-from .integrations.otp_service import ATSMSClient, ATSMSError
 from .otp_backends import get_otp_backend, OTPDeliveryError
 from .throttles import OTPSendThrottle
 
@@ -1060,17 +1059,21 @@ class PasswordResetRequestView(APIView):
                 return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
             formatted_phone = format_phone_number(phone_number)
             token = create_otp_token(user, formatted_phone, 'PASSWORD_RESET')
-            
-            # Send SMS
-            client = ATSMSClient()
-            result = client.send_otp(phone_number, token.code, 'PASSWORD_RESET')
-            
-            if result:
-                return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
-            else:
-                return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
-                
+
+            # Send SMS via unified backend
+            backend = get_otp_backend('PHONE')
+            backend.send(token)
+
+            return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
+
+        except OTPDeliveryError:
+            # Log error but don't reveal to user
+            logger = logging.getLogger('saccosphere.otp')
+            logger.error(f'Password reset SMS failed for phone={phone_number}')
+            return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
         except Exception as e:
+            logger = logging.getLogger('saccosphere.otp')
+            logger.exception(f'Password reset request error: {str(e)}')
             return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
 
 

@@ -18,7 +18,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings.development')
 django.setup()
 
 from accounts.otp_utils import generate_otp_code, create_otp_token, verify_otp, OTPError
-from accounts.integrations.otp_service import ATSMSClient, ATSMSError
+from accounts.otp_backends import PhoneOTPBackend, OTPDeliveryError
 from accounts.models import User
 from django.conf import settings
 
@@ -120,18 +120,15 @@ def send_otp_interactive(user):
         # Try to send SMS
         print(f"\n📤 Sending SMS...")
         try:
-            client = ATSMSClient()
-            result = client.send_otp(phone, token.code, purpose)
-            
-            if result:
-                if settings.DEBUG:
-                    print("✅ DEBUG mode: Code logged (no SMS sent)")
-                else:
-                    print("✅ SMS sent successfully!")
+            backend = PhoneOTPBackend()
+            backend.send(token)
+
+            if settings.DEBUG:
+                print("✅ DEBUG mode: Code logged (no SMS sent)")
             else:
-                print("❌ SMS sending failed")
-                
-        except ATSMSError as e:
+                print("✅ SMS sent successfully!")
+
+        except OTPDeliveryError as e:
             print(f"❌ SMS Error: {e}")
         except Exception as e:
             print(f"❌ Unexpected error: {e}")
