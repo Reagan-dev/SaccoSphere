@@ -247,6 +247,7 @@ OTP_RESEND_COOLDOWN_SECONDS = 60
 # Africa's Talking SMS Configuration
 AT_API_KEY = config('AT_API_KEY', default='')
 AT_USERNAME = config('AT_USERNAME', default='sandbox')
+AT_ENVIRONMENT = config('AT_ENVIRONMENT', default='sandbox' if DEBUG else 'production')
 FCM_SERVER_KEY = config('FCM_SERVER_KEY', default='')
 
 # IPRS Configuration
