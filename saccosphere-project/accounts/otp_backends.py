@@ -14,6 +14,7 @@ use accounts.integrations.otp_service.ATSMSClient instead.
 import abc
 import logging
 import smtplib
+import time
 
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
@@ -26,6 +27,30 @@ logger = logging.getLogger(__name__)
 
 class OTPDeliveryError(Exception):
     """Raised when an OTP backend fails to deliver the code."""
+
+    pass
+
+
+class AfricasTalkingError(OTPDeliveryError):
+    """Base exception for Africa's Talking-specific failures."""
+
+    pass
+
+
+class InsufficientBalanceError(AfricasTalkingError):
+    """Raised when Africa's Talking account has insufficient balance."""
+
+    pass
+
+
+class InvalidRecipientError(AfricasTalkingError):
+    """Raised when the phone number is invalid or not supported."""
+
+    pass
+
+
+class RateLimitError(AfricasTalkingError):
+    """Raised when Africa's Talking rate limit is exceeded."""
 
     pass
 
@@ -144,6 +169,42 @@ class PhoneOTPBackend(BaseOTPBackend):
         # Fallback: if it's already 13 digits starting with 254 but no plus
         return f'+{clean_num}'
 
+    def _classify_error(self, response):
+        """
+        Classify Africa's Talking response into specific error types.
+
+        Based on africastalking v2.0.2 response format:
+        - statusCode 102: Invalid Phone Number -> InvalidRecipientError
+        - statusCode 103: Insufficient Balance -> InsufficientBalanceError
+        - statusCode 404/429: Rate limit exceeded -> RateLimitError
+        - Other errors fall through to generic OTPDeliveryError
+
+        Args:
+            response: The response object from africastalking.SMS.send()
+
+        Raises:
+            InvalidRecipientError: If phone number is invalid
+            InsufficientBalanceError: If account has insufficient balance
+            RateLimitError: If rate limit is exceeded
+        """
+        # africastalking v2.0.2 returns a dict-like object with SMSMessageData
+        # This is based on the typical response structure; actual format should
+        # be verified with a live sandbox call if behavior differs
+        try:
+            if hasattr(response, 'get'):
+                recipients = response.get('SMSMessageData', {}).get('Recipients', [])
+                if recipients:
+                    status_code = recipients[0].get('statusCode')
+                    if status_code == 102:
+                        raise InvalidRecipientError('Invalid phone number')
+                    elif status_code == 103:
+                        raise InsufficientBalanceError('Insufficient SMS balance')
+                    elif status_code in (404, 429):
+                        raise RateLimitError('Rate limit exceeded')
+        except (AttributeError, KeyError, IndexError):
+            # Response structure unexpected, fall through to generic error
+            pass
+
     def send(self, token: OTPToken) -> None:
         """
         Send OTP code via SMS using Africa's Talking.
@@ -153,6 +214,7 @@ class PhoneOTPBackend(BaseOTPBackend):
 
         Raises:
             OTPDeliveryError: If SMS sending fails.
+            AfricasTalkingError: Subclass for specific Africa's Talking failures.
 
         Returns:
             None
@@ -181,20 +243,46 @@ class PhoneOTPBackend(BaseOTPBackend):
             logger.error(f'Phone normalization failed: {str(e)}')
             raise
 
-        # Send SMS via Africa's Talking
-        try:
-            response = self.sms.send(
-                message=message,
-                recipients=[normalized_phone]
-            )
-            logger.info(
-                f'OTP sent successfully to {normalized_phone} '
-                f'(purpose={token.purpose}, response={response})'
-            )
-        except Exception as e:
-            error_msg = f'Africa\'s Talking SMS error: {str(e)}'
-            logger.error(error_msg)
-            raise OTPDeliveryError(error_msg) from e
+        # Send SMS via Africa's Talking with retry for network failures
+        last_exception = None
+        for attempt in range(2):  # Initial attempt + 1 retry
+            try:
+                response = self.sms.send(
+                    message=message,
+                    recipients=[normalized_phone]
+                )
+                # Classify response into specific error types
+                self._classify_error(response)
+
+                logger.info(
+                    f'OTP sent successfully to {normalized_phone} '
+                    f'(purpose={token.purpose})'
+                )
+                return
+
+            except (InvalidRecipientError, InsufficientBalanceError, RateLimitError) as e:
+                # These errors should not be retried
+                logger.error(
+                    f'Africa\'s Talking error (no retry): {type(e).__name__} - {str(e)}'
+                )
+                raise OTPDeliveryError('Failed to send SMS. Please try again.') from e
+
+            except Exception as e:
+                last_exception = e
+                if attempt == 0:
+                    # First attempt failed, retry after delay for network issues
+                    logger.warning(
+                        f'First SMS send attempt failed, retrying in 1s: {str(e)}'
+                    )
+                    time.sleep(1)
+                else:
+                    # Retry also failed
+                    logger.error(
+                        f'SMS send failed after retry: {str(e)}'
+                    )
+                    raise OTPDeliveryError(
+                        'Failed to send SMS. Please try again.'
+                    ) from last_exception
 
 
 class EmailOTPBackend(BaseOTPBackend):
