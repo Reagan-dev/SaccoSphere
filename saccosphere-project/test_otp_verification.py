@@ -17,6 +17,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings.development')
 django.setup()
 
 from accounts.otp_utils import generate_otp_code, verify_otp, create_otp_token, OTPError
+from accounts.otp_backends import PhoneOTPBackend, OTPDeliveryError
 from accounts.models import User, OTPToken
 from django.conf import settings
 
@@ -57,28 +58,32 @@ def test_debug_mode_logging():
     settings.DEBUG = True
     
     try:
-        from accounts.integrations.otp_service import ATSMSClient, ATSMSError
-        
+        from accounts.otp_backends import PhoneOTPBackend, OTPDeliveryError
+
         # Temporarily set API credentials for testing
         original_api_key = getattr(settings, 'AT_API_KEY', '')
         original_username = getattr(settings, 'AT_USERNAME', '')
-        
+
         settings.AT_API_KEY = 'test_key'
         settings.AT_USERNAME = 'test_user'
-        
-        # Create SMS client
-        client = ATSMSClient()
-        
-        # Test send_otp in DEBUG mode
-        result = client.send_otp("254712345678", "123456", "PHONE_VERIFY")
-        
-        if result is True:
-            print("✅ PASS: DEBUG mode returns True without sending SMS")
-            print("✅ INFO: Check logs for '[DEBUG MODE] OTP Code for 254712345678 (PHONE_VERIFY): 123456'")
-            return True
-        else:
-            print("❌ FAIL: DEBUG mode should return True")
-            return False
+
+        # Create SMS backend
+        backend = PhoneOTPBackend()
+
+        # Create a mock token for testing
+        from accounts.models import OTPToken
+        mock_token = OTPToken(
+            phone_number="254712345678",
+            code="123456",
+            purpose="PHONE_VERIFY"
+        )
+
+        # Test send in DEBUG mode
+        backend.send(mock_token)
+
+        print("✅ PASS: DEBUG mode logs without sending SMS")
+        print("✅ INFO: Check logs for '[DEBUG MODE] OTP Code for 254712345678 (PHONE_VERIFY): 123456'")
+        return True
             
     except Exception as e:
         print(f"❌ FAIL: Exception in DEBUG mode test: {e}")

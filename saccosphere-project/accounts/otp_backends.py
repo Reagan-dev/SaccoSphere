@@ -1,4 +1,15 @@
-"""OTP delivery backends for SMS and email channels."""
+"""OTP delivery backends for SMS and email channels.
+
+This module provides unified OTP delivery backends for OTP-specific flows:
+- PhoneOTPBackend: Sends OTP codes via Africa's Talking SMS for OTP flows
+- EmailOTPBackend: Sends OTP codes via email for OTP flows
+
+These backends are used by OTPSendView, OTPResendView, and PasswordResetRequestView
+for OTP-specific send/verify/reset functionality.
+
+For general-purpose SMS messaging (notifications, bulk SMS, guarantor communications),
+use accounts.integrations.otp_service.ATSMSClient instead.
+"""
 
 import abc
 import logging
@@ -83,6 +94,7 @@ class PhoneOTPBackend(BaseOTPBackend):
 
         api_key = settings.AT_API_KEY
         username = settings.AT_USERNAME
+        environment = settings.AT_ENVIRONMENT
 
         if self.africastalking is None:
             raise OTPDeliveryError(
@@ -95,6 +107,11 @@ class PhoneOTPBackend(BaseOTPBackend):
             )
 
         self.africastalking.initialize(username, api_key)
+
+        # Enable sandbox mode if configured
+        if environment == 'sandbox':
+            self.africastalking.set_sandbox(True)
+
         self.sms = self.africastalking.SMS
 
     def _normalize_phone(self, phone_number):

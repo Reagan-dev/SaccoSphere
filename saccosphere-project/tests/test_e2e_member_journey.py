@@ -87,7 +87,7 @@ class MemberJourneyTest(APITestCase):
             content_type='image/png',
         )
 
-    @patch('accounts.views.ATSMSClient.send_otp', return_value=True)
+    @patch('accounts.otp_backends.PhoneOTPBackend.send')
     @patch(
         'accounts.views.IPRSClient.verify_id',
         return_value={
@@ -97,7 +97,7 @@ class MemberJourneyTest(APITestCase):
             'iprs_reference': 'IPRS-E2E-REF',
         },
     )
-    def test_full_member_onboarding_flow(self, _, __):
+    def test_full_member_onboarding_flow(self, mock_sms_send, _):
         """Run the full member onboarding journey from register to approval."""
         register_payload = {
             'email': 'journey.member@example.com',
