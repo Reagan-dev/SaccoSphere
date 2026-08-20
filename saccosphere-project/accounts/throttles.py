@@ -52,3 +52,14 @@ class GoogleOAuthThrottle(AnonRateThrottle):
     and this endpoint is anonymous (no user authentication yet).
     """
     rate = '10/minute'
+
+
+class OTPVerifyThrottle(AnonRateThrottle):
+    """
+    Throttle OTP verify requests to 10 per minute per IP address.
+
+    Bounds request volume across all tokens/phones from one IP.
+    Independent of per-token OTP_MAX_ATTEMPTS limit (3 wrong guesses per token).
+    Uses IP-based throttling since this endpoint is anonymous (AllowAny).
+    """
+    rate = '10/minute'

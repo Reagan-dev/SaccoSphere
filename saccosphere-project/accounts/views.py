@@ -41,7 +41,7 @@ from .serializers import (
 )
 from .otp_utils import create_otp_token, verify_otp, OTPError, format_phone_number
 from .otp_backends import get_otp_backend, OTPDeliveryError
-from .throttles import OTPSendThrottle
+from .throttles import OTPSendThrottle, OTPVerifyThrottle
 
 
 def _mask_contact(channel, destination):
@@ -907,6 +907,7 @@ class OTPSendView(APIView):
 class OTPVerifyView(APIView):
     """Verify OTP code."""
     permission_classes = [AllowAny]
+    throttle_classes = [OTPVerifyThrottle]
 
     @swagger_auto_schema(
         operation_summary='Verify OTP code',
