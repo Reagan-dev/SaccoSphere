@@ -12,19 +12,55 @@ logger = logging.getLogger('saccosphere.otp')
 
 
 def format_phone_number(phone_number):
-    """Ensure the number is in strict +254 format."""
-    # Remove all non-numeric characters first (except the plus)
-    # This strips accidental spaces or other symbols
+    """
+    Normalize a Kenyan phone number to canonical E.164 format (+254XXXXXXXXX).
+
+    Accepted input shapes (all normalize to +254712345678 for the example):
+    - '+254712345678' (13 digits with country code and plus)
+    - '254712345678' (12 digits with country code, no plus)
+    - '0712345678' (10 digits with leading 0)
+    - '0112345678' (10 digits with leading 0, newer prefixes)
+    - '712345678' (9 digits without leading 0 or country code)
+    - '112345678' (9 digits without leading 0 or country code, newer prefixes)
+
+    Args:
+        phone_number: Phone number in any of the accepted formats above.
+
+    Returns:
+        str: Canonical format '+254' followed by 9-digit national number.
+
+    Raises:
+        OTPError: If the phone number format is invalid or doesn't start with
+                  a Kenyan mobile prefix (7 or 1).
+    """
+    # Strip all non-digit characters
     clean_num = ''.join(c for c in phone_number if c.isdigit())
-    
-    # If the user input was 254... (12 digits) or 07... (10 digits)
-    if len(clean_num) == 12 and clean_num.startswith('254'):
-        return f'+{clean_num}'
-    elif len(clean_num) == 9 and clean_num.startswith('7'): # 07... stripped
-        return f'+254{clean_num}'
-    
-    # Fallback: if it's already 13 digits starting with 254 but no plus
-    return f'+{clean_num}'
+
+    # Extract 9-digit national significant number based on input length
+    if len(clean_num) == 10 and clean_num.startswith('0'):
+        # 0712345678 -> 712345678 (drop leading 0)
+        national_num = clean_num[1:]
+    elif len(clean_num) == 9:
+        # 712345678 -> 712345678 (use as-is)
+        national_num = clean_num
+    elif len(clean_num) == 12 and clean_num.startswith('254'):
+        # 254712345678 -> 712345678 (drop country code)
+        national_num = clean_num[3:]
+    else:
+        raise OTPError(
+            f'Invalid phone number format. Expected 9, 10, or 12 digits, '
+            f'got {len(clean_num)} digits.'
+        )
+
+    # Validate Kenyan mobile prefix (7 or 1)
+    if national_num[0] not in ('7', '1'):
+        raise OTPError(
+            f'Invalid phone number prefix. Kenyan mobile numbers must start '
+            f'with 7 or 1, got {national_num[0]}.'
+        )
+
+    # Return canonical E.164 format
+    return f'+254{national_num}'
 
 
 class OTPError(Exception):
