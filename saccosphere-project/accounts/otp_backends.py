@@ -106,11 +106,8 @@ class PhoneOTPBackend(BaseOTPBackend):
                 'Africa\'s Talking API key and username must be configured'
             )
 
-        self.africastalking.initialize(username, api_key)
-
-        # Enable sandbox mode if configured
-        if environment == 'sandbox':
-            self.africastalking.set_sandbox(True)
+        sdk_username = 'sandbox' if environment == 'sandbox' else username
+        self.africastalking.initialize(sdk_username, api_key)
 
         self.sms = self.africastalking.SMS
 

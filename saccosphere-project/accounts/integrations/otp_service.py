@@ -64,11 +64,8 @@ class ATSMSClient:
                 'Africa\'s Talking API key and username must be configured'
             )
 
-        africastalking.initialize(username, api_key)
-
-        # Enable sandbox mode if configured
-        if environment == 'sandbox':
-            africastalking.set_sandbox(True)
+        sdk_username = 'sandbox' if environment == 'sandbox' else username
+        africastalking.initialize(sdk_username, api_key)
 
         self.sms = africastalking.SMS
 
