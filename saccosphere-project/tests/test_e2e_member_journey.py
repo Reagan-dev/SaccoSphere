@@ -97,7 +97,7 @@ class MemberJourneyTest(APITestCase):
             'iprs_reference': 'IPRS-E2E-REF',
         },
     )
-    def test_full_member_onboarding_flow(self, mock_sms_send, _):
+    def test_full_member_onboarding_flow(self, _mock_iprs_verify, mock_sms_send):
         """Run the full member onboarding journey from register to approval."""
         register_payload = {
             'email': 'journey.member@example.com',
@@ -126,16 +126,18 @@ class MemberJourneyTest(APITestCase):
         )
         self._log_step('otp-send', otp_send_response)
         self.assertEqual(otp_send_response.status_code, status.HTTP_200_OK)
+        sent_token = mock_sms_send.call_args.args[0]
         otp_token = OTPToken.objects.filter(
-            phone_number=register_payload['phone_number'],
+            phone_number='+254700000123',
             purpose=OTPToken.Purpose.PHONE_VERIFY,
         ).latest('created_at')
+        self.assertEqual(otp_token.id, sent_token.id)
 
         otp_verify_response = self.member_client.post(
             '/api/v1/accounts/otp/verify/',
             {
                 'phone_number': register_payload['phone_number'],
-                'code': otp_token.code,
+                'code': sent_token.plaintext_code,
             },
             format='json',
         )

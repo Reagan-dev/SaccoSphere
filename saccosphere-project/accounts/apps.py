@@ -1,6 +1,11 @@
+import logging
+
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+
+
+logger = logging.getLogger(__name__)
 
 
 class AccountsConfig(AppConfig):
@@ -15,6 +20,11 @@ class AccountsConfig(AppConfig):
                 'OAUTH_MOCK=True is not allowed when DEBUG=False. '
                 'Set OAUTH_MOCK=False in your Railway environment variables '
                 'before deploying to production.'
+            )
+        if settings.OTP_HASH_KEY_USES_SECRET_KEY_FALLBACK:
+            logger.warning(
+                'OTP_HASH_KEY is not set. Falling back to a key derived from '
+                'SECRET_KEY. Set a dedicated OTP_HASH_KEY in production.'
             )
         # Ensure Africa's Talking credentials are set in production
         if not settings.DEBUG and not settings.AT_API_KEY:

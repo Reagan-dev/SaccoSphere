@@ -113,7 +113,8 @@ class ATSMSClient:
         # In DEBUG mode, log instead of sending
         if settings.DEBUG:
             logger.info(
-                f'[DEBUG MODE] OTP Code for {phone_number} ({purpose}): {code}'
+                f'[DEBUG MODE] OTP SMS prepared for {phone_number} '
+                f'({purpose})'
             )
             return True
 

@@ -243,6 +243,10 @@ OTP_EMAIL_ENABLED = config('OTP_EMAIL_ENABLED', default=False, cast=bool)
 OTP_EXPIRY_MINUTES = 5
 OTP_MAX_ATTEMPTS = 3
 OTP_RESEND_COOLDOWN_SECONDS = 60
+OTP_HASH_KEY = config('OTP_HASH_KEY', default='')
+OTP_HASH_KEY_USES_SECRET_KEY_FALLBACK = not bool(OTP_HASH_KEY)
+if OTP_HASH_KEY_USES_SECRET_KEY_FALLBACK:
+    OTP_HASH_KEY = f'otp-hash:{SECRET_KEY}'
 
 # Africa's Talking SMS Configuration
 AT_API_KEY = config('AT_API_KEY', default='')

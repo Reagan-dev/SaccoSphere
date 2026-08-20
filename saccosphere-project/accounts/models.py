@@ -1064,9 +1064,9 @@ class OTPToken(models.Model):
 
     code = models.CharField(
 
-        max_length=6,
+        max_length=64,
 
-        help_text='Six-digit OTP code stored as a string.',
+        help_text='HMAC-SHA256 hash of the six-digit OTP code.',
 
     )
 

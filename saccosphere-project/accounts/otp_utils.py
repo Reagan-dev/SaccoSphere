@@ -1,4 +1,6 @@
 """OTP code generation and verification utilities."""
+import hashlib
+import hmac
 import logging
 import secrets
 from datetime import timedelta
@@ -7,6 +9,7 @@ from django.conf import settings
 from django.utils import timezone
 
 logger = logging.getLogger('saccosphere.otp')
+
 
 def format_phone_number(phone_number):
     """Ensure the number is in strict +254 format."""
@@ -22,6 +25,7 @@ def format_phone_number(phone_number):
     
     # Fallback: if it's already 13 digits starting with 254 but no plus
     return f'+{clean_num}'
+
 
 class OTPError(Exception):
     """OTP verification error."""
@@ -40,6 +44,15 @@ def generate_otp_code():
     """
     code = secrets.randbelow(1000000)
     return f'{code:06d}'
+
+
+def hash_otp_code(code: str) -> str:
+    """Return a keyed HMAC-SHA256 hash for an OTP code."""
+    return hmac.new(
+        settings.OTP_HASH_KEY.encode(),
+        code.encode(),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def create_otp_token(user, phone_number, purpose):
@@ -76,8 +89,9 @@ def create_otp_token(user, phone_number, purpose):
             query = query.filter(user=user)
         query.update(is_used=True)
 
-        # Generate code and expiry time
-        code = generate_otp_code()
+        # Generate plaintext code for delivery, but persist only its hash.
+        plaintext_code = generate_otp_code()
+        hashed_code = hash_otp_code(plaintext_code)
         expires_at = timezone.now() + timedelta(
             minutes=settings.OTP_EXPIRY_MINUTES
         )
@@ -86,12 +100,13 @@ def create_otp_token(user, phone_number, purpose):
         token = OTPToken.objects.create(
             user=user,
             phone_number=formatted_phone,
-            code=code,
+            code=hashed_code,
             purpose=purpose,
             expires_at=expires_at,
             is_used=False,
             attempts=0,
         )
+        token.plaintext_code = plaintext_code
 
         user_email = user.email if user else 'anonymous'
         logger.info(
@@ -153,8 +168,10 @@ def verify_otp(phone_number, code, purpose):
         )
         raise OTPError('Too many attempts. Please request a new code.')
 
+    submitted_code_hash = hash_otp_code(code)
+
     # Verify code
-    if token.code != code:
+    if not hmac.compare_digest(token.code, submitted_code_hash):
         logger.warning(
             f'Incorrect OTP code for phone={phone_number}, purpose={purpose} '
             f'(attempt {token.attempts}/{settings.OTP_MAX_ATTEMPTS})'
