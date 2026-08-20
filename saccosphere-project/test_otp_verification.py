@@ -28,22 +28,20 @@ def test_generate_otp_code():
     # Generate multiple codes to test consistency
     codes = [generate_otp_code() for _ in range(10)]
     
-    for i, code in enumerate(codes):
-        print(f"Code {i+1}: {code}")
-        
+    for code in codes:
         # Verify it's a string
         if not isinstance(code, str):
-            print(f"❌ FAIL: Code {code} is not a string")
+            print("❌ FAIL: Generated code is not a string")
             return False
             
         # Verify it's exactly 6 characters
         if len(code) != 6:
-            print(f"❌ FAIL: Code {code} is not 6 characters long")
+            print("❌ FAIL: Generated code is not 6 characters long")
             return False
             
         # Verify all characters are digits
         if not code.isdigit():
-            print(f"❌ FAIL: Code {code} contains non-digit characters")
+            print("❌ FAIL: Generated code contains non-digit characters")
             return False
     
     print("✅ PASS: generate_otp_code() returns 6-character string of digits")
@@ -82,7 +80,7 @@ def test_debug_mode_logging():
         backend.send(mock_token)
 
         print("✅ PASS: DEBUG mode logs without sending SMS")
-        print("✅ INFO: Check logs for '[DEBUG MODE] OTP Code for 254712345678 (PHONE_VERIFY): 123456'")
+        print("✅ INFO: DEBUG logs do not include the OTP code")
         return True
             
     except Exception as e:
@@ -110,11 +108,10 @@ def test_verify_otp_wrong_code():
         
         # Create an OTP token
         token = create_otp_token(user, "254712345678", "PHONE_VERIFY")
-        correct_code = token.code
-        print(f"Created OTP token with code: {correct_code}")
+        print("Created OTP token with hashed code at rest")
         
         # Test with wrong code
-        wrong_code = "000000" if correct_code != "000000" else "111111"
+        wrong_code = "000000" if token.plaintext_code != "000000" else "111111"
         
         try:
             verify_otp("254712345678", wrong_code, "PHONE_VERIFY")

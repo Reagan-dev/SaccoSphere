@@ -49,7 +49,7 @@ def test_otp_flow():
     if not settings.AT_API_KEY or settings.AT_USERNAME == 'sandbox':
         print("\n📋 NOTE: Running in DEBUG/sandbox mode")
         print("   - SMS will NOT be sent")
-        print("   - OTP codes will be logged to console")
+        print("   - OTP codes are not printed or logged")
         print("   - Set real AT_API_KEY in .env for actual SMS")
     
     # Get test user
@@ -114,7 +114,7 @@ def send_otp_interactive(user):
         # Generate OTP
         print(f"\n🔄 Generating OTP for {phone} ({purpose})...")
         token = create_otp_token(user, phone, purpose)
-        print(f"✅ OTP generated: {token.code}")
+        print("✅ OTP generated and stored as a hash")
         print(f"⏰ Expires at: {token.expires_at}")
         
         # Try to send SMS
@@ -124,7 +124,7 @@ def send_otp_interactive(user):
             backend.send(token)
 
             if settings.DEBUG:
-                print("✅ DEBUG mode: Code logged (no SMS sent)")
+                print("✅ DEBUG mode: SMS skipped and code not logged")
             else:
                 print("✅ SMS sent successfully!")
 

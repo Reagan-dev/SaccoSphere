@@ -41,6 +41,13 @@ class BaseOTPBackend(abc.ABC):
 
     channel: str
 
+    def get_plaintext_code(self, token: OTPToken) -> str:
+        """Return the non-persisted plaintext code for delivery."""
+        code = getattr(token, 'plaintext_code', None)
+        if not code:
+            raise OTPDeliveryError('OTP plaintext code is not available.')
+        return code
+
     @abc.abstractmethod
     def send(self, token: OTPToken) -> None:
         """
@@ -153,8 +160,8 @@ class PhoneOTPBackend(BaseOTPBackend):
         # In DEBUG mode, log instead of sending
         if settings.DEBUG:
             logger.info(
-                f'[DEBUG MODE] OTP Code for {token.phone_number} '
-                f'({token.purpose}): {token.code}'
+                f'[DEBUG MODE] OTP SMS prepared for {token.phone_number} '
+                f'({token.purpose})'
             )
             return
 
@@ -162,7 +169,10 @@ class PhoneOTPBackend(BaseOTPBackend):
         if token.purpose not in self.OTP_TEMPLATES:
             raise OTPDeliveryError(f'Unknown OTP purpose: {token.purpose}')
 
-        message = self.OTP_TEMPLATES[token.purpose].format(code=token.code)
+        plaintext_code = self.get_plaintext_code(token)
+        message = self.OTP_TEMPLATES[token.purpose].format(
+            code=plaintext_code,
+        )
 
         # Normalize phone number
         try:
@@ -219,7 +229,7 @@ class EmailOTPBackend(BaseOTPBackend):
         expiry_minutes = getattr(settings, 'OTP_EXPIRY_MINUTES', 10)
 
         context = {
-            'otp_code': token.code,
+            'otp_code': self.get_plaintext_code(token),
             'expiry_minutes': expiry_minutes,
             'user': user,
         }
