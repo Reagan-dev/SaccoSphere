@@ -5,6 +5,7 @@ from .models import (
     KYCVerification,
     OTPToken,
     Sacco,
+    SaccoPaymentConfig,
     SaccoSettings,
     User,
     UserConsent,
@@ -206,6 +207,102 @@ class SaccoSettingsAdmin(admin.ModelAdmin):
             },
         ),
     )
+
+
+@admin.register(SaccoPaymentConfig)
+class SaccoPaymentConfigAdmin(admin.ModelAdmin):
+    """Admin interface for SACCO-specific M-Pesa payment configuration."""
+    
+    list_display = (
+        'sacco',
+        'shortcode',
+        'shortcode_type',
+        'environment',
+        'is_active',
+        'has_b2c',
+        'updated_at',
+    )
+    list_filter = (
+        'shortcode_type',
+        'environment',
+        'is_active',
+    )
+    search_fields = ('sacco__name', 'sacco__registration_number', 'shortcode')
+    autocomplete_fields = ('sacco',)
+    readonly_fields = ('created_at', 'updated_at')
+    list_select_related = ('sacco',)
+    ordering = ('sacco__name',)
+    
+    fieldsets = (
+        (
+            None,
+            {
+                'fields': (
+                    'sacco',
+                    'is_active',
+                ),
+            },
+        ),
+        (
+            'M-Pesa Shortcode Configuration',
+            {
+                'fields': (
+                    'shortcode_type',
+                    'shortcode',
+                    'stk_passkey',
+                ),
+            },
+        ),
+        (
+            'Daraja API Credentials',
+            {
+                'fields': (
+                    'daraja_consumer_key',
+                    'daraja_consumer_secret',
+                    'environment',
+                ),
+                'description': (
+                    'Consumer key and secret are optional if using a platform '
+                    'aggregator credential. Leave blank to use global settings.'
+                ),
+            },
+        ),
+        (
+            'B2C Disbursement Configuration',
+            {
+                'fields': (
+                    'b2c_initiator_name',
+                    'b2c_security_credential',
+                ),
+                'classes': ('collapse',),
+                'description': (
+                    'Required only if this SACCO performs loan disbursements. '
+                    'Leave blank if SACCO does not disburse.'
+                ),
+            },
+        ),
+        (
+            'Audit',
+            {
+                'classes': ('collapse',),
+                'fields': ('created_at', 'updated_at'),
+            },
+        ),
+    )
+    
+    @admin.display(boolean=True, description='B2C Configured')
+    def has_b2c(self, obj):
+        return obj.has_b2c_config()
+    
+    def get_readonly_fields(self, request, obj=None):
+        """Make sensitive fields read-only after creation to prevent accidental exposure."""
+        if obj:  # Editing an existing object
+            return self.readonly_fields + (
+                'daraja_consumer_secret',
+                'stk_passkey',
+                'b2c_security_credential',
+            )
+        return self.readonly_fields
 
 
 @admin.register(KYCVerification)

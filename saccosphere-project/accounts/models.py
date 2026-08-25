@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from uuid import uuid4
 
-
+from cryptography.fernet import Fernet
 
 from django.conf import settings
 
@@ -12,9 +12,64 @@ from django.db import models
 
 from django.utils import timezone
 
-
-
 from .storage import KYCDocumentStorage
+
+
+class EncryptedFieldMixin:
+    """Mixin for encrypting sensitive fields at rest using Fernet encryption."""
+
+    def _get_fernet(self):
+        """Get or create Fernet instance for encryption/decryption."""
+        encryption_key = getattr(settings, 'FIELD_ENCRYPTION_KEY', None)
+        if not encryption_key:
+            raise ValueError(
+                'FIELD_ENCRYPTION_KEY must be set in settings for encrypted fields. '
+                'Generate one with: from cryptography.fernet import Fernet; '
+                'Fernet.generate_key()'
+            )
+        return Fernet(encryption_key.encode() if isinstance(encryption_key, str) else encryption_key)
+
+    def _encrypt(self, value):
+        """Encrypt a plaintext value."""
+        if value is None or value == '':
+            return value
+        fernet = self._get_fernet()
+        return fernet.encrypt(value.encode()).decode()
+
+    def _decrypt(self, value):
+        """Decrypt an encrypted value."""
+        if value is None or value == '':
+            return value
+        fernet = self._get_fernet()
+        return fernet.decrypt(value.encode()).decode()
+
+
+class EncryptedCharField(EncryptedFieldMixin, models.CharField):
+    """CharField that encrypts values on save and decrypts on load."""
+
+    def from_db_value(self, value, expression, connection):
+        """Decrypt value when loading from database."""
+        if value is None:
+            return value
+        return self._decrypt(value)
+
+    def to_python(self, value):
+        """Decrypt value when loading from forms/serializers."""
+        if value is None:
+            return value
+        if isinstance(value, str):
+            try:
+                return self._decrypt(value)
+            except Exception:
+                # If decryption fails, return as-is (might already be plaintext)
+                return value
+        return value
+
+    def get_prep_value(self, value):
+        """Encrypt value before saving to database."""
+        if value is None:
+            return value
+        return self._encrypt(value)
 
 
 
@@ -504,6 +559,11 @@ class Sacco(models.Model):
 
     suspended_at = models.DateTimeField(null=True, blank=True)
 
+    payment_ready = models.BooleanField(
+        default=False,
+        help_text='Whether this SACCO has completed M-Pesa Daraja onboarding and can process payments.',
+    )
+
     suspension_reason = models.TextField(blank=True)
 
     default_interest_rate = models.DecimalField(
@@ -744,6 +804,108 @@ class SaccoSettings(models.Model):
     def __str__(self):
 
         return f'Settings — {self.sacco.name}'
+
+
+class SaccoPaymentConfig(models.Model):
+    """SACCO-specific M-Pesa Daraja payment configuration."""
+
+    class ShortcodeType(models.TextChoices):
+        PAYBILL = 'PAYBILL', 'Paybill Number'
+        TILL_NUMBER = 'TILL_NUMBER', 'Till Number'
+
+    class Environment(models.TextChoices):
+        SANDBOX = 'SANDBOX', 'Sandbox'
+        LIVE = 'LIVE', 'Live'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+        help_text='Unique payment config identifier.',
+    )
+
+    sacco = models.OneToOneField(
+        Sacco,
+        on_delete=models.CASCADE,
+        related_name='payment_config',
+        help_text='The SACCO this payment configuration belongs to.',
+    )
+
+    shortcode_type = models.CharField(
+        max_length=20,
+        choices=ShortcodeType.choices,
+        default=ShortcodeType.PAYBILL,
+        help_text='Type of M-Pesa shortcode (Paybill or Till Number).',
+    )
+
+    shortcode = models.CharField(
+        max_length=10,
+        help_text='M-Pesa shortcode number (Paybill or Till Number).',
+    )
+
+    stk_passkey = EncryptedCharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='STK push passkey for this shortcode (encrypted at rest).',
+    )
+
+    daraja_consumer_key = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Daraja consumer key (nullable if using platform aggregator).',
+    )
+
+    daraja_consumer_secret = EncryptedCharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Daraja consumer secret (encrypted at rest, nullable if using platform aggregator).',
+    )
+
+    environment = models.CharField(
+        max_length=20,
+        choices=Environment.choices,
+        default=Environment.SANDBOX,
+        help_text='Daraja environment (Sandbox or Live).',
+    )
+
+    b2c_initiator_name = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text='B2C initiator name for disbursements (nullable if SACCO does not disburse).',
+    )
+
+    b2c_security_credential = EncryptedCharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='B2C encrypted security credential (encrypted at rest, nullable if SACCO does not disburse).',
+    )
+
+    is_active = models.BooleanField(
+        default=True,
+        help_text='Whether this payment configuration is active.',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'SACCO Payment Configuration'
+        verbose_name_plural = 'SACCO Payment Configurations'
+        ordering = ['sacco__name']
+
+    def __str__(self):
+        return f'Payment Config — {self.sacco.name} ({self.shortcode})'
+
+    def has_b2c_config(self):
+        """Check if this SACCO has B2C disbursement configured."""
+        return bool(
+            self.b2c_initiator_name and self.b2c_security_credential
+        )
 
 
 
