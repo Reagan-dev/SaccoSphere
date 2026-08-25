@@ -26,6 +26,7 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsSaccoAdmin
 from config.response import StandardResponseMixin
+from django.conf import settings
 from guarantor.utils import check_loan_guarantors_complete
 from payments.disbursements import initiate_b2c_loan_disbursement
 from payments.providers import get_psp_provider
@@ -104,10 +105,28 @@ def _retry_mpesa_response(result_desc='Temporary processing unavailable'):
 
 
 def _get_client_ip(request):
+    """Get the real client IP, accounting for Railway's proxy.
+    
+    Railway adds 1 proxy hop, so X-Forwarded-For format is:
+    [spoofed_ip, ..., real_client_ip, railway_proxy_ip]
+    
+    We take the rightmost IP (last value) as the real client IP,
+    since Railway appends the true client IP to the end of the chain.
+    """
     forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
     if forwarded_for:
-        return forwarded_for.split(',')[0].strip()
+        # Take the last IP in the chain (real client IP after Railway proxy)
+        ips = [ip.strip() for ip in forwarded_for.split(',')]
+        return ips[-1] if ips else request.META.get('REMOTE_ADDR')
     return request.META.get('REMOTE_ADDR')
+
+
+def _get_stk_callback_path():
+    """Build STK callback path with security token."""
+    token = getattr(settings, 'MPESA_CALLBACK_TOKEN', '')
+    if token:
+        return f'/api/v1/payments/callback/mpesa/stk/{token}/'
+    return '/api/v1/payments/callback/mpesa/stk/'
 
 
 def _clear_mpesa_replay_marker(callback_identifier):
@@ -632,7 +651,7 @@ class STKPushView(APIView):
                 amount=fee_breakdown['gross_amount'],
                 account_reference=reference,
                 description=description,
-                callback_path='/api/v1/payments/callback/mpesa/stk/',
+                callback_path=_get_stk_callback_path(),
             )
         except DarajaError as exc:
             is_timeout = isinstance(exc.__cause__, RequestsTimeout)
@@ -1084,8 +1103,25 @@ class MPesaSTKCallbackView(APIView):
         responses={200: openapi.Response('Accepted'), 400: 'Bad Request', 401: 'Unauthorized'},
         security=[{'Bearer': []}],
     )
-    def post(self, request):
+    def post(self, request, callback_token):
         try:
+            # Validate callback token
+            from django.conf import settings
+            expected_token = getattr(settings, 'MPESA_CALLBACK_TOKEN', '')
+            if expected_token and callback_token != expected_token:
+                logger.warning(
+                    'M-Pesa STK callback rejected: invalid token. '
+                    'Provided: %s, Expected: %s',
+                    callback_token[:8] if callback_token else 'None',
+                    expected_token[:8] if expected_token else 'None',
+                )
+                self._log_rejected_callback(
+                    request,
+                    'INVALID_TOKEN',
+                    f'Callback token mismatch (provided: {callback_token[:8] if callback_token else "None"})',
+                )
+                return JsonResponse({'detail': 'Forbidden'}, status=403)
+
             try:
                 callback_body = json.loads(request.body.decode('utf-8'))
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -1211,19 +1247,38 @@ class MPesaSTKCallbackView(APIView):
             return _retry_mpesa_response()
 
     def _log_rejected_callback(self, request, rejection_reason, details):
-        """Log rejected callback payloads for forensics."""
+        """Log rejected callback payloads for forensics with structured context."""
         try:
             callback_body = json.loads(request.body.decode('utf-8'))
         except Exception:
             callback_body = {'raw_body': request.body.decode('utf-8', errors='ignore')}
 
+        # Extract non-PII context for logging
+        context = {
+            'rejection_reason': rejection_reason,
+            'details': details,
+            'client_ip': _get_client_ip(request),
+            'user_agent': request.META.get('HTTP_USER_AGENT', 'Unknown')[:200],
+            'timestamp': timezone.now().isoformat(),
+        }
+
+        # Add transaction identifiers if available (without PII)
+        if isinstance(callback_body, dict):
+            body = callback_body.get('Body') or callback_body.get('body') or {}
+            stk_callback = body.get('stkCallback') or body.get('StkCallback')
+            result = callback_body.get('Result') or callback_body.get('result')
+
+            if stk_callback:
+                context['checkout_request_id'] = stk_callback.get('CheckoutRequestID', 'N/A')
+                context['merchant_request_id'] = stk_callback.get('MerchantRequestID', 'N/A')
+            elif result:
+                context['conversation_id'] = result.get('ConversationID', 'N/A')
+                context['originator_conversation_id'] = result.get('OriginatorConversationID', 'N/A')
+
         logger.warning(
-            'M-Pesa STK callback rejected: reason=%s, details=%s, '
-            'client_ip=%s, payload_preview=%s',
-            rejection_reason,
-            details,
-            _get_client_ip(request),
-            str(callback_body)[:500],
+            'M-Pesa STK callback rejected: %s',
+            json.dumps(context),
+            extra={'structured_log': True},
         )
 
     def _get_stk_callback(self, callback_body):
@@ -1292,8 +1347,25 @@ class B2CCallbackView(APIView):
         responses={200: openapi.Response('Accepted'), 400: 'Bad Request', 401: 'Unauthorized'},
         security=[{'Bearer': []}],
     )
-    def post(self, request):
+    def post(self, request, callback_token):
         try:
+            # Validate callback token
+            from django.conf import settings
+            expected_token = getattr(settings, 'MPESA_CALLBACK_TOKEN', '')
+            if expected_token and callback_token != expected_token:
+                logger.warning(
+                    'M-Pesa B2C callback rejected: invalid token. '
+                    'Provided: %s, Expected: %s',
+                    callback_token[:8] if callback_token else 'None',
+                    expected_token[:8] if expected_token else 'None',
+                )
+                self._log_rejected_callback(
+                    request,
+                    'INVALID_TOKEN',
+                    f'Callback token mismatch (provided: {callback_token[:8] if callback_token else "None"})',
+                )
+                return JsonResponse({'detail': 'Forbidden'}, status=403)
+
             try:
                 callback_body = json.loads(request.body.decode('utf-8'))
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -1432,19 +1504,32 @@ class B2CCallbackView(APIView):
             return _retry_mpesa_response()
 
     def _log_rejected_callback(self, request, rejection_reason, details):
-        """Log rejected callback payloads for forensics."""
+        """Log rejected callback payloads for forensics with structured context."""
         try:
             callback_body = json.loads(request.body.decode('utf-8'))
         except Exception:
             callback_body = {'raw_body': request.body.decode('utf-8', errors='ignore')}
 
+        # Extract non-PII context for logging
+        context = {
+            'rejection_reason': rejection_reason,
+            'details': details,
+            'client_ip': _get_client_ip(request),
+            'user_agent': request.META.get('HTTP_USER_AGENT', 'Unknown')[:200],
+            'timestamp': timezone.now().isoformat(),
+        }
+
+        # Add transaction identifiers if available (without PII)
+        if isinstance(callback_body, dict):
+            result = callback_body.get('Result') or callback_body.get('result')
+            if result:
+                context['conversation_id'] = result.get('ConversationID', 'N/A')
+                context['originator_conversation_id'] = result.get('OriginatorConversationID', 'N/A')
+
         logger.warning(
-            'M-Pesa B2C callback rejected: reason=%s, details=%s, '
-            'client_ip=%s, payload_preview=%s',
-            rejection_reason,
-            details,
-            _get_client_ip(request),
-            str(callback_body)[:500],
+            'M-Pesa B2C callback rejected: %s',
+            json.dumps(context),
+            extra={'structured_log': True},
         )
 
 

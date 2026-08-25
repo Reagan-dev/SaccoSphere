@@ -331,6 +331,24 @@ MPESA_MAX_RECONCILIATION_ATTEMPTS = config(
     default=3,
 )
 
+# M-Pesa IP Allowlist Configuration
+# Production: Only Safaricom production IPs (no private/sandbox ranges)
+# Sandbox: Includes sandbox IPs for testing
+MPESA_IP_RANGES_SANDBOX = config(
+    'MPESA_IP_RANGES_SANDBOX',
+    default='196.201.212.0/24,196.201.213.0/24,196.201.214.0/24,196.201.214.0/23,192.168.201.0/24',
+    cast=Csv(),
+)
+MPESA_IP_RANGES_PRODUCTION = config(
+    'MPESA_IP_RANGES_PRODUCTION',
+    default='196.201.212.0/24,196.201.213.0/24,196.201.214.0/24,196.201.214.0/23',
+    cast=Csv(),
+)
+
+# M-Pesa Callback Security Token
+# Unguessable token for callback URL path validation
+MPESA_CALLBACK_TOKEN = config('MPESA_CALLBACK_TOKEN', default='')
+
 BILLING_ACCOUNT_NAME = config('BILLING_ACCOUNT_NAME', default='')
 BILLING_ACCOUNT_NUMBER = config('BILLING_ACCOUNT_NUMBER', default='')
 BILLING_PAYBILL = config('BILLING_PAYBILL', default='')

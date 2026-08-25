@@ -2,13 +2,19 @@
 
 from uuid import uuid4
 
+from django.conf import settings
 from django.db import transaction as db_transaction
 
 from .integrations.mpesa.daraja import DarajaClient, DarajaError
 from .models import MpesaTransaction, PaymentProvider, Transaction
 
 
-B2C_CALLBACK_PATH = '/api/v1/payments/callback/mpesa/b2c/'
+def _get_b2c_callback_path():
+    """Build B2C callback path with security token."""
+    token = getattr(settings, 'MPESA_CALLBACK_TOKEN', '')
+    if token:
+        return f'/api/v1/payments/callback/mpesa/b2c/{token}/'
+    return '/api/v1/payments/callback/mpesa/b2c/'
 
 
 def initiate_b2c_loan_disbursement(
@@ -53,7 +59,7 @@ def initiate_b2c_loan_disbursement(
         loan.save(update_fields=['status', 'updated_at'])
 
     daraja_client = DarajaClient()
-    callback_url = daraja_client._build_callback_url(B2C_CALLBACK_PATH)
+    callback_url = daraja_client._build_callback_url(_get_b2c_callback_path())
 
     try:
         daraja_response = daraja_client.initiate_b2c(
