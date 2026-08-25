@@ -48,14 +48,35 @@ class DarajaClient:
     SANDBOX_BASE_URL = 'https://sandbox.safaricom.co.ke'
     LIVE_BASE_URL = 'https://api.safaricom.co.ke'
 
-    def __init__(self):
-        self.consumer_key = settings.MPESA_CONSUMER_KEY
-        self.consumer_secret = settings.MPESA_CONSUMER_SECRET
-        self.shortcode = settings.MPESA_SHORTCODE
-        self.passkey = settings.MPESA_PASSKEY
-        self.environment = settings.MPESA_ENVIRONMENT
-        self.callback_base_url = settings.MPESA_CALLBACK_BASE_URL.rstrip('/')
+    def __init__(
+        self,
+        consumer_key=None,
+        consumer_secret=None,
+        shortcode=None,
+        passkey=None,
+        environment=None,
+        callback_base_url=None,
+    ):
+        """Initialize DarajaClient with optional SACCO-specific credentials.
+        
+        Args:
+            consumer_key: Daraja consumer key (defaults to settings.MPESA_CONSUMER_KEY)
+            consumer_secret: Daraja consumer secret (defaults to settings.MPESA_CONSUMER_SECRET)
+            shortcode: M-Pesa shortcode (defaults to settings.MPESA_SHORTCODE)
+            passkey: STK push passkey (defaults to settings.MPESA_PASSKEY)
+            environment: Daraja environment (defaults to settings.MPESA_ENVIRONMENT)
+            callback_base_url: Base URL for callbacks (defaults to settings.MPESA_CALLBACK_BASE_URL)
+        """
+        self.consumer_key = consumer_key or settings.MPESA_CONSUMER_KEY
+        self.consumer_secret = consumer_secret or settings.MPESA_CONSUMER_SECRET
+        self.shortcode = shortcode or settings.MPESA_SHORTCODE
+        self.passkey = passkey or settings.MPESA_PASSKEY
+        self.environment = environment or settings.MPESA_ENVIRONMENT
+        self.callback_base_url = (callback_base_url or settings.MPESA_CALLBACK_BASE_URL).rstrip('/')
         self.base_url = self._get_base_url()
+        
+        # Generate a unique cache key for this credential set
+        self._cache_key_prefix = f'mpesa_access_token:{self.consumer_key}'
 
     @property
     def _get_auth_url(self):
@@ -77,9 +98,13 @@ class DarajaClient:
         return f'{self.base_url}/mpesa/b2c/v1/paymentrequest'
 
     def get_access_token(self):
-        token = cache.get('mpesa_access_token')
+        """Get OAuth access token, cached per credential set."""
+        token = cache.get(self._cache_key_prefix)
         if token:
-            logger.debug('M-Pesa access token retrieved from cache.')
+            logger.debug(
+                'M-Pesa access token retrieved from cache for consumer_key=%s',
+                self.consumer_key[:8] + '...'  # Log partial key for security
+            )
             return token
 
         self._require_settings(
@@ -92,8 +117,9 @@ class DarajaClient:
         headers = {'Authorization': f'Basic {encoded_auth}'}
 
         logger.debug(
-            'Requesting new M-Pesa access token from: %s',
+            'Requesting new M-Pesa access token from: %s for consumer_key=%s',
             self._get_auth_url,
+            self.consumer_key[:8] + '...',
         )
 
         try:
@@ -126,8 +152,12 @@ class DarajaClient:
                 data.get('errorCode'),
             )
 
-        cache.set('mpesa_access_token', token, timeout=50 * 60)
-        logger.debug('M-Pesa access token cached for 50 minutes.')
+        # Cache token per credential set for 50 minutes
+        cache.set(self._cache_key_prefix, token, timeout=50 * 60)
+        logger.debug(
+            'M-Pesa access token cached for 50 minutes for consumer_key=%s',
+            self.consumer_key[:8] + '...'
+        )
         return token
 
     def initiate_stk_push(
@@ -211,21 +241,36 @@ class DarajaClient:
         remarks,
         result_url,
         timeout_url,
+        initiator_name=None,
+        security_credential=None,
     ):
-        self._require_settings(
-            'MPESA_CONSUMER_KEY',
-            'MPESA_CONSUMER_SECRET',
-            'MPESA_SHORTCODE',
-            'MPESA_B2C_INITIATOR_NAME',
-            'MPESA_B2C_SECURITY_CREDENTIAL',
-        )
+        """Initiate B2C disbursement with optional SACCO-specific credentials.
+        
+        Args:
+            phone_number: Recipient phone number in Daraja format (2547...)
+            amount: Disbursement amount
+            occasion: Transaction occasion description
+            remarks: Transaction remarks
+            result_url: Callback URL for successful results
+            timeout_url: Callback URL for timeout results
+            initiator_name: B2C initiator name (defaults to settings.MPESA_B2C_INITIATOR_NAME)
+            security_credential: B2C security credential (defaults to settings.MPESA_B2C_SECURITY_CREDENTIAL)
+        """
+        initiator_name = initiator_name or settings.MPESA_B2C_INITIATOR_NAME
+        security_credential = security_credential or settings.MPESA_B2C_SECURITY_CREDENTIAL
+        
+        if not initiator_name or not security_credential:
+            raise DarajaError(
+                'B2C initiator name and security credential are required.'
+            )
+        
         token = self.get_access_token()
         payload = {
-            'InitiatorName': settings.MPESA_B2C_INITIATOR_NAME,
-            'SecurityCredential': settings.MPESA_B2C_SECURITY_CREDENTIAL,
+            'InitiatorName': initiator_name,
+            'SecurityCredential': security_credential,
             'CommandID': 'BusinessPayment',
             'Amount': int(amount),
-            'PartyA': settings.MPESA_SHORTCODE,
+            'PartyA': self.shortcode,
             'PartyB': phone_number,
             'Remarks': remarks[:100],
             'QueueTimeOutURL': timeout_url,

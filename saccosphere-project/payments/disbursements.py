@@ -1,5 +1,6 @@
 """Shared M-Pesa B2C disbursement initiation helpers."""
 
+from rest_framework import serializers
 from uuid import uuid4
 
 from django.conf import settings
@@ -35,6 +36,32 @@ def initiate_b2c_loan_disbursement(
     """
     reference = f'SS-B2C-{uuid4().hex[:18].upper()}'
 
+    # Get SACCO-specific payment configuration
+    sacco = loan.membership.sacco
+    
+    # Check if SACCO is payment-ready
+    if not sacco.payment_ready:
+        return False, {
+            'error': 'This SACCO has not completed M-Pesa Daraja onboarding. '
+                    'B2C disbursement is not yet available.'
+        }, 400
+    
+    try:
+        payment_config = sacco.payment_config
+        if not payment_config.is_active:
+            return False, {
+                'error': 'Payment configuration for this SACCO is not active.'
+            }, 400
+        if not payment_config.has_b2c_config():
+            return False, {
+                'error': 'B2C disbursement not configured for this SACCO.'
+            }, 400
+    except AttributeError:
+        return False, {
+            'error': 'Payment configuration not found for this SACCO. '
+                    'Please contact platform administration.'
+        }, 400
+
     with db_transaction.atomic():
         provider, _ = PaymentProvider.objects.get_or_create(
             name='M-Pesa',
@@ -62,7 +89,12 @@ def initiate_b2c_loan_disbursement(
         loan.status = loan.Status.DISBURSEMENT_PENDING
         loan.save(update_fields=['status', 'updated_at'])
 
-    daraja_client = DarajaClient()
+    daraja_client = DarajaClient(
+        consumer_key=payment_config.daraja_consumer_key,
+        consumer_secret=payment_config.daraja_consumer_secret,
+        shortcode=payment_config.shortcode,
+        environment=payment_config.environment,
+    )
     callback_url = daraja_client._build_callback_url(_get_b2c_callback_path())
 
     try:
@@ -73,6 +105,8 @@ def initiate_b2c_loan_disbursement(
             remarks=remarks,
             result_url=callback_url,
             timeout_url=callback_url,
+            initiator_name=payment_config.b2c_initiator_name,
+            security_credential=payment_config.b2c_security_credential,
         )
     except DarajaError as exc:
         _mark_b2c_attempt_failed(payment, mpesa_transaction, loan, exc)

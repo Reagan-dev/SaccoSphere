@@ -621,6 +621,26 @@ class STKPushView(APIView):
             else related_loan.membership.sacco
         )
 
+        # Check if SACCO is payment-ready
+        if not sacco.payment_ready:
+            raise serializers.ValidationError(
+                'This SACCO has not completed M-Pesa Daraja onboarding. '
+                'Payment processing is not yet available.'
+            )
+
+        # Get SACCO-specific payment configuration
+        try:
+            payment_config = sacco.payment_config
+            if not payment_config.is_active:
+                raise serializers.ValidationError(
+                    'Payment configuration for this SACCO is not active.'
+                )
+        except AttributeError:
+            raise serializers.ValidationError(
+                'Payment configuration not found for this SACCO. '
+                'Please contact platform administration.'
+            )
+
         existing_mpesa = self._get_existing_stk_attempt(
             request.user,
             data,
@@ -650,7 +670,13 @@ class STKPushView(APIView):
         )
 
         try:
-            daraja_response = DarajaClient().initiate_stk_push(
+            daraja_response = DarajaClient(
+                consumer_key=payment_config.daraja_consumer_key,
+                consumer_secret=payment_config.daraja_consumer_secret,
+                shortcode=payment_config.shortcode,
+                passkey=payment_config.stk_passkey,
+                environment=payment_config.environment,
+            ).initiate_stk_push(
                 phone_number=format_phone_for_daraja(data['phone_number']),
                 amount=fee_breakdown['gross_amount'],
                 account_reference=reference,

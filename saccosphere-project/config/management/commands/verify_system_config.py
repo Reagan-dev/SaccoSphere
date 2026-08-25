@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
+from accounts.models import Sacco
 from payments.providers.registry import PROVIDER_REGISTRY, get_provider_class
 
 
@@ -22,6 +23,7 @@ class Command(BaseCommand):
             self._check_email(),
             self._check_billing_paybill(),
             self._check_media_root(),
+            self._check_sacco_payment_configs(),
         ]
         self._print_table(rows)
 
@@ -157,6 +159,41 @@ class Command(BaseCommand):
             return self._fail('MEDIA_ROOT', f'Not writable: {exc}')
 
         return self._ok('MEDIA_ROOT', f'{media_root} is writable')
+
+    def _check_sacco_payment_configs(self):
+        """Check that all payment-ready SACCOs have payment configuration."""
+        payment_ready_saccos = Sacco.objects.filter(
+            is_active=True,
+            payment_ready=True
+        )
+        missing_configs = []
+        
+        for sacco in payment_ready_saccos:
+            try:
+                payment_config = sacco.payment_config
+                if not payment_config.is_active:
+                    missing_configs.append(
+                        f'{sacco.name} (config exists but inactive)'
+                    )
+            except AttributeError:
+                missing_configs.append(sacco.name)
+        
+        if missing_configs:
+            return self._fail(
+                'SACCO_PAYMENT_CONFIGS',
+                f'Missing/inactive for payment-ready SACCOs: {", ".join(missing_configs)}'
+            )
+        
+        if payment_ready_saccos.exists():
+            return self._ok(
+                'SACCO_PAYMENT_CONFIGS',
+                f'{payment_ready_saccos.count()} payment-ready SACCO(s) configured'
+            )
+        
+        return self._ok(
+            'SACCO_PAYMENT_CONFIGS',
+            'No payment-ready SACCOs (onboarding in progress)'
+        )
 
     def _tiers_are_valid(self, tiers):
         if not isinstance(tiers, list) or not tiers:
