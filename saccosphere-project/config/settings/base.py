@@ -319,6 +319,18 @@ MPESA_B2C_SECURITY_CREDENTIAL = config(
     default='',
 )
 
+# M-Pesa Reconciliation Configuration
+MPESA_RECONCILIATION_THRESHOLD_MINUTES = config(
+    'MPESA_RECONCILIATION_THRESHOLD_MINUTES',
+    cast=int,
+    default=5,
+)
+MPESA_MAX_RECONCILIATION_ATTEMPTS = config(
+    'MPESA_MAX_RECONCILIATION_ATTEMPTS',
+    cast=int,
+    default=3,
+)
+
 BILLING_ACCOUNT_NAME = config('BILLING_ACCOUNT_NAME', default='')
 BILLING_ACCOUNT_NUMBER = config('BILLING_ACCOUNT_NUMBER', default='')
 BILLING_PAYBILL = config('BILLING_PAYBILL', default='')
@@ -416,6 +428,10 @@ CELERY_BEAT_SCHEDULE = {
     'suspend-overdue-saccos': {
         'task': 'billing.suspend_overdue_saccos',
         'schedule': crontab(minute=0, hour=9),
+    },
+    'reconcile-stale-mpesa-transactions': {
+        'task': 'payments.tasks.reconcile_stale_mpesa_transactions',
+        'schedule': crontab(minute='*/5'),  # Every 5 minutes
     },
 }
 
