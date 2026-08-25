@@ -103,6 +103,13 @@ def _retry_mpesa_response(result_desc='Temporary processing unavailable'):
     )
 
 
+def _get_client_ip(request):
+    forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
 def _clear_mpesa_replay_marker(callback_identifier):
     try:
         cache.delete(f'mpesa_replay:{callback_identifier}')
@@ -1032,18 +1039,17 @@ class MPesaSTKCallbackView(APIView):
     )
     def post(self, request):
         try:
-            if not is_safaricom_ip(request):
-                logger.warning(
-                    'M-Pesa STK callback rejected: non-Safaricom IP'
-                )
-                return JsonResponse({'detail': 'Forbidden'}, status=403)
-
             try:
                 callback_body = json.loads(request.body.decode('utf-8'))
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 logger.error(
                     'M-Pesa STK callback JSON decode error: %s',
                     exc,
+                )
+                self._log_rejected_callback(
+                    request,
+                    'INVALID_JSON',
+                    str(exc),
                 )
                 return JsonResponse({'detail': 'Invalid JSON'}, status=400)
 
@@ -1053,18 +1059,44 @@ class MPesaSTKCallbackView(APIView):
 
             if not checkout_request_id:
                 logger.debug('M-Pesa STK callback missing CheckoutRequestID')
+                self._log_rejected_callback(
+                    request,
+                    'MISSING_CHECKOUT_ID',
+                    'CheckoutRequestID not found in payload',
+                )
                 return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+            if not is_safaricom_ip(request):
+                logger.warning(
+                    'M-Pesa STK callback rejected: non-Safaricom IP'
+                )
+                self._log_rejected_callback(
+                    request,
+                    'INVALID_IP',
+                    'Request not from Safaricom IP range',
+                )
+                return JsonResponse({'detail': 'Forbidden'}, status=403)
 
             if is_replay_attack(checkout_request_id):
                 logger.warning(
                     'M-Pesa STK callback is replay attack: %s',
                     checkout_request_id,
                 )
+                self._log_rejected_callback(
+                    request,
+                    'REPLAY_ATTACK',
+                    f'Duplicate checkout_request_id: {checkout_request_id}',
+                )
                 return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
 
             if not verify_mpesa_signature(request):
                 logger.warning(
                     'M-Pesa STK callback signature verification failed'
+                )
+                self._log_rejected_callback(
+                    request,
+                    'INVALID_SIGNATURE',
+                    'Signature verification failed',
                 )
                 return JsonResponse({'detail': 'Forbidden'}, status=403)
 
@@ -1080,41 +1112,40 @@ class MPesaSTKCallbackView(APIView):
                     exc,
                     exc_info=True,
                 )
-                _persist_mpesa_enqueue_failure(
-                    callback_body=callback_body,
-                    error=exc,
-                    callback_type='STK',
+                self._log_rejected_callback(
+                    request,
+                    'TRANSACTION_NOT_FOUND',
+                    f'No transaction for checkout_request_id: {checkout_request_id}',
                 )
                 _clear_mpesa_replay_marker(checkout_request_id)
                 return _retry_mpesa_response()
 
-            result_code = stk_callback.get('ResultCode')
+            # Persist callback to Callback table before enqueuing task
+            provider = _get_mpesa_provider_record()
+            callback = Callback.objects.create(
+                transaction=mpesa_transaction.transaction,
+                provider=provider,
+                raw_payload=callback_body,
+                processed=False,
+            )
 
             from .tasks import process_stk_callback_task
 
             try:
-                process_stk_callback_task.delay(
-                    checkout_request_id,
-                    result_code,
-                    callback_body,
-                )
+                process_stk_callback_task.delay(str(callback.id))
             except BROKER_CONNECTION_ERRORS as exc:
                 logger.error(
                     'M-Pesa STK callback task enqueue error: %s',
                     exc,
                     exc_info=True,
                 )
-                _persist_mpesa_enqueue_failure(
-                    callback_body=callback_body,
-                    error=exc,
-                    callback_type='STK',
-                    mpesa_transaction=mpesa_transaction,
-                )
+                callback.processing_error = str(exc)
+                callback.save(update_fields=['processing_error'])
                 _clear_mpesa_replay_marker(checkout_request_id)
                 return _retry_mpesa_response()
 
             logger.info(
-                'M-Pesa STK callback enqueued: %s',
+                'M-Pesa STK callback persisted and enqueued: %s',
                 checkout_request_id,
             )
             return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
@@ -1125,7 +1156,28 @@ class MPesaSTKCallbackView(APIView):
                 exc,
                 exc_info=True,
             )
+            self._log_rejected_callback(
+                request,
+                'UNEXPECTED_ERROR',
+                str(exc),
+            )
             return _retry_mpesa_response()
+
+    def _log_rejected_callback(self, request, rejection_reason, details):
+        """Log rejected callback payloads for forensics."""
+        try:
+            callback_body = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            callback_body = {'raw_body': request.body.decode('utf-8', errors='ignore')}
+
+        logger.warning(
+            'M-Pesa STK callback rejected: reason=%s, details=%s, '
+            'client_ip=%s, payload_preview=%s',
+            rejection_reason,
+            details,
+            _get_client_ip(request),
+            str(callback_body)[:500],
+        )
 
     def _get_stk_callback(self, callback_body):
         body = callback_body.get('Body') or callback_body.get('body') or {}
@@ -1195,14 +1247,15 @@ class B2CCallbackView(APIView):
     )
     def post(self, request):
         try:
-            if not is_safaricom_ip(request):
-                logger.warning('M-Pesa B2C callback rejected: non-Safaricom IP')
-                return JsonResponse({'detail': 'Forbidden'}, status=403)
-
             try:
                 callback_body = json.loads(request.body.decode('utf-8'))
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 logger.error('M-Pesa B2C callback JSON decode error: %s', exc)
+                self._log_rejected_callback(
+                    request,
+                    'INVALID_JSON',
+                    str(exc),
+                )
                 return JsonResponse({'detail': 'Invalid JSON'}, status=400)
 
             request._mpesa_callback_body = callback_body
@@ -1215,18 +1268,42 @@ class B2CCallbackView(APIView):
 
             if not conversation_id:
                 logger.debug('M-Pesa B2C callback missing ConversationID')
+                self._log_rejected_callback(
+                    request,
+                    'MISSING_CONVERSATION_ID',
+                    'ConversationID not found in payload',
+                )
                 return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+            if not is_safaricom_ip(request):
+                logger.warning('M-Pesa B2C callback rejected: non-Safaricom IP')
+                self._log_rejected_callback(
+                    request,
+                    'INVALID_IP',
+                    'Request not from Safaricom IP range',
+                )
+                return JsonResponse({'detail': 'Forbidden'}, status=403)
 
             if is_replay_attack(conversation_id):
                 logger.warning(
                     'M-Pesa B2C callback is replay attack: %s',
                     conversation_id,
                 )
+                self._log_rejected_callback(
+                    request,
+                    'REPLAY_ATTACK',
+                    f'Duplicate conversation_id: {conversation_id}',
+                )
                 return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
 
             if not verify_mpesa_signature(request):
                 logger.warning(
                     'M-Pesa B2C callback signature verification failed'
+                )
+                self._log_rejected_callback(
+                    request,
+                    'INVALID_SIGNATURE',
+                    'Signature verification failed',
                 )
                 return JsonResponse({'detail': 'Forbidden'}, status=403)
 
@@ -1245,13 +1322,22 @@ class B2CCallbackView(APIView):
                     exc,
                     exc_info=True,
                 )
-                _persist_mpesa_enqueue_failure(
-                    callback_body=callback_body,
-                    error=exc,
-                    callback_type='B2C',
+                self._log_rejected_callback(
+                    request,
+                    'TRANSACTION_NOT_FOUND',
+                    f'No transaction for conversation_id: {conversation_id}',
                 )
                 _clear_mpesa_replay_marker(conversation_id)
                 return _retry_mpesa_response()
+
+            # Persist callback to Callback table before enqueuing task
+            provider = _get_mpesa_provider_record()
+            callback = Callback.objects.create(
+                transaction=mpesa_transaction.transaction,
+                provider=provider,
+                raw_payload=callback_body,
+                processed=False,
+            )
 
             try:
                 if (
@@ -1267,28 +1353,20 @@ class B2CCallbackView(APIView):
                 else:
                     from .tasks import process_b2c_callback_task
 
-                    process_b2c_callback_task.delay(
-                        conversation_id,
-                        result_code,
-                        callback_body,
-                    )
+                    process_b2c_callback_task.delay(str(callback.id))
             except BROKER_CONNECTION_ERRORS as exc:
                 logger.error(
                     'M-Pesa B2C callback task enqueue error: %s',
                     exc,
                     exc_info=True,
                 )
-                _persist_mpesa_enqueue_failure(
-                    callback_body=callback_body,
-                    error=exc,
-                    callback_type='B2C',
-                    mpesa_transaction=mpesa_transaction,
-                )
+                callback.processing_error = str(exc)
+                callback.save(update_fields=['processing_error'])
                 _clear_mpesa_replay_marker(conversation_id)
                 return _retry_mpesa_response()
 
             logger.info(
-                'M-Pesa B2C callback enqueued: %s',
+                'M-Pesa B2C callback persisted and enqueued: %s',
                 conversation_id,
             )
             return JsonResponse({'ResultCode': 0, 'ResultDesc': 'Accepted'})
@@ -1299,7 +1377,28 @@ class B2CCallbackView(APIView):
                 exc,
                 exc_info=True,
             )
+            self._log_rejected_callback(
+                request,
+                'UNEXPECTED_ERROR',
+                str(exc),
+            )
             return _retry_mpesa_response()
+
+    def _log_rejected_callback(self, request, rejection_reason, details):
+        """Log rejected callback payloads for forensics."""
+        try:
+            callback_body = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            callback_body = {'raw_body': request.body.decode('utf-8', errors='ignore')}
+
+        logger.warning(
+            'M-Pesa B2C callback rejected: reason=%s, details=%s, '
+            'client_ip=%s, payload_preview=%s',
+            rejection_reason,
+            details,
+            _get_client_ip(request),
+            str(callback_body)[:500],
+        )
 
 
 class B2CStatusView(APIView):
