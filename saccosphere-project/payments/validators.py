@@ -1,20 +1,23 @@
-import re
-
+from config.utils import InvalidPhoneNumberError, normalize_phone_number
 from rest_framework import serializers
 
 
-MPESA_PHONE_REGEX = re.compile(r'^(?:\+?254|0)(?:7|1)\d{8}$')
-
-
 def validate_mpesa_phone(phone_number):
-    if not MPESA_PHONE_REGEX.match(str(phone_number)):
-        raise serializers.ValidationError(
-            'Phone number must be a valid Kenyan M-Pesa number, for example '
-            '+254712345678, 254712345678, or 0712345678.'
-        )
-
-    digits = re.sub(r'\D', '', str(phone_number))
-    if digits.startswith('0'):
-        return f'254{digits[1:]}'
-
-    return digits
+    """Validate and normalize a phone number for M-Pesa transactions.
+    
+    This function validates that the phone number is a valid Kenyan mobile number
+    and returns it in canonical E.164 format (+254712345678).
+    
+    Args:
+        phone_number: Phone number in any accepted format
+    
+    Returns:
+        str: Phone number in E.164 format (+254712345678)
+    
+    Raises:
+        serializers.ValidationError: If the phone number is invalid
+    """
+    try:
+        return normalize_phone_number(phone_number)
+    except InvalidPhoneNumberError as exc:
+        raise serializers.ValidationError(str(exc))

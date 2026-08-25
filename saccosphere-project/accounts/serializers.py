@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 
+from config.utils import InvalidPhoneNumberError, normalize_phone_number
 from django.conf import settings
 from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
@@ -33,12 +34,24 @@ def validate_password_strength(password):
 
 
 def validate_kenyan_phone_number(phone_number):
-    if not KENYAN_PHONE_REGEX.match(phone_number):
-        raise serializers.ValidationError(
-            'Phone number must be a Kenyan E.164 number, for example '
-            '+254712345678 or 254712345678.'
-        )
-    return phone_number
+    """Validate and normalize a Kenyan phone number.
+    
+    This function validates that the phone number is a valid Kenyan mobile number
+    and returns it in canonical E.164 format (+254712345678).
+    
+    Args:
+        phone_number: Phone number in any accepted format
+    
+    Returns:
+        str: Phone number in E.164 format (+254712345678)
+    
+    Raises:
+        serializers.ValidationError: If the phone number is invalid
+    """
+    try:
+        return normalize_phone_number(phone_number)
+    except InvalidPhoneNumberError as exc:
+        raise serializers.ValidationError(str(exc))
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):

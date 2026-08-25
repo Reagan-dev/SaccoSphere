@@ -5,6 +5,7 @@ import logging
 import secrets
 from datetime import timedelta
 
+from config.utils import InvalidPhoneNumberError, normalize_phone_number
 from django.conf import settings
 from django.utils import timezone
 
@@ -14,6 +15,8 @@ logger = logging.getLogger('saccosphere.otp')
 def format_phone_number(phone_number):
     """
     Normalize a Kenyan phone number to canonical E.164 format (+254XXXXXXXXX).
+
+    This function is deprecated. Use config.utils.normalize_phone_number() instead.
 
     Accepted input shapes (all normalize to +254712345678 for the example):
     - '+254712345678' (13 digits with country code and plus)
@@ -33,34 +36,10 @@ def format_phone_number(phone_number):
         OTPError: If the phone number format is invalid or doesn't start with
                   a Kenyan mobile prefix (7 or 1).
     """
-    # Strip all non-digit characters
-    clean_num = ''.join(c for c in phone_number if c.isdigit())
-
-    # Extract 9-digit national significant number based on input length
-    if len(clean_num) == 10 and clean_num.startswith('0'):
-        # 0712345678 -> 712345678 (drop leading 0)
-        national_num = clean_num[1:]
-    elif len(clean_num) == 9:
-        # 712345678 -> 712345678 (use as-is)
-        national_num = clean_num
-    elif len(clean_num) == 12 and clean_num.startswith('254'):
-        # 254712345678 -> 712345678 (drop country code)
-        national_num = clean_num[3:]
-    else:
-        raise OTPError(
-            f'Invalid phone number format. Expected 9, 10, or 12 digits, '
-            f'got {len(clean_num)} digits.'
-        )
-
-    # Validate Kenyan mobile prefix (7 or 1)
-    if national_num[0] not in ('7', '1'):
-        raise OTPError(
-            f'Invalid phone number prefix. Kenyan mobile numbers must start '
-            f'with 7 or 1, got {national_num[0]}.'
-        )
-
-    # Return canonical E.164 format
-    return f'+254{national_num}'
+    try:
+        return normalize_phone_number(phone_number)
+    except InvalidPhoneNumberError as exc:
+        raise OTPError(str(exc)) from exc
 
 
 class OTPError(Exception):

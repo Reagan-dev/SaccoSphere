@@ -16,6 +16,34 @@ class DarajaError(Exception):
         self.response_code = response_code
 
 
+def format_phone_for_daraja(e164_number: str) -> str:
+    """Format an E.164 phone number for Daraja API.
+    
+    Daraja expects phone numbers in 2547XXXXXXXX format (no leading +).
+    This function takes an already-normalized E.164 number and strips
+    the leading + sign.
+    
+    Args:
+        e164_number: Phone number in E.164 format (e.g., +254712345678)
+    
+    Returns:
+        str: Phone number in Daraja format (e.g., 254712345678)
+    
+    Raises:
+        ValueError: If the input is not a valid E.164 Kenyan number
+    """
+    if not e164_number or not isinstance(e164_number, str):
+        raise ValueError('Phone number must be a non-empty string')
+    
+    if not e164_number.startswith('+254'):
+        raise ValueError(
+            f'Expected E.164 format starting with +254, got: {e164_number}'
+        )
+    
+    # Strip the leading + to get Daraja format
+    return e164_number[1:]
+
+
 class DarajaClient:
     SANDBOX_BASE_URL = 'https://sandbox.safaricom.co.ke'
     LIVE_BASE_URL = 'https://api.safaricom.co.ke'

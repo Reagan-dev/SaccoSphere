@@ -34,7 +34,11 @@ from payments.providers.registry import get_provider_class
 from services.models import Loan, Saving
 
 from .fee_calculator import SaccoInvoiceFeeCalculator
-from .integrations.mpesa.daraja import DarajaClient, DarajaError
+from .integrations.mpesa.daraja import (
+    DarajaClient,
+    DarajaError,
+    format_phone_for_daraja,
+)
 from .integrations.mpesa.security import (
     is_replay_attack,
     is_safaricom_ip,
@@ -647,7 +651,7 @@ class STKPushView(APIView):
 
         try:
             daraja_response = DarajaClient().initiate_stk_push(
-                phone_number=data['phone_number'],
+                phone_number=format_phone_for_daraja(data['phone_number']),
                 amount=fee_breakdown['gross_amount'],
                 account_reference=reference,
                 description=description,
