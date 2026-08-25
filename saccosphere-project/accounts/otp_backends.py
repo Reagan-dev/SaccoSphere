@@ -177,29 +177,26 @@ class PhoneOTPBackend(BaseOTPBackend):
 
     def _normalize_phone(self, phone_number):
         """
-        Normalize phone number to 254XXXXXXXXX format.
+        Normalize phone number to E.164 format for Africa's Talking.
+
+        This function is deprecated. Use config.utils.normalize_phone_number() instead.
 
         Args:
             phone_number: Phone number in any format (e.g., +254123456789,
                          0123456789, 254123456789)
 
         Returns:
-            str: Phone number in 254XXXXXXXXX format
+            str: Phone number in E.164 format (+254XXXXXXXXX)
 
         Raises:
             OTPDeliveryError: If phone number is invalid
         """
-        # Remove all non-digit characters
-        clean_num = ''.join(c for c in phone_number if c.isdigit())
+        from config.utils import InvalidPhoneNumberError, normalize_phone_number
 
-        # If the user input was 254... (12 digits) or 07... (10 digits)
-        if len(clean_num) == 12 and clean_num.startswith('254'):
-            return f'+{clean_num}'
-        elif len(clean_num) == 9 and clean_num.startswith('7'):  # 07... stripped
-            return f'+254{clean_num}'
-
-        # Fallback: if it's already 13 digits starting with 254 but no plus
-        return f'+{clean_num}'
+        try:
+            return normalize_phone_number(phone_number)
+        except InvalidPhoneNumberError as exc:
+            raise OTPDeliveryError(str(exc)) from exc
 
     def _classify_error(self, response):
         """

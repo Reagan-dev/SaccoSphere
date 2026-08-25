@@ -5,7 +5,11 @@ from uuid import uuid4
 from django.conf import settings
 from django.db import transaction as db_transaction
 
-from .integrations.mpesa.daraja import DarajaClient, DarajaError
+from .integrations.mpesa.daraja import (
+    DarajaClient,
+    DarajaError,
+    format_phone_for_daraja,
+)
 from .models import MpesaTransaction, PaymentProvider, Transaction
 
 
@@ -63,7 +67,7 @@ def initiate_b2c_loan_disbursement(
 
     try:
         daraja_response = daraja_client.initiate_b2c(
-            phone_number=phone_number,
+            phone_number=format_phone_for_daraja(phone_number),
             amount=amount,
             occasion='Loan Disbursement',
             remarks=remarks,
