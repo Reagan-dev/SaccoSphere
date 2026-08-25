@@ -6,6 +6,10 @@ import os
 DEBUG = False
 SECRET_KEY = config('SECRET_KEY')
 
+# Railway proxy configuration
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+
 CORS_ALLOWED_ORIGINS = [
     url.strip() for url in os.environ.get("FRONTEND_URL", "").split(",") if url.strip()
 ]

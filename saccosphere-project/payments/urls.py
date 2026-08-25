@@ -83,12 +83,12 @@ urlpatterns = [
         name='mpesa-b2c-history',
     ),
     path(
-        'callback/mpesa/stk/',
+        'callback/mpesa/stk/<str:callback_token>/',
         MPesaSTKCallbackView.as_view(),
         name='mpesa-stk-callback',
     ),
     path(
-        'callback/mpesa/b2c/',
+        'callback/mpesa/b2c/<str:callback_token>/',
         B2CCallbackView.as_view(),
         name='mpesa-b2c-callback',
     ),

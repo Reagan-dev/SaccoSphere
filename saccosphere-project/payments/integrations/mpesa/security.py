@@ -57,13 +57,12 @@ from django.core.cache import cache
 
 logger = logging.getLogger('saccosphere.security')
 
-SAFARICOM_IP_RANGES = [
-    '196.201.212.0/24',
-    '196.201.213.0/24',
-    '196.201.214.0/24',
-    '196.201.214.0/23',
-    '192.168.201.0/24',  
-]
+
+def _get_safaricom_ip_ranges():
+    """Get Safaricom IP ranges based on environment."""
+    if settings.MPESA_ENVIRONMENT == 'sandbox':
+        return getattr(settings, 'MPESA_IP_RANGES_SANDBOX', [])
+    return getattr(settings, 'MPESA_IP_RANGES_PRODUCTION', [])
 
 def verify_mpesa_signature(request):
     """
@@ -132,13 +131,16 @@ def is_safaricom_ip(request):
         logger.warning('Invalid M-Pesa callback request IP: %s.', ip_address)
         return False
 
-    for ip_range in SAFARICOM_IP_RANGES:
+    ip_ranges = _get_safaricom_ip_ranges()
+    for ip_range in ip_ranges:
         if request_ip in ipaddress.ip_network(ip_range):
             return True
 
     logger.warning(
-        'M-Pesa callback request rejected from non-Safaricom IP: %s.',
+        'M-Pesa callback request rejected from non-Safaricom IP: %s. '
+        'Allowed ranges: %s',
         ip_address,
+        ip_ranges,
     )
     return False
 
@@ -157,10 +159,19 @@ def is_replay_attack(checkout_request_id):
 
 
 def _get_client_ip(request):
+    """Get the real client IP, accounting for Railway's proxy.
+    
+    Railway adds 1 proxy hop, so X-Forwarded-For format is:
+    [spoofed_ip, ..., real_client_ip, railway_proxy_ip]
+    
+    We take the rightmost IP (last value) as the real client IP,
+    since Railway appends the true client IP to the end of the chain.
+    """
     forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
     if forwarded_for:
-        return forwarded_for.split(',')[0].strip()
-
+        # Take the last IP in the chain (real client IP after Railway proxy)
+        ips = [ip.strip() for ip in forwarded_for.split(',')]
+        return ips[-1] if ips else request.META.get('REMOTE_ADDR')
     return request.META.get('REMOTE_ADDR')
 
 
