@@ -9,7 +9,7 @@ from notifications.tasks import notify_user_task
 
 from ledger.utils import create_ledger_entry
 
-from .models import Callback, MpesaTransaction, Transaction
+from .models import Callback, MpesaIdempotencyRecord, MpesaTransaction, Transaction
 from .providers.registry import get_provider_class
 
 
@@ -22,12 +22,32 @@ logger = logging.getLogger('saccosphere.payments')
     max_retries=3,
     default_retry_delay=60,
 )
-def process_stk_callback_task(
-    self,
-    checkout_request_id,
-    result_code,
-    callback_body,
-):
+def process_stk_callback_task(self, callback_id):
+    """Process M-Pesa STK callback from durable Callback storage."""
+    try:
+        callback = Callback.objects.select_related(
+            'transaction',
+            'transaction__mpesa',
+        ).get(id=callback_id)
+    except Callback.DoesNotExist:
+        logger.error('Callback not found: %s', callback_id)
+        return False
+
+    if callback.processed:
+        logger.info('Callback already processed: %s', callback_id)
+        return True
+
+    callback_body = callback.raw_payload
+    stk_callback = _get_stk_callback(callback_body)
+    checkout_request_id = stk_callback.get('CheckoutRequestID')
+    result_code = stk_callback.get('ResultCode')
+
+    if not checkout_request_id:
+        logger.error('Callback missing CheckoutRequestID: %s', callback_id)
+        callback.processing_error = 'Missing CheckoutRequestID'
+        callback.save(update_fields=['processing_error'])
+        return False
+
     try:
         with db_transaction.atomic():
             try:
@@ -46,6 +66,8 @@ def process_stk_callback_task(
                     'M-Pesa STK callback ignored. Transaction not found: %s.',
                     checkout_request_id,
                 )
+                callback.processing_error = 'Transaction not found'
+                callback.save(update_fields=['processing_error'])
                 return False
 
             transaction = mpesa_transaction.transaction
@@ -56,9 +78,25 @@ def process_stk_callback_task(
                     checkout_request_id,
                     transaction.reference,
                 )
+                callback.processed = True
+                callback.processed_at = timezone.now()
+                callback.save(update_fields=['processed', 'processed_at'])
                 return True
 
-            stk_callback = _get_stk_callback(callback_body)
+            # Check MpesaIdempotencyRecord before crediting
+            idempotency_record, created = MpesaIdempotencyRecord.objects.get_or_create(
+                checkout_request_id=checkout_request_id,
+            )
+            if not created:
+                logger.warning(
+                    'M-Pesa STK callback already processed via idempotency record: %s',
+                    checkout_request_id,
+                )
+                callback.processed = True
+                callback.processed_at = timezone.now()
+                callback.save(update_fields=['processed', 'processed_at'])
+                return True
+
             normalized_result_code = _normalize_result_code(result_code)
 
             if normalized_result_code == 0:
@@ -74,19 +112,25 @@ def process_stk_callback_task(
                     stk_callback,
                     normalized_result_code,
                 )
+
+            # Mark callback as processed
+            callback.processed = True
+            callback.processed_at = timezone.now()
+            callback.save(update_fields=['processed', 'processed_at'])
     except Exception as exc:
         countdown = 60 * 2 ** self.request.retries
         logger.warning(
             'M-Pesa STK callback processing failed for '
-            'checkout_request_id=%s. Retrying in %s seconds.',
-            checkout_request_id,
+            'callback_id=%s. Retrying in %s seconds.',
+            callback_id,
             countdown,
             exc_info=True,
         )
         raise self.retry(exc=exc, countdown=countdown)
 
     logger.info(
-        'M-Pesa STK callback processed for checkout_request_id=%s.',
+        'M-Pesa STK callback processed for callback_id=%s, checkout_request_id=%s.',
+        callback_id,
         checkout_request_id,
     )
     return True
@@ -223,12 +267,36 @@ def reconcile_pending_transactions():
     max_retries=3,
     default_retry_delay=60,
 )
-def process_b2c_callback_task(
-    self,
-    conversation_id,
-    result_code,
-    callback_body,
-):
+def process_b2c_callback_task(self, callback_id):
+    """Process M-Pesa B2C callback from durable Callback storage."""
+    try:
+        callback = Callback.objects.select_related(
+            'transaction',
+            'transaction__mpesa',
+        ).get(id=callback_id)
+    except Callback.DoesNotExist:
+        logger.error('Callback not found: %s', callback_id)
+        return False
+
+    if callback.processed:
+        logger.info('Callback already processed: %s', callback_id)
+        return True
+
+    callback_body = callback.raw_payload
+    result = (
+        callback_body.get('Result')
+        or callback_body.get('result')
+        or {}
+    )
+    conversation_id = result.get('ConversationID')
+    result_code = result.get('ResultCode')
+
+    if not conversation_id:
+        logger.error('Callback missing ConversationID: %s', callback_id)
+        callback.processing_error = 'Missing ConversationID'
+        callback.save(update_fields=['processing_error'])
+        return False
+
     try:
         with db_transaction.atomic():
             try:
@@ -248,6 +316,8 @@ def process_b2c_callback_task(
                     'M-Pesa B2C callback ignored. Transaction not found: %s.',
                     conversation_id,
                 )
+                callback.processing_error = 'Transaction not found'
+                callback.save(update_fields=['processing_error'])
                 return False
 
             transaction = mpesa_transaction.transaction
@@ -258,13 +328,25 @@ def process_b2c_callback_task(
                     conversation_id,
                     transaction.reference,
                 )
+                callback.processed = True
+                callback.processed_at = timezone.now()
+                callback.save(update_fields=['processed', 'processed_at'])
                 return True
 
-            result = (
-                callback_body.get('Result')
-                or callback_body.get('result')
-                or {}
+            # Check MpesaIdempotencyRecord before crediting
+            idempotency_record, created = MpesaIdempotencyRecord.objects.get_or_create(
+                checkout_request_id=conversation_id,
             )
+            if not created:
+                logger.warning(
+                    'M-Pesa B2C callback already processed via idempotency record: %s',
+                    conversation_id,
+                )
+                callback.processed = True
+                callback.processed_at = timezone.now()
+                callback.save(update_fields=['processed', 'processed_at'])
+                return True
+
             normalized_result_code = _normalize_result_code(result_code)
 
             if normalized_result_code == 0:
@@ -280,19 +362,25 @@ def process_b2c_callback_task(
                     result,
                     normalized_result_code,
                 )
+
+            # Mark callback as processed
+            callback.processed = True
+            callback.processed_at = timezone.now()
+            callback.save(update_fields=['processed', 'processed_at'])
     except Exception as exc:
         countdown = 60 * 2 ** self.request.retries
         logger.warning(
             'M-Pesa B2C callback processing failed for '
-            'conversation_id=%s. Retrying in %s seconds.',
-            conversation_id,
+            'callback_id=%s. Retrying in %s seconds.',
+            callback_id,
             countdown,
             exc_info=True,
         )
         raise self.retry(exc=exc, countdown=countdown)
 
     logger.info(
-        'M-Pesa B2C callback processed for conversation_id=%s.',
+        'M-Pesa B2C callback processed for callback_id=%s, conversation_id=%s.',
+        callback_id,
         conversation_id,
     )
     return True
