@@ -61,6 +61,7 @@ class Transaction(models.Model):
         PENDING = 'PENDING', 'Pending'
         PROCESSING = 'PROCESSING', 'Processing'
         SENT = 'SENT', 'Sent'
+        INITIATION_FAILED = 'INITIATION_FAILED', 'Initiation failed'
         COMPLETED = 'COMPLETED', 'Completed'
         FAILED = 'FAILED', 'Failed'
         AMOUNT_MISMATCH = 'AMOUNT_MISMATCH', 'Amount mismatch'
