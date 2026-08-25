@@ -9,6 +9,9 @@ from notifications.tasks import notify_user_task
 
 from ledger.utils import create_ledger_entry
 
+from django.conf import settings
+
+from .integrations.mpesa.daraja import DarajaClient
 from .models import Callback, MpesaIdempotencyRecord, MpesaTransaction, Transaction
 from .providers.registry import get_provider_class
 
@@ -386,6 +389,180 @@ def process_b2c_callback_task(self, callback_id):
     return True
 
 
+@shared_task(name='payments.tasks.reconcile_stale_mpesa_transactions')
+def reconcile_stale_mpesa_transactions():
+    """Reconcile stale M-Pesa STK transactions by querying Daraja status.
+    
+    Finds M-Pesa transactions stuck in PENDING/PROCESSING status
+    older than the configured threshold and queries Daraja for their
+    actual status. Uses the same idempotency checks as callback processing
+    to prevent duplicate crediting.
+    """
+    threshold_minutes = getattr(
+        settings,
+        'MPESA_RECONCILIATION_THRESHOLD_MINUTES',
+        5,
+    )
+    max_attempts = getattr(
+        settings,
+        'MPESA_MAX_RECONCILIATION_ATTEMPTS',
+        3,
+    )
+    
+    cutoff = timezone.now() - timezone.timedelta(minutes=threshold_minutes)
+    
+    # Find STK transactions in non-terminal states older than threshold
+    stale_stk_transactions = MpesaTransaction.objects.filter(
+        transaction_type=MpesaTransaction.TransactionType.STK_PUSH,
+        transaction__status__in={
+            Transaction.Status.PENDING,
+            Transaction.Status.PROCESSING,
+        },
+        created_at__lt=cutoff,
+        checkout_request_id__isnull=False,
+    ).select_related(
+        'transaction',
+        'transaction__user',
+        'related_saving',
+        'related_saving__membership',
+        'related_loan',
+        'related_loan__membership',
+    )
+    
+    reconciled_count = 0
+    failed_count = 0
+    
+    for mpesa_transaction in stale_stk_transactions:
+        transaction = mpesa_transaction.transaction
+        checkout_request_id = mpesa_transaction.checkout_request_id
+        
+        # Check reconciliation attempt counter
+        reconciliation_attempts = transaction.metadata.get(
+            'reconciliation_attempts',
+            0,
+        )
+        if reconciliation_attempts >= max_attempts:
+            logger.error(
+                'M-Pesa transaction %s (checkout_request_id=%s) has exceeded '
+                'max reconciliation attempts (%d). Manual review required.',
+                transaction.id,
+                checkout_request_id,
+                max_attempts,
+            )
+            failed_count += 1
+            continue
+        
+        # Skip if already processed via callback
+        if _callback_already_processed(mpesa_transaction, transaction):
+            logger.info(
+                'M-Pesa transaction %s already processed via callback, '
+                'skipping reconciliation.',
+                transaction.id,
+            )
+            continue
+        
+        try:
+            # Query Daraja for status
+            daraja_response = DarajaClient().query_stk_status(
+                checkout_request_id,
+            )
+            
+            # Process response using shared function
+            with db_transaction.atomic():
+                mpesa_transaction = MpesaTransaction.objects.select_for_update(
+                    of=('self',),
+                ).select_related('transaction').get(
+                    id=mpesa_transaction.id,
+                )
+                transaction = mpesa_transaction.transaction
+                
+                # Double-check status inside transaction
+                if _callback_already_processed(mpesa_transaction, transaction):
+                    logger.info(
+                        'M-Pesa transaction %s processed during reconciliation, '
+                        'skipping.',
+                        transaction.id,
+                    )
+                    continue
+                
+                # Process the response
+                processed = _process_daraja_status_response(
+                    mpesa_transaction,
+                    transaction,
+                    daraja_response,
+                )
+                
+                if processed:
+                    # Increment reconciliation attempt counter
+                    transaction.metadata = {
+                        **transaction.metadata,
+                        'reconciliation_attempts': reconciliation_attempts + 1,
+                        'last_reconciled_at': timezone.now().isoformat(),
+                    }
+                    transaction.save(update_fields=['metadata', 'updated_at'])
+                    reconciled_count += 1
+                    logger.info(
+                        'M-Pesa transaction %s reconciled successfully via '
+                        'Daraja query (checkout_request_id=%s).',
+                        transaction.id,
+                        checkout_request_id,
+                    )
+                else:
+                    # Increment attempt counter even on failure
+                    transaction.metadata = {
+                        **transaction.metadata,
+                        'reconciliation_attempts': reconciliation_attempts + 1,
+                        'last_reconciled_at': timezone.now().isoformat(),
+                        'last_reconciliation_error': (
+                            'Failed to process Daraja response'
+                        ),
+                    }
+                    transaction.save(update_fields=['metadata', 'updated_at'])
+                    logger.warning(
+                        'M-Pesa transaction %s reconciliation failed to '
+                        'process Daraja response (checkout_request_id=%s).',
+                        transaction.id,
+                        checkout_request_id,
+                    )
+                    
+        except Exception as exc:
+            # Increment attempt counter on error
+            with db_transaction.atomic():
+                mpesa_transaction = MpesaTransaction.objects.select_for_update(
+                    of=('self',),
+                ).select_related('transaction').get(
+                    id=mpesa_transaction.id,
+                )
+                transaction = mpesa_transaction.transaction
+                reconciliation_attempts = transaction.metadata.get(
+                    'reconciliation_attempts',
+                    0,
+                )
+                transaction.metadata = {
+                    **transaction.metadata,
+                    'reconciliation_attempts': reconciliation_attempts + 1,
+                    'last_reconciled_at': timezone.now().isoformat(),
+                    'last_reconciliation_error': str(exc),
+                }
+                transaction.save(update_fields=['metadata', 'updated_at'])
+            
+            logger.error(
+                'M-Pesa transaction %s reconciliation error: %s',
+                transaction.id,
+                exc,
+                exc_info=True,
+            )
+            failed_count += 1
+    
+    logger.info(
+        'M-Pesa reconciliation completed: %d reconciled, %d failed.',
+        reconciled_count,
+        failed_count,
+    )
+    
+    return {'reconciled': reconciled_count, 'failed': failed_count}
+
+
 def _callback_already_processed(mpesa_transaction, transaction):
     return (
         mpesa_transaction.callback_received
@@ -395,6 +572,87 @@ def _callback_already_processed(mpesa_transaction, transaction):
             Transaction.Status.AMOUNT_MISMATCH,
         }
     )
+
+
+def _process_daraja_status_response(
+    mpesa_transaction,
+    transaction,
+    daraja_response,
+):
+    """Process a Daraja query status response using the same logic as callbacks.
+    
+    This shared function is used by both:
+    - Callback processing (when Safaricom sends a callback)
+    - Reconciliation (when we query Daraja for stale transactions)
+    
+    It uses the same locking and idempotency checks to ensure
+    that a late callback and a reconciliation result can't both
+    credit the same payment.
+    """
+    result_code = daraja_response.get('ResponseCode')
+    if result_code is None:
+        logger.warning(
+            'Daraja response missing ResponseCode for transaction_id=%s',
+            transaction.id,
+        )
+        return False
+
+    # Normalize result code to integer
+    try:
+        normalized_result_code = int(result_code)
+    except (TypeError, ValueError):
+        logger.warning(
+            'Invalid M-Pesa result code in Daraja response: %s',
+            result_code,
+        )
+        return False
+
+    # Check idempotency before processing
+    checkout_request_id = mpesa_transaction.checkout_request_id
+    if checkout_request_id:
+        idempotency_record, created = MpesaIdempotencyRecord.objects.get_or_create(
+            checkout_request_id=checkout_request_id,
+        )
+        if not created:
+            logger.info(
+                'Transaction already processed via idempotency record: %s',
+                checkout_request_id,
+            )
+            return True
+
+    # Construct a callback-like structure for the existing processing functions
+    # Daraja query response structure differs from callback, but we can adapt
+    if normalized_result_code == 0:
+        # Success - construct callback-like structure
+        stk_callback = {
+            'ResultCode': result_code,
+            'ResultDesc': daraja_response.get('ResponseDescription', ''),
+            'CallbackMetadata': {
+                'Item': [
+                    {'Name': 'MpesaReceiptNumber', 'Value': daraja_response.get('MpesaReceiptNumber')},
+                    {'Name': 'Amount', 'Value': daraja_response.get('Amount')},
+                ]
+            },
+        }
+        _process_successful_callback(
+            mpesa_transaction,
+            transaction,
+            stk_callback,
+        )
+    else:
+        # Failure
+        stk_callback = {
+            'ResultCode': result_code,
+            'ResultDesc': daraja_response.get('ResponseDescription', 'M-Pesa payment failed.'),
+        }
+        _process_failed_callback(
+            mpesa_transaction,
+            transaction,
+            stk_callback,
+            normalized_result_code,
+        )
+
+    return True
 
 
 def _process_successful_callback(

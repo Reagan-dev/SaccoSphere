@@ -977,6 +977,53 @@ class STKStatusView(APIView):
             checkout_request_id=checkout_request_id,
             transaction__user=request.user,
         )
+        transaction = mpesa_transaction.transaction
+
+        # Trigger live query if transaction is PENDING past grace period
+        if (
+            transaction.status == Transaction.Status.PENDING
+            and not mpesa_transaction.callback_received
+            and mpesa_transaction.checkout_request_id
+        ):
+            grace_period_minutes = 2
+            cutoff = timezone.now() - timezone.timedelta(minutes=grace_period_minutes)
+            
+            if transaction.created_at < cutoff:
+                try:
+                    from .integrations.mpesa.daraja import DarajaClient
+                    from .tasks import _process_daraja_status_response
+                    
+                    daraja_response = DarajaClient().query_stk_status(
+                        checkout_request_id,
+                    )
+                    
+                    # Process response using shared function
+                    with db_transaction.atomic():
+                        mpesa_transaction = MpesaTransaction.objects.select_for_update(
+                            of=('self',),
+                        ).select_related('transaction').get(
+                            id=mpesa_transaction.id,
+                        )
+                        transaction = mpesa_transaction.transaction
+                        
+                        # Only process if still PENDING (race condition check)
+                        if transaction.status == Transaction.Status.PENDING:
+                            _process_daraja_status_response(
+                                mpesa_transaction,
+                                transaction,
+                                daraja_response,
+                            )
+                            
+                            # Refresh for response
+                            mpesa_transaction.refresh_from_db()
+                            transaction.refresh_from_db()
+                except Exception as exc:
+                    logger.warning(
+                        'Live STK status query failed for checkout_request_id=%s: %s',
+                        checkout_request_id,
+                        exc,
+                    )
+                    # Continue with local state if query fails
 
         return Response(
             {
