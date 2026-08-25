@@ -6,6 +6,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from kombu.exceptions import OperationalError as KombuOperationalError
+from requests.exceptions import Timeout as RequestsTimeout
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -356,6 +357,205 @@ class CallbackCreateViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         callback = Callback.objects.get()
         delay_mock.assert_called_once_with(str(callback.id))
+
+
+class STKPushInitiationHardeningTests(TestCase):
+    """Regression tests for local-first STK initiation recording."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='stk.hardening@example.com',
+            phone_number='254712900001',
+            password='StrongPass1',
+        )
+        self.sacco = Sacco.objects.create(
+            name='STK Hardening SACCO',
+            registration_number='STK-HARD-001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        self.membership = Membership.objects.create(
+            user=self.user,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number='STK-HARD-M-001',
+        )
+        self.savings_type = SavingsType.objects.create(
+            sacco=self.sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('100.00'),
+        )
+        self.saving = Saving.objects.create(
+            membership=self.membership,
+            savings_type=self.savings_type,
+            amount=Decimal('1000.00'),
+            total_contributions=Decimal('1000.00'),
+            status=Saving.Status.ACTIVE,
+        )
+
+    def _payload(self):
+        return {
+            'phone_number': '254712900001',
+            'amount': '1000.00',
+            'purpose': 'SAVING_DEPOSIT',
+            'sacco_id': str(self.sacco.id),
+            'saving_id': str(self.saving.id),
+        }
+
+    @patch('payments.views.DarajaClient.initiate_stk_push')
+    def test_stk_attempt_is_recorded_before_daraja_call(self, stk_mock):
+        self.client.force_authenticate(user=self.user)
+
+        def fake_stk_push(**_kwargs):
+            transaction = Transaction.objects.get()
+            mpesa_transaction = MpesaTransaction.objects.get(
+                transaction=transaction,
+            )
+            self.assertEqual(transaction.status, Transaction.Status.PENDING)
+            self.assertIsNone(transaction.external_reference)
+            self.assertIsNone(mpesa_transaction.checkout_request_id)
+            return {
+                'ResponseCode': '0',
+                'MerchantRequestID': 'MRID-STK-HARD-001',
+                'CheckoutRequestID': 'CRID-STK-HARD-001',
+            }
+
+        stk_mock.side_effect = fake_stk_push
+
+        response = self.client.post(
+            reverse('payments:mpesa-stk-push'),
+            self._payload(),
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        transaction = Transaction.objects.get()
+        mpesa_transaction = MpesaTransaction.objects.get(
+            transaction=transaction,
+        )
+        self.assertEqual(
+            transaction.external_reference,
+            'CRID-STK-HARD-001',
+        )
+        self.assertEqual(
+            transaction.metadata['initiation_status'],
+            'ACCEPTED',
+        )
+        self.assertEqual(
+            mpesa_transaction.merchant_request_id,
+            'MRID-STK-HARD-001',
+        )
+        self.assertEqual(
+            mpesa_transaction.checkout_request_id,
+            'CRID-STK-HARD-001',
+        )
+
+    @patch('payments.views.DarajaClient.initiate_stk_push')
+    def test_daraja_error_marks_local_attempt_failed(self, stk_mock):
+        self.client.force_authenticate(user=self.user)
+        stk_mock.side_effect = DarajaError('Rejected by M-Pesa', '1')
+
+        response = self.client.post(
+            reverse('payments:mpesa-stk-push'),
+            self._payload(),
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_502_BAD_GATEWAY)
+        transaction = Transaction.objects.get()
+        mpesa_transaction = MpesaTransaction.objects.get(
+            transaction=transaction,
+        )
+        self.assertEqual(
+            transaction.status,
+            Transaction.Status.INITIATION_FAILED,
+        )
+        self.assertEqual(transaction.metadata['initiation_status'], 'FAILED')
+        self.assertEqual(mpesa_transaction.result_code, '1')
+        self.assertEqual(
+            mpesa_transaction.result_description,
+            'Rejected by M-Pesa',
+        )
+
+    @patch('payments.views.DarajaClient.initiate_stk_push')
+    def test_daraja_timeout_surfaces_unknown_recorded_status(self, stk_mock):
+        self.client.force_authenticate(user=self.user)
+
+        def raise_timeout(**_kwargs):
+            try:
+                raise RequestsTimeout('read timed out')
+            except RequestsTimeout as exc:
+                raise DarajaError(
+                    'M-Pesa request timed out. Please try again.',
+                ) from exc
+
+        stk_mock.side_effect = raise_timeout
+
+        response = self.client.post(
+            reverse('payments:mpesa-stk-push'),
+            self._payload(),
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        transaction = Transaction.objects.get()
+        self.assertEqual(
+            transaction.status,
+            Transaction.Status.INITIATION_FAILED,
+        )
+        self.assertEqual(transaction.metadata['initiation_status'], 'UNKNOWN')
+        self.assertTrue(
+            transaction.metadata['initiation_error']['status_unknown'],
+        )
+        self.assertIn('will be reconciled', response.data['detail'])
+
+    @patch('payments.views.DarajaClient.initiate_stk_push')
+    def test_duplicate_stk_push_reuses_existing_local_attempt(self, stk_mock):
+        self.client.force_authenticate(user=self.user)
+        provider = PaymentProvider.objects.create(
+            name='M-Pesa',
+            provider_type=PaymentProvider.ProviderType.MPESA,
+            is_active=True,
+        )
+        transaction = Transaction.objects.create(
+            provider=provider,
+            user=self.user,
+            reference='STK-HARD-DUPLICATE-001',
+            external_reference='CRID-STK-HARD-DUPLICATE',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=Decimal('1000.00'),
+            gross_amount=Decimal('1010.00'),
+            platform_fee=Decimal('10.00'),
+            fee_rate=Decimal('0.010000'),
+            sacco=self.sacco,
+            fee_amount=Decimal('10.00'),
+            status=Transaction.Status.PENDING,
+            description='SaccoSphere saving deposit',
+        )
+        MpesaTransaction.objects.create(
+            transaction=transaction,
+            phone_number='254712900001',
+            merchant_request_id='MRID-STK-HARD-DUPLICATE',
+            checkout_request_id='CRID-STK-HARD-DUPLICATE',
+            related_saving=self.saving,
+        )
+
+        response = self.client.post(
+            reverse('payments:mpesa-stk-push'),
+            self._payload(),
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['duplicate'])
+        self.assertEqual(
+            response.data['checkout_request_id'],
+            'CRID-STK-HARD-DUPLICATE',
+        )
+        self.assertEqual(Transaction.objects.count(), 1)
+        stk_mock.assert_not_called()
 
 
 class STKStatusViewTests(TestCase):

@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ from django.core.cache import cache
 from django.db import transaction as db_transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from drf_yasg import openapi
@@ -15,6 +17,7 @@ from drf_yasg.utils import swagger_auto_schema
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
+from requests.exceptions import Timeout as RequestsTimeout
 from rest_framework import serializers, status
 from rest_framework.generics import CreateAPIView, ListAPIView, RetrieveAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -546,6 +549,7 @@ class MpesaTransactionDetailView(StandardResponseMixin, RetrieveAPIView):
 
 
 class STKPushView(APIView):
+    IDEMPOTENCY_WINDOW = timedelta(minutes=2)
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
@@ -571,8 +575,6 @@ class STKPushView(APIView):
             transaction_type = Transaction.TransactionType.LOAN_REPAYMENT
             description = 'SaccoSphere loan repayment'
 
-        reference = self._build_reference()
-
         net_amount = data['amount']
         business_type = (
             'deposit'
@@ -582,6 +584,39 @@ class STKPushView(APIView):
         fee_breakdown = SaccoInvoiceFeeCalculator().calculate(
             business_type,
             net_amount,
+        )
+        sacco = (
+            related_saving.membership.sacco
+            if related_saving
+            else related_loan.membership.sacco
+        )
+
+        existing_mpesa = self._get_existing_stk_attempt(
+            request.user,
+            data,
+            fee_breakdown,
+            transaction_type,
+            related_saving,
+            related_loan,
+        )
+        if existing_mpesa is not None:
+            return self._existing_stk_response(
+                existing_mpesa,
+                fee_breakdown,
+                transaction_type,
+            )
+
+        reference = self._build_reference()
+        payment, mpesa_transaction = self._create_local_stk_attempt(
+            user=request.user,
+            data=data,
+            transaction_type=transaction_type,
+            description=description,
+            reference=reference,
+            fee_breakdown=fee_breakdown,
+            sacco=sacco,
+            related_saving=related_saving,
+            related_loan=related_loan,
         )
 
         try:
@@ -593,6 +628,14 @@ class STKPushView(APIView):
                 callback_path='/api/v1/payments/callback/mpesa/stk/',
             )
         except DarajaError as exc:
+            is_timeout = isinstance(exc.__cause__, RequestsTimeout)
+            self._mark_stk_initiation_failed(
+                payment,
+                mpesa_transaction,
+                exc,
+                status_unknown=is_timeout,
+            )
+            payment.refresh_from_db()
             logger.error(
                 'M-Pesa STK push failed for user %s: %s (code=%s)',
                 request.user.email,
@@ -600,64 +643,63 @@ class STKPushView(APIView):
                 exc.response_code,
                 exc_info=True,
             )
+            if is_timeout:
+                return Response(
+                    {
+                        'detail': (
+                            'M-Pesa STK initiation status is unknown. '
+                            'The attempt was recorded and will be reconciled.'
+                        ),
+                        'transaction_id': str(payment.id),
+                        'status': payment.status,
+                    },
+                    status=status.HTTP_202_ACCEPTED,
+                )
+
             return Response(
                 {
                     'error': exc.message,
                     'response_code': exc.response_code,
+                    'transaction_id': str(payment.id),
+                    'status': payment.status,
                 },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
         merchant_request_id = daraja_response.get('MerchantRequestID')
         checkout_request_id = daraja_response.get('CheckoutRequestID')
-        sacco = (
-            related_saving.membership.sacco
-            if related_saving
-            else related_loan.membership.sacco
+        if not merchant_request_id or not checkout_request_id:
+            exc = DarajaError(
+                'M-Pesa STK response did not include checkout identifiers.',
+                daraja_response.get('ResponseCode'),
+            )
+            self._mark_stk_initiation_failed(
+                payment,
+                mpesa_transaction,
+                exc,
+                daraja_response=daraja_response,
+            )
+            payment.refresh_from_db()
+            return Response(
+                {
+                    'error': exc.message,
+                    'response_code': exc.response_code,
+                    'transaction_id': str(payment.id),
+                    'status': payment.status,
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        self._mark_stk_initiation_accepted(
+            payment,
+            mpesa_transaction,
+            daraja_response,
+            merchant_request_id,
+            checkout_request_id,
         )
 
-        with db_transaction.atomic():
-            provider = self._get_mpesa_provider()
-            payment = Transaction.objects.create(
-                provider=provider,
-                user=request.user,
-                reference=reference,
-                external_reference=checkout_request_id,
-                transaction_type=transaction_type,
-                amount=fee_breakdown['net_amount'],
-                gross_amount=fee_breakdown['gross_amount'],
-                platform_fee=fee_breakdown['platform_fee'],
-                fee_rate=fee_breakdown['fee_rate'],
-                sacco=sacco,
-                fee_amount=fee_breakdown['platform_fee'],
-                status=Transaction.Status.PENDING,
-                description=description,
-                metadata={
-                    'purpose': data['purpose'],
-                    'sacco_id': str(data['sacco_id']),
-                    'amount': str(fee_breakdown['net_amount']),
-                    'net_amount': str(fee_breakdown['net_amount']),
-                    'platform_fee': str(fee_breakdown['platform_fee']),
-                    'gross_amount': str(fee_breakdown['gross_amount']),
-                    'fee_rate': str(fee_breakdown['fee_rate']),
-                    'daraja_response': daraja_response,
-                },
-            )
-            MpesaTransaction.objects.create(
-                transaction=payment,
-                phone_number=data['phone_number'],
-                merchant_request_id=merchant_request_id,
-                checkout_request_id=checkout_request_id,
-                related_saving=related_saving,
-                related_loan=related_loan,
-                related_instalment_number=data.get('instalment_number'),
-            )
-
         # Build clear message showing total charge breakdown
-        if transaction_type == Transaction.TransactionType.DEPOSIT:
-            amount_description = 'saving deposit'
-        else:
-            amount_description = 'loan repayment'
+        amount_description = self._amount_description(transaction_type)
 
         message = (
             f'Check your phone to enter your M-Pesa PIN. '
@@ -676,6 +718,213 @@ class STKPushView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+    def _get_existing_stk_attempt(
+        self,
+        user,
+        data,
+        fee_breakdown,
+        transaction_type,
+        related_saving,
+        related_loan,
+    ):
+        cutoff = timezone.now() - self.IDEMPOTENCY_WINDOW
+        terminal_statuses = [
+            Transaction.Status.COMPLETED,
+            Transaction.Status.FAILED,
+            Transaction.Status.AMOUNT_MISMATCH,
+            Transaction.Status.REVERSED,
+        ]
+        queryset = MpesaTransaction.objects.select_related(
+            'transaction',
+        ).filter(
+            transaction__user=user,
+            transaction__transaction_type=transaction_type,
+            transaction__amount=fee_breakdown['net_amount'],
+            transaction__created_at__gte=cutoff,
+            phone_number=data['phone_number'],
+        ).exclude(transaction__status__in=terminal_statuses)
+
+        if related_saving is not None:
+            queryset = queryset.filter(related_saving=related_saving)
+        else:
+            queryset = queryset.filter(
+                related_loan=related_loan,
+                related_instalment_number=data.get('instalment_number'),
+            )
+
+        return queryset.order_by('-created_at').first()
+
+    def _existing_stk_response(
+        self,
+        mpesa_transaction,
+        fee_breakdown,
+        transaction_type,
+    ):
+        payment = mpesa_transaction.transaction
+        amount_description = self._amount_description(transaction_type)
+        message = (
+            f'An M-Pesa prompt is already active for this '
+            f'{amount_description}.'
+        )
+        response_status = (
+            status.HTTP_200_OK
+            if mpesa_transaction.checkout_request_id
+            else status.HTTP_202_ACCEPTED
+        )
+
+        return Response(
+            {
+                'transaction_id': str(payment.id),
+                'checkout_request_id': mpesa_transaction.checkout_request_id,
+                'merchant_request_id': mpesa_transaction.merchant_request_id,
+                'amount': str(fee_breakdown['net_amount']),
+                'gross_amount': str(fee_breakdown['gross_amount']),
+                'platform_fee': str(fee_breakdown['platform_fee']),
+                'status': payment.status,
+                'duplicate': True,
+                'message': message,
+            },
+            status=response_status,
+        )
+
+    def _create_local_stk_attempt(
+        self,
+        *,
+        user,
+        data,
+        transaction_type,
+        description,
+        reference,
+        fee_breakdown,
+        sacco,
+        related_saving,
+        related_loan,
+    ):
+        with db_transaction.atomic():
+            provider = self._get_mpesa_provider()
+            payment = Transaction.objects.create(
+                provider=provider,
+                user=user,
+                reference=reference,
+                transaction_type=transaction_type,
+                amount=fee_breakdown['net_amount'],
+                gross_amount=fee_breakdown['gross_amount'],
+                platform_fee=fee_breakdown['platform_fee'],
+                fee_rate=fee_breakdown['fee_rate'],
+                sacco=sacco,
+                fee_amount=fee_breakdown['platform_fee'],
+                status=Transaction.Status.PENDING,
+                description=description,
+                metadata={
+                    'purpose': data['purpose'],
+                    'sacco_id': str(data['sacco_id']),
+                    'amount': str(fee_breakdown['net_amount']),
+                    'net_amount': str(fee_breakdown['net_amount']),
+                    'platform_fee': str(fee_breakdown['platform_fee']),
+                    'gross_amount': str(fee_breakdown['gross_amount']),
+                    'fee_rate': str(fee_breakdown['fee_rate']),
+                    'initiation_status': 'LOCAL_RECORDED',
+                },
+            )
+            mpesa_transaction = MpesaTransaction.objects.create(
+                transaction=payment,
+                phone_number=data['phone_number'],
+                related_saving=related_saving,
+                related_loan=related_loan,
+                related_instalment_number=data.get('instalment_number'),
+            )
+
+        return payment, mpesa_transaction
+
+    def _mark_stk_initiation_accepted(
+        self,
+        payment,
+        mpesa_transaction,
+        daraja_response,
+        merchant_request_id,
+        checkout_request_id,
+    ):
+        with db_transaction.atomic():
+            payment = Transaction.objects.select_for_update().get(
+                id=payment.id,
+            )
+            mpesa_transaction = MpesaTransaction.objects.select_for_update().get(
+                id=mpesa_transaction.id,
+            )
+            payment.external_reference = checkout_request_id
+            payment.metadata = {
+                **payment.metadata,
+                'initiation_status': 'ACCEPTED',
+                'daraja_response': daraja_response,
+            }
+            payment.save(
+                update_fields=[
+                    'external_reference',
+                    'metadata',
+                    'updated_at',
+                ]
+            )
+            mpesa_transaction.merchant_request_id = merchant_request_id
+            mpesa_transaction.checkout_request_id = checkout_request_id
+            mpesa_transaction.save(
+                update_fields=[
+                    'merchant_request_id',
+                    'checkout_request_id',
+                    'updated_at',
+                ]
+            )
+
+    def _mark_stk_initiation_failed(
+        self,
+        payment,
+        mpesa_transaction,
+        exc,
+        *,
+        status_unknown=False,
+        daraja_response=None,
+    ):
+        metadata = {
+            **payment.metadata,
+            'initiation_status': (
+                'UNKNOWN' if status_unknown else 'FAILED'
+            ),
+            'initiation_error': {
+                'message': exc.message,
+                'response_code': exc.response_code,
+                'status_unknown': status_unknown,
+            },
+        }
+        if daraja_response is not None:
+            metadata['daraja_response'] = daraja_response
+
+        with db_transaction.atomic():
+            payment = Transaction.objects.select_for_update().get(
+                id=payment.id,
+            )
+            mpesa_transaction = MpesaTransaction.objects.select_for_update().get(
+                id=mpesa_transaction.id,
+            )
+            payment.status = Transaction.Status.INITIATION_FAILED
+            payment.metadata = metadata
+            payment.save(
+                update_fields=['status', 'metadata', 'updated_at']
+            )
+            mpesa_transaction.result_code = exc.response_code
+            mpesa_transaction.result_description = exc.message
+            mpesa_transaction.save(
+                update_fields=[
+                    'result_code',
+                    'result_description',
+                    'updated_at',
+                ]
+            )
+
+    def _amount_description(self, transaction_type):
+        if transaction_type == Transaction.TransactionType.DEPOSIT:
+            return 'saving deposit'
+
+        return 'loan repayment'
 
     def _build_reference(self):
         return f'SS-{uuid4().hex[:20].upper()}'
