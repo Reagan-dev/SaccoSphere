@@ -32,7 +32,7 @@ from payments.tasks import (
 )
 from saccomanagement.models import Role
 from saccomembership.models import Membership
-from services.models import Loan, LoanType, RepaymentSchedule, Saving
+from services.models import Guarantor, Loan, LoanType, RepaymentSchedule, Saving
 from services.models import SavingsType
 
 from payments.integrations.mpesa.daraja import DarajaClient, DarajaError
@@ -1064,6 +1064,7 @@ class B2CDisbursementHardeningTests(TestCase):
             sector=Sacco.Sector.FINANCE,
             county='Nairobi',
             membership_type=Sacco.MembershipType.OPEN,
+            payment_ready=True,
         )
         self.membership = Membership.objects.create(
             user=self.user,
@@ -1086,6 +1087,7 @@ class B2CDisbursementHardeningTests(TestCase):
             term_months=6,
             outstanding_balance=Decimal('0.00'),
             status=Loan.Status.APPROVED,
+            disbursement_status=Loan.DisbursementStatus.PENDING,
         )
         self.provider = PaymentProvider.objects.create(
             name='M-Pesa',
@@ -1125,6 +1127,63 @@ class B2CDisbursementHardeningTests(TestCase):
         self.assertEqual(transaction.status, Transaction.Status.FAILED)
         self.assertIsNone(mpesa_transaction.conversation_id)
         self.assertEqual(self.loan.status, Loan.Status.APPROVED)
+
+    @patch('payments.disbursements.DarajaClient')
+    def test_b2c_disbursement_blocked_by_pending_guarantors(
+        self,
+        client_mock,
+    ):
+        """Disbursement should fail when loan has pending guarantor approvals."""
+        client = client_mock.return_value
+        client._build_callback_url.return_value = 'https://callback.test/b2c'
+
+        # Create a pending guarantor
+        guarantor_user = User.objects.create_user(
+            email='guarantor@test.com',
+            phone_number='254712200002',
+        )
+        Guarantor.objects.create(
+            loan=self.loan,
+            guarantor=guarantor_user,
+            status=Guarantor.Status.PENDING,
+            guarantee_amount=Decimal('250.00'),
+        )
+
+        success, payload, http_status = initiate_b2c_loan_disbursement(
+            loan=self.loan,
+            phone_number='254712200001',
+            amount=Decimal('500.00'),
+            remarks='Loan Disbursement',
+        )
+
+        self.assertFalse(success)
+        self.assertEqual(http_status, 400)
+        self.assertIn(
+            'pending guarantor approvals',
+            payload['error'],
+        )
+        # Verify Daraja was never called
+        client.initiate_b2c.assert_not_called()
+
+    def test_b2c_disbursement_proceeds_with_approved_guarantors(self):
+        """Disbursement should succeed when all guarantors are approved."""
+        # Create an approved guarantor
+        guarantor_user = User.objects.create_user(
+            email='guarantor@test.com',
+            phone_number='254712200002',
+        )
+        Guarantor.objects.create(
+            loan=self.loan,
+            guarantor=guarantor_user,
+            status=Guarantor.Status.APPROVED,
+            guarantee_amount=Decimal('250.00'),
+        )
+
+        # Check that no pending guarantors exist
+        pending_count = self.loan.guarantors.filter(
+            status=Guarantor.Status.PENDING
+        ).count()
+        self.assertEqual(pending_count, 0)
 
     def test_b2c_callback_duplicate_delivery_does_not_double_disburse(self):
         transaction = Transaction.objects.create(
