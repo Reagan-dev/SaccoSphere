@@ -101,11 +101,11 @@ def persist_loan_repayment_schedule(loan):
 
 def initiate_loan_disbursement(loan, admin_user=None, request=None):
     """
-    Validate and initiate fraud-aware M-Pesa B2C disbursement.
+    Validate and initiate SACCO-specific M-Pesa B2C disbursement.
 
     Returns (success: bool, payload: dict, http_status: int).
     """
-    from services.disbursement_service import DisbursementService
+    from payments.disbursements import initiate_b2c_loan_disbursement
 
     member = loan.membership.user
     if not member.phone_number:
@@ -115,15 +115,12 @@ def initiate_loan_disbursement(loan, admin_user=None, request=None):
             ),
         }, 400
 
-    try:
-        payload = DisbursementService().initiate(
-            loan=loan,
-            admin_user=admin_user,
-            request=request,
-        )
-    except ValueError as exc:
-        return False, {
-            'detail': str(exc),
-        }, 400
-
-    return True, payload, 201
+    # Use SACCO-specific B2C disbursement path with admin context for audit logging
+    return initiate_b2c_loan_disbursement(
+        loan=loan,
+        phone_number=member.phone_number,
+        amount=loan.amount,
+        remarks='Loan Disbursement',
+        admin_user=admin_user,
+        request=request,
+    )

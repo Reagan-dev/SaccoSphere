@@ -29,8 +29,6 @@ from config.response import StandardResponseMixin
 from django.conf import settings
 from guarantor.utils import check_loan_guarantors_complete
 from payments.disbursements import initiate_b2c_loan_disbursement
-from payments.providers import get_psp_provider
-from payments.providers.registry import get_provider_class
 from services.models import Loan, Saving
 
 from .fee_calculator import SaccoInvoiceFeeCalculator
@@ -232,244 +230,63 @@ class B2CDisbursementSerializer(serializers.Serializer):
 
 
 class DepositInitiateView(APIView):
-    """Initiate a PSP-backed deposit for the authenticated user."""
+    """Deprecated: Use POST /api/v1/payments/mpesa/stk-push/ instead."""
 
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_id='deposit_initiate_deprecated',
+        deprecated=True,
+        responses={410: 'Gone - Use /api/v1/payments/mpesa/stk-push/'},
+    )
     def post(self, request):
-        serializer = DepositRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-        sacco = data['sacco']
-        if not serializer.validate_membership(request.user):
-            return Response(
-                {
-                    'detail': (
-                        'You must have an approved membership in this SACCO '
-                        'before making a deposit.'
-                    ),
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        provider = get_psp_provider(sacco=sacco)
-        provider_record, _ = PaymentProvider.objects.get_or_create(
-            name=provider.provider_name,
-            defaults={
-                'provider_type': PaymentProvider.ProviderType.INTERNAL,
-                'is_active': True,
-            },
+        logger.warning(
+            'Deprecated endpoint hit: POST /api/v1/payments/deposit/ '
+            'by user %s. Use POST /api/v1/payments/mpesa/stk-push/ instead.',
+            request.user.id,
         )
-
-        transaction = Transaction(
-            provider=provider_record,
-            user=request.user,
-            reference=f'SS-{uuid4().hex[:20].upper()}',
-            transaction_type=Transaction.TransactionType.DEPOSIT,
-            amount=data['net_amount'],
-            gross_amount=data['gross_amount'],
-            platform_fee=data['platform_fee'],
-            fee_rate=data['fee_rate'],
-            sacco=sacco,
-            fee_amount=data['platform_fee'],
-            currency='KES',
-            status=Transaction.Status.PENDING,
-            description='Deposit initiated',
-            metadata={
-                'sacco_id': str(sacco.id),
-                'amount': str(data['net_amount']),
-                'net_amount': str(data['net_amount']),
-                'platform_fee': str(data['platform_fee']),
-                'gross_amount': str(data['gross_amount']),
-                'fee_rate': str(data['fee_rate']),
-            },
-        )
-
-        try:
-            with db_transaction.atomic():
-                transaction.save()
-                result = provider.create_checkout(
-                    transaction_id=str(transaction.id),
-                    phone=data['phone_number'],
-                    gross_amount=data['gross_amount'],
-                    sacco=sacco,
-                    net_amount=data['net_amount'],
-                    platform_fee=data['platform_fee'],
-                )
-                transaction.external_reference = result.provider_reference
-                transaction.save(
-                    update_fields=['external_reference', 'updated_at'],
-                )
-        except Exception:
-            logger.exception(
-                'Deposit initiation failed for transaction %s',
-                transaction.id,
-            )
-            try:
-                with db_transaction.atomic():
-                    transaction.status = Transaction.Status.FAILED
-                    transaction.save(update_fields=['status', 'updated_at'])
-            except Exception:
-                logger.exception(
-                    'Failed to update transaction %s to FAILED',
-                    transaction.id,
-                )
-            return Response(
-                {'detail': 'Deposit initiation failed.'},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        # Format breakdown for frontend confirmation
-        def fmt(v):
-            return f"KES {v:,.2f}"
-
         return Response(
             {
-                'transaction_id': str(transaction.id),
-                'amount_depositing': fmt(data['net_amount']),
-                'platform_fee': fmt(data['platform_fee']),
-                'total_charged': fmt(data['gross_amount']),
-                'savings_credited': fmt(data['net_amount']),
-                'status': transaction.status,
+                'detail': (
+                    'This endpoint is deprecated. '
+                    'Use POST /api/v1/payments/mpesa/stk-push/ for M-Pesa STK push deposits.'
+                ),
+                'alternative': '/api/v1/payments/mpesa/stk-push/',
             },
-            status=status.HTTP_200_OK,
+            status=status.HTTP_410_GONE,
         )
 
 
 class WithdrawalInitiateView(APIView):
-    """Initiate a PSP-backed savings withdrawal for the authenticated user."""
+    """Deprecated: Use POST /api/v1/payments/mpesa/b2c/disburse/ instead."""
 
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_id='withdrawal_initiate_deprecated',
+        deprecated=True,
+        responses={410: 'Gone - Use /api/v1/payments/mpesa/b2c/disburse/'},
+    )
     def post(self, request):
-        serializer = WithdrawalRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        is_valid, detail = serializer.validate_withdrawal_context(
-            request.user,
+        logger.warning(
+            'Deprecated endpoint hit: POST /api/v1/payments/withdrawal/ '
+            'by user %s. Use POST /api/v1/payments/mpesa/b2c/disburse/ instead.',
+            request.user.id,
         )
-        if not is_valid:
-            return Response(
-                {'detail': detail},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        data = serializer.validated_data
-        sacco = data['sacco']
-        saving = data['saving']
-        provider = get_psp_provider(sacco=sacco)
-        provider_record, _ = PaymentProvider.objects.get_or_create(
-            name=provider.provider_name,
-            defaults={
-                'provider_type': PaymentProvider.ProviderType.INTERNAL,
-                'is_active': True,
-            },
-        )
-
-        transaction = Transaction(
-            provider=provider_record,
-            user=request.user,
-            reference=f'SS-WD-{uuid4().hex[:18].upper()}',
-            transaction_type=Transaction.TransactionType.WITHDRAWAL,
-            amount=data['net_amount'],
-            gross_amount=data['gross_amount'],
-            platform_fee=data['platform_fee'],
-            fee_rate=data['fee_rate'],
-            sacco=sacco,
-            fee_amount=data['platform_fee'],
-            currency='KES',
-            status=Transaction.Status.PENDING,
-            description='Savings withdrawal initiated',
-            metadata={
-                'sacco_id': str(sacco.id),
-                'saving_id': str(saving.id),
-                'amount': str(data['net_amount']),
-                'net_amount': str(data['net_amount']),
-                'platform_fee': str(data['platform_fee']),
-                'gross_amount': str(data['gross_amount']),
-                'fee_rate': str(data['fee_rate']),
-            },
-        )
-
-        try:
-            with db_transaction.atomic():
-                transaction.save()
-                result = provider.disburse(
-                    transaction_id=str(transaction.id),
-                    phone=data['phone_number'],
-                    amount=data['net_amount'],
-                    reference=f'WD-{transaction.id}',
-                    sacco=sacco,
-                    saving=saving,
-                )
-                if not result.success:
-                    transaction.status = Transaction.Status.FAILED
-                    transaction.metadata = {
-                        **transaction.metadata,
-                        'provider_error': result.error_message,
-                        'provider_response': result.raw_response,
-                    }
-                    transaction.save(
-                        update_fields=[
-                            'status',
-                            'metadata',
-                            'updated_at',
-                        ],
-                    )
-                    return Response(
-                        {'detail': 'Withdrawal initiation failed.'},
-                        status=status.HTTP_502_BAD_GATEWAY,
-                    )
-
-                transaction.status = Transaction.Status.SENT
-                transaction.external_reference = result.provider_reference
-                transaction.metadata = {
-                    **transaction.metadata,
-                    'provider_response': result.raw_response,
-                }
-                transaction.save(
-                    update_fields=[
-                        'status',
-                        'external_reference',
-                        'metadata',
-                        'updated_at',
-                    ],
-                )
-        except Exception:
-            logger.exception(
-                'Withdrawal initiation failed for transaction %s',
-                transaction.id,
-            )
-            try:
-                with db_transaction.atomic():
-                    transaction.status = Transaction.Status.FAILED
-                    transaction.save(update_fields=['status', 'updated_at'])
-            except Exception:
-                logger.exception(
-                    'Failed to update transaction %s to FAILED',
-                    transaction.id,
-                )
-            return Response(
-                {'detail': 'Withdrawal initiation failed.'},
-                status=status.HTTP_502_BAD_GATEWAY,
-            )
-
-        def fmt(value):
-            return f"KES {value:,.2f}"
-
         return Response(
             {
-                'transaction_id': str(transaction.id),
-                'amount_requested': fmt(data['gross_amount']),
-                'platform_fee': fmt(data['platform_fee']),
-                'amount_to_member': fmt(data['net_amount']),
-                'status': transaction.status,
+                'detail': (
+                    'This endpoint is deprecated. '
+                    'Use POST /api/v1/payments/mpesa/b2c/disburse/ for M-Pesa B2C disbursements.'
+                ),
+                'alternative': '/api/v1/payments/mpesa/b2c/disburse/',
             },
-            status=status.HTTP_201_CREATED,
+            status=status.HTTP_410_GONE,
         )
 
 
 class PaymentCallbackView(APIView):
-    """Receive a PSP callback and queue asynchronous processing."""
+    """Deprecated: Use POST /api/v1/payments/callback/mpesa/stk/{token}/ or POST /api/v1/payments/callback/mpesa/b2c/{token}/ instead."""
 
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -478,53 +295,30 @@ class PaymentCallbackView(APIView):
     def dispatch(self, request, *args, **kwargs):
         return super().dispatch(request, *args, **kwargs)
 
+    @swagger_auto_schema(
+        operation_id='payment_callback_deprecated',
+        deprecated=True,
+        responses={410: 'Gone - Use M-Pesa specific callback endpoints'},
+    )
     def post(self, request):
-        provider = get_psp_provider()
-        provider_name = provider.provider_name
-
-        try:
-            is_valid = provider.verify_webhook(request)
-        except Exception as exc:
-            logger.warning(
-                'Payment callback verification raised an exception for provider %s: %s',
-                provider_name,
-                exc,
-            )
-            return Response({'detail': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
-
-        if not is_valid:
-            logger.warning('Payment callback rejected by provider %s', provider_name)
-            return Response({'detail': 'Forbidden'}, status=status.HTTP_403_FORBIDDEN)
-
-        payload = request.data if hasattr(request, 'data') else {}
-        payload_preview = str(payload)[:500]
-        logger.info(
-            'Payment callback received from provider %s with payload %s',
-            provider_name,
-            payload_preview,
+        logger.warning(
+            'Deprecated endpoint hit: POST /api/v1/payments/callback/ '
+            'Use M-Pesa specific callback endpoints instead.'
         )
-
-        provider_record, _ = PaymentProvider.objects.get_or_create(
-            name=provider_name,
-            defaults={
-                'provider_type': PaymentProvider.ProviderType.INTERNAL,
-                'is_active': True,
+        return Response(
+            {
+                'detail': (
+                    'This endpoint is deprecated. '
+                    'Use POST /api/v1/payments/callback/mpesa/stk/{token}/ for STK callbacks '
+                    'or POST /api/v1/payments/callback/mpesa/b2c/{token}/ for B2C callbacks.'
+                ),
+                'alternatives': [
+                    '/api/v1/payments/callback/mpesa/stk/{token}/',
+                    '/api/v1/payments/callback/mpesa/b2c/{token}/',
+                ],
             },
+            status=status.HTTP_410_GONE,
         )
-        callback = Callback.objects.create(
-            raw_payload=payload,
-            provider=provider_record,
-            processed=False,
-        )
-
-        try:
-            process_payment_callback.delay(str(callback.id))
-        except Exception as exc:
-            logger.exception('Failed to enqueue callback processing for %s', callback.id)
-            callback.processing_error = str(exc)
-            callback.save(update_fields=['processing_error'])
-
-        return Response({'received': True}, status=status.HTTP_200_OK)
 
 
 class TransactionListView(StandardResponseMixin, ListAPIView):
@@ -1623,56 +1417,35 @@ class B2CHistoryView(B2CStatusView):
 
 
 class CallbackCreateView(StandardResponseMixin, CreateAPIView):
+    """Deprecated: Use POST /api/v1/payments/callback/mpesa/stk/{token}/ or POST /api/v1/payments/callback/mpesa/b2c/{token}/ instead."""
+
     serializer_class = CallbackSerializer
     permission_classes = [AllowAny]
 
+    @swagger_auto_schema(
+        operation_id='callback_create_deprecated',
+        deprecated=True,
+        responses={410: 'Gone - Use M-Pesa specific callback endpoints'},
+    )
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        provider = serializer.validated_data['provider']
+        logger.warning(
+            'Deprecated endpoint hit: POST /api/v1/payments/callbacks/ '
+            'Use M-Pesa specific callback endpoints instead.'
+        )
+        return Response(
+            {
+                'detail': (
+                    'This endpoint is deprecated. '
+                    'Use POST /api/v1/payments/callback/mpesa/stk/{token}/ for STK callbacks '
+                    'or POST /api/v1/payments/callback/mpesa/b2c/{token}/ for B2C callbacks.'
+                ),
+                'alternatives': [
+                    '/api/v1/payments/callback/mpesa/stk/{token}/',
+                    '/api/v1/payments/callback/mpesa/b2c/{token}/',
+                ],
+            },
+            status=status.HTTP_410_GONE,
+        )
 
-        if not self._verify_callback(request, provider):
-            return Response(
-                {'detail': 'Forbidden'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        callback = serializer.save()
-        process_payment_callback.delay(str(callback.id))
-        data = CallbackSerializer(callback).data
-        return self.created(data, 'Callback received')
-
-    def _verify_callback(self, request, provider):
-        if provider.provider_type == PaymentProvider.ProviderType.MPESA:
-            payload = request.data.get('raw_payload') or request.data
-            request._mpesa_callback_body = payload
-            if not is_safaricom_ip(request):
-                logger.warning(
-                    'M-Pesa callback rejected from non-Safaricom IP: %s',
-                    request.META.get('REMOTE_ADDR'),
-                )
-                return False
-            return verify_mpesa_signature(request)
-
-        try:
-            provider_class = get_provider_class(provider.name)
-            provider_client = provider_class()
-        except (ImportError, AttributeError, TypeError, ValueError) as exc:
-            logger.warning(
-                'Callback rejected for unsupported provider %s: %s',
-                provider.name,
-                exc,
-            )
-            return False
-
-        try:
-            return provider_client.verify_webhook(request)
-        except Exception as exc:
-            logger.warning(
-                'Callback verification failed for provider %s: %s',
-                provider.name,
-                exc,
-            )
-            return False
 
 
