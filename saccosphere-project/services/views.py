@@ -376,19 +376,19 @@ class LoanDisbursementDisputeListView(APIView):
                 Loan.DisbursementStatus.UNDER_REVIEW,
             ],
         ).annotate(
-            audit_log_count=Count('disbursement_audit_logs'),
-        ).order_by('-member_disputed_at', '-updated_at')
+            audit_log_count=Count('disbursementauditlog'),
+        ).order_by('-member_disputed_at', '-created_at')
 
         data = [
             {
                 'loan_id': str(loan.id),
                 'sacco': loan.membership.sacco.name,
-                'member': loan.membership.user.email,
-                'amount': loan.amount,
+                'member': f"{loan.membership.user.first_name} {loan.membership.user.last_name}",
+                'amount': str(loan.amount),
                 'status': loan.disbursement_status,
-                'disputed_at': loan.member_disputed_at,
-                'dispute_reason': loan.dispute_reason,
-                'mpesa_conversation_id': loan.mpesa_conversation_id,
+                'disputed_at': loan.member_disputed_at.isoformat() if loan.member_disputed_at else None,
+                'dispute_reason': loan.dispute_reason or '',
+                'mpesa_conversation_id': loan.mpesa_conversation_id or '',
                 'audit_log_count': loan.audit_log_count,
             }
             for loan in loans
@@ -1763,3 +1763,34 @@ class DividendPayoutListView(SaccoScopedMixin, ListAPIView):
             queryset = queryset.filter(declaration_id=declaration_id)
 
         return queryset.order_by('-created_at')
+
+
+class LoanDisbursementAuditView(APIView):
+    """Return full DisbursementAuditLog for a loan."""
+
+    permission_classes = [IsAuthenticated, IsSaccoAdminOrSuperAdmin]
+
+    def get(self, request, loan_id):
+        loan = get_object_or_404(Loan.objects.select_related('membership__sacco'), id=loan_id)
+        self._check_access(request, loan)
+
+        audit_logs = DisbursementAuditLog.objects.filter(loan=loan).order_by('created_at')
+        serializer = DisbursementAuditSerializer({
+            'loan_id': loan.id,
+            'current_status': loan.disbursement_status,
+            'mpesa_conversation_id': loan.mpesa_conversation_id or '',
+            'mpesa_transaction_id': loan.mpesa_transaction_id or '',
+            'audit_log': audit_logs,
+        })
+        return Response(serializer.data)
+
+    def _check_access(self, request, loan):
+        if request.user.is_staff or request.user.roles.filter(name=Role.SUPER_ADMIN).exists():
+            return
+        admin_sacco_ids = request.user.roles.filter(
+            name=Role.SACCO_ADMIN,
+            sacco__isnull=False,
+        ).values_list('sacco_id', flat=True)
+        if loan.membership.sacco_id not in admin_sacco_ids:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('You do not have access to this loan.')
