@@ -6,7 +6,14 @@ from django.conf import settings
 from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
 
-from .models import KYCVerification, OTPToken, Sacco, User, UserDevice
+from .models import (
+    DataErasureRequest,
+    KYCVerification,
+    OTPToken,
+    Sacco,
+    User,
+    UserDevice,
+)
 from .role_utils import get_sacco_admin_id
 from .utils import get_user_sacco_context
 
@@ -475,6 +482,63 @@ class PasswordChangeSerializer(serializers.Serializer):
             )
 
         validate_password_strength(new_password)
+        return attrs
+
+
+class DataErasureRequestSerializer(serializers.ModelSerializer):
+    """Serializer for creating data erasure requests."""
+
+    class Meta:
+        model = DataErasureRequest
+        fields = ('reason',)
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+
+        if not user or not user.is_authenticated:
+            raise serializers.ValidationError(
+                'Authentication required.'
+            )
+
+        # Check for existing pending request
+        existing = DataErasureRequest.objects.filter(
+            user=user,
+            status=DataErasureRequest.Status.PENDING
+        ).first()
+
+        if existing:
+            raise serializers.ValidationError(
+                'You already have a pending erasure request.'
+            )
+
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        user = request.user
+
+        return DataErasureRequest.objects.create(
+            user=user,
+            reason=validated_data.get('reason'),
+        )
+
+
+class DataErasureReviewSerializer(serializers.Serializer):
+    """Serializer for staff review of erasure requests."""
+
+    action = serializers.ChoiceField(choices=['approve', 'reject'])
+    reviewer_notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+
+        if not user or not user.is_authenticated or not user.is_staff:
+            raise serializers.ValidationError(
+                'Staff access required.'
+            )
+
         return attrs
 
 

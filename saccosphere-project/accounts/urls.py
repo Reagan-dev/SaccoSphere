@@ -11,6 +11,8 @@ from .biometric_views import (
 )
 from .oauth_views import GoogleOAuthCallbackView, GoogleOAuthLinkView
 from .views import (
+    DataErasureRequestView,
+    DataErasureReviewView,
     KYCSubmitIDView,
     KYCStatusView,
     KYCUploadView,
@@ -84,4 +86,7 @@ urlpatterns = [
     path('password/reset/request/', PasswordResetRequestView.as_view(), name='password-reset-request'),
     path('password/reset/confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
     path('password/reset/complete/', PasswordResetCompleteView.as_view(), name='password-reset-complete'),
+    # Data erasure endpoints
+    path('me/erasure-requests/', DataErasureRequestView.as_view(), name='erasure-request'),
+    path('erasure-requests/<uuid:request_id>/review/', DataErasureReviewView.as_view(), name='erasure-review'),
 ]

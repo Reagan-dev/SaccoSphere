@@ -25,7 +25,13 @@ from saccomanagement.audit_logger import log_audit
 from saccomanagement.odpc_logging import DataAccessMixin
 
 from .integrations.iprs_client import IPRSClient, IPRSError
-from .models import KYCVerification, Sacco, User, PasswordResetToken
+from .models import (
+    DataErasureRequest,
+    KYCVerification,
+    Sacco,
+    User,
+    PasswordResetToken,
+)
 from . import serializers as account_serializers
 from .permissions import IsSaccoAdminOrSuperAdmin
 from .utils import get_user_sacco_context
@@ -1232,5 +1238,204 @@ class PasswordResetCompleteView(APIView):
         except Exception as e:
             logger.exception(f'Password reset complete error: {str(e)}')
             return Response({'error': 'Internal server error'}, status=500)
+
+
+class DataErasureRequestView(CreateAPIView):
+    """Endpoint for authenticated users to submit data erasure requests."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = account_serializers.DataErasureRequestSerializer
+
+    def post(self, request):
+        serializer = self.serializer_class(
+            data=request.data,
+            context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        erasure_request = serializer.save()
+
+        # Log the request creation
+        log_audit(
+            user=request.user,
+            action='CREATE',
+            resource_type='DataErasureRequest',
+            resource_id=str(erasure_request.id),
+            new_values={'reason': erasure_request.reason},
+            request=request,
+        )
+
+        # Notify the user
+        from notifications.utils import create_notification
+        create_notification(
+            user=request.user,
+            title='Data Erasure Request Submitted',
+            message='Your data erasure request has been submitted and is pending review.',
+            category='SYSTEM',
+        )
+
+        return Response(
+            {
+                'id': str(erasure_request.id),
+                'status': erasure_request.status,
+                'message': 'Your erasure request has been submitted for review.',
+            },
+            status=201
+        )
+
+
+class DataErasureReviewView(APIView):
+    """Staff-only endpoint for reviewing erasure requests."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, request_id):
+        # Verify staff status
+        if not request.user.is_staff:
+            return Response(
+                {'error': 'Staff access required.'},
+                status=403
+            )
+
+        try:
+            erasure_request = DataErasureRequest.objects.get(id=request_id)
+        except DataErasureRequest.DoesNotExist:
+            return Response(
+                {'error': 'Erasure request not found.'},
+                status=404
+            )
+
+        serializer = account_serializers.DataErasureReviewSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        action = serializer.validated_data['action']
+        reviewer_notes = serializer.validated_data.get('reviewer_notes', '')
+
+        if erasure_request.status != DataErasureRequest.Status.PENDING:
+            return Response(
+                {'error': 'This request has already been reviewed.'},
+                status=400
+            )
+
+        if action == 'approve':
+            erasure_request.status = DataErasureRequest.Status.APPROVED
+            erasure_request.reviewed_at = timezone.now()
+            erasure_request.reviewed_by = request.user
+            erasure_request.reviewer_notes = reviewer_notes
+            erasure_request.save()
+
+            # Log approval
+            log_audit(
+                user=request.user,
+                action='APPROVE',
+                resource_type='DataErasureRequest',
+                resource_id=str(erasure_request.id),
+                old_values={'status': 'PENDING'},
+                new_values={'status': 'APPROVED', 'reviewer_notes': reviewer_notes},
+                request=request,
+            )
+
+            # Perform anonymization
+            self._anonymize_user(erasure_request)
+
+            # Update status to completed
+            erasure_request.status = DataErasureRequest.Status.COMPLETED
+            erasure_request.completed_at = timezone.now()
+            erasure_request.user_email_anonymized = f'anonymized_{erasure_request.id}'
+            erasure_request.save()
+
+            # Log completion
+            log_audit(
+                user=request.user,
+                action='COMPLETE',
+                resource_type='DataErasureRequest',
+                resource_id=str(erasure_request.id),
+                old_values={'status': 'APPROVED'},
+                new_values={'status': 'COMPLETED'},
+                request=request,
+            )
+
+            # Notify user
+            if erasure_request.user:
+                from notifications.utils import create_notification
+                create_notification(
+                    user=erasure_request.user,
+                    title='Data Erasure Completed',
+                    message='Your data has been anonymized as requested.',
+                    category='SYSTEM',
+                )
+
+            return Response(
+                {'message': 'Erasure request approved and completed.'},
+                status=200
+            )
+
+        elif action == 'reject':
+            erasure_request.status = DataErasureRequest.Status.REJECTED
+            erasure_request.reviewed_at = timezone.now()
+            erasure_request.reviewed_by = request.user
+            erasure_request.reviewer_notes = reviewer_notes
+            erasure_request.save()
+
+            # Log rejection
+            log_audit(
+                user=request.user,
+                action='REJECT',
+                resource_type='DataErasureRequest',
+                resource_id=str(erasure_request.id),
+                old_values={'status': 'PENDING'},
+                new_values={'status': 'REJECTED', 'reviewer_notes': reviewer_notes},
+                request=request,
+            )
+
+            # Notify user
+            if erasure_request.user:
+                from notifications.utils import create_notification
+                create_notification(
+                    user=erasure_request.user,
+                    title='Data Erasure Request Rejected',
+                    message=f'Your erasure request was rejected. Reason: {reviewer_notes or "No reason provided."}',
+                    category='SYSTEM',
+                )
+
+            return Response(
+                {'message': 'Erasure request rejected.'},
+                status=200
+            )
+
+    def _anonymize_user(self, erasure_request):
+        """Anonymize user data in place - idempotent and safe to re-run."""
+        logger = logging.getLogger('saccosphere.accounts')
+        user = erasure_request.user
+        if not user:
+            return
+
+        # Anonymize PII fields
+        user.first_name = 'Anonymized'
+        user.last_name = 'User'
+        user.email = f'anonymized_{user.id}@deleted.local'
+        user.phone_number = None
+        user.is_active = False
+
+        # Clear any encrypted fields if they exist
+        if hasattr(user, 'encrypted_fields'):
+            for field in user.encrypted_fields:
+                setattr(user, field, None)
+
+        user.save()
+
+        # Revoke all active sessions/tokens
+        from rest_framework_simplejwt.token_blacklist.models import (
+            OutstandingToken,
+            BlacklistedToken,
+        )
+
+        OutstandingToken.objects.filter(user=user).delete()
+
+        # Log anonymization
+        logger.info(
+            f'User anonymized: user_id={user.id}, erasure_request_id={erasure_request.id}'
+        )
 
 

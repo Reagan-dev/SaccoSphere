@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
 from .models import (
+    DataErasureRequest,
     KYCVerification,
     OTPToken,
     Sacco,
@@ -350,3 +351,119 @@ class UserConsentAdmin(admin.ModelAdmin):
     )
     list_filter = ('consent_type', 'consented', 'version')
     search_fields = ('user__email', 'version')
+
+
+@admin.register(DataErasureRequest)
+class DataErasureRequestAdmin(admin.ModelAdmin):
+    list_display = (
+        'user_ref',
+        'status',
+        'requested_at',
+        'reviewed_at',
+        'reviewed_by',
+    )
+    list_filter = ('status', 'requested_at', 'reviewed_at')
+    search_fields = ('user__email', 'user_email_anonymized')
+    readonly_fields = ('requested_at', 'reviewed_at', 'completed_at')
+    actions = ['approve_requests', 'reject_requests']
+
+    def user_ref(self, obj):
+        if obj.user:
+            return obj.user.email
+        return obj.user_email_anonymized or 'Unknown'
+    user_ref.short_description = 'User'
+
+    def approve_requests(self, request, queryset):
+        from django.utils import timezone
+        from saccomanagement.audit_logger import log_audit
+        from notifications.utils import create_notification
+
+        count = 0
+        for erasure_request in queryset.filter(status='PENDING'):
+            erasure_request.status = 'APPROVED'
+            erasure_request.reviewed_at = timezone.now()
+            erasure_request.reviewed_by = request.user
+            erasure_request.save()
+
+            # Perform anonymization
+            user = erasure_request.user
+            if user:
+                user.first_name = 'Anonymized'
+                user.last_name = 'User'
+                user.email = f'anonymized_{user.id}@deleted.local'
+                user.phone_number = None
+                user.is_active = False
+                user.save()
+
+                # Revoke tokens
+                from rest_framework_simplejwt.token_blacklist.models import (
+                    OutstandingToken,
+                )
+                OutstandingToken.objects.filter(user=user).delete()
+
+                # Notify user
+                create_notification(
+                    user=user,
+                    title='Data Erasure Completed',
+                    message='Your data has been anonymized as requested.',
+                    category='SYSTEM',
+                )
+
+            # Complete request
+            erasure_request.status = 'COMPLETED'
+            erasure_request.completed_at = timezone.now()
+            erasure_request.user_email_anonymized = f'anonymized_{erasure_request.id}'
+            erasure_request.save()
+
+            # Log
+            log_audit(
+                user=request.user,
+                action='APPROVE',
+                resource_type='DataErasureRequest',
+                resource_id=str(erasure_request.id),
+                old_values={'status': 'PENDING'},
+                new_values={'status': 'COMPLETED'},
+                request=request,
+            )
+
+            count += 1
+
+        self.message_user(request, f'{count} erasure request(s) approved.')
+    approve_requests.short_description = 'Approve selected requests'
+
+    def reject_requests(self, request, queryset):
+        from django.utils import timezone
+        from saccomanagement.audit_logger import log_audit
+        from notifications.utils import create_notification
+
+        count = 0
+        for erasure_request in queryset.filter(status='PENDING'):
+            erasure_request.status = 'REJECTED'
+            erasure_request.reviewed_at = timezone.now()
+            erasure_request.reviewed_by = request.user
+            erasure_request.save()
+
+            # Log
+            log_audit(
+                user=request.user,
+                action='REJECT',
+                resource_type='DataErasureRequest',
+                resource_id=str(erasure_request.id),
+                old_values={'status': 'PENDING'},
+                new_values={'status': 'REJECTED'},
+                request=request,
+            )
+
+            # Notify user
+            if erasure_request.user:
+                create_notification(
+                    user=erasure_request.user,
+                    title='Data Erasure Request Rejected',
+                    message='Your erasure request was rejected.',
+                    category='SYSTEM',
+                )
+
+            count += 1
+
+        self.message_user(request, f'{count} erasure request(s) rejected.')
+    reject_requests.short_description = 'Reject selected requests'
