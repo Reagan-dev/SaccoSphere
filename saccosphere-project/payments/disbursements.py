@@ -64,6 +64,19 @@ def initiate_b2c_loan_disbursement(
             'error': 'Member phone number is required before disbursement.'
         }, 400
 
+    # Validate guarantor approval
+    from services.models import Guarantor
+    pending_guarantors = loan.guarantors.filter(
+        status=Guarantor.Status.PENDING
+    ).exists()
+    if pending_guarantors:
+        return False, {
+            'error': (
+                'Cannot disburse: loan has pending guarantor approvals. '
+                'All required guarantors must approve before disbursement.'
+            )
+        }, 400
+
     # Check if SACCO is payment-ready
     if not sacco.payment_ready:
         return False, {
