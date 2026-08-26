@@ -311,6 +311,18 @@ class User(AbstractUser):
 
     )
 
+    phone_verified_at = models.DateTimeField(
+
+        null=True,
+
+        blank=True,
+
+        db_index=True,
+
+        help_text='Timestamp when the phone number was verified via OTP.',
+
+    )
+
     profile_picture = models.ImageField(
 
         upload_to='profiles/',
@@ -1304,6 +1316,62 @@ class OTPToken(models.Model):
     def __str__(self):
 
         return f'OTP for {self.phone_number} — {self.purpose}'
+
+
+
+class PasswordResetToken(models.Model):
+    """Short-lived, single-use token for password reset confirmation."""
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+        help_text='Unique password reset token identifier.',
+    )
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='password_reset_tokens',
+        help_text='User requesting password reset.',
+    )
+
+    otp_token = models.OneToOneField(
+        OTPToken,
+        on_delete=models.CASCADE,
+        related_name='password_reset_token',
+        help_text='The OTP token that was verified to generate this reset token.',
+    )
+
+    is_used = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text='Whether this reset token has been used to change the password.',
+    )
+
+    expires_at = models.DateTimeField(
+        db_index=True,
+        help_text='Token expiration timestamp.',
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text='Token creation timestamp.',
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'is_used']),
+            models.Index(fields=['expires_at']),
+        ]
+
+    @property
+    def is_expired(self):
+        return self.expires_at < timezone.now()
+
+    def __str__(self):
+        return f'PasswordResetToken for {self.user.email}'
 
 
 
