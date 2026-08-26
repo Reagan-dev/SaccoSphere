@@ -1,3 +1,5 @@
+import logging
+
 from django.contrib.auth import authenticate
 from django.core.exceptions import FieldError
 from django.db.models import Count, Q
@@ -23,7 +25,7 @@ from saccomanagement.audit_logger import log_audit
 from saccomanagement.odpc_logging import DataAccessMixin
 
 from .integrations.iprs_client import IPRSClient, IPRSError
-from .models import KYCVerification, Sacco, User
+from .models import KYCVerification, Sacco, User, PasswordResetToken
 from . import serializers as account_serializers
 from .permissions import IsSaccoAdminOrSuperAdmin
 from .utils import get_user_sacco_context
@@ -109,8 +111,10 @@ class PublicStatsView(APIView):
 
 def get_user_by_phone_number(phone_number):
     """Return the newest user for a phone number without failing on duplicates."""
+    from .otp_utils import format_phone_number
+    formatted_phone = format_phone_number(phone_number)
     return (
-        User.objects.filter(phone_number=phone_number)
+        User.objects.filter(phone_number=formatted_phone)
         .order_by('-date_joined')
         .first()
     )
@@ -924,12 +928,13 @@ class OTPVerifyView(APIView):
         
         try:
             token = verify_otp(formatted_phone, code, 'PHONE_VERIFY')
-            
+
             # If user exists (existing phone verification), update their phone
             if token.user:
                 user = token.user
                 user.phone_number = phone_number
-                user.save(update_fields=['phone_number'])
+                user.phone_verified_at = timezone.now()
+                user.save(update_fields=['phone_number', 'phone_verified_at'])
                 user_serializer = UserProfileSerializer(user)
                 return Response(user_serializer.data, status=200)
             else:
@@ -1044,20 +1049,39 @@ class PasswordResetRequestView(APIView):
 
     @swagger_auto_schema(
         operation_summary='Request password reset',
-        request_body=account_serializers.OTPRequestSerializer,
+        request_body=account_serializers.PasswordResetRequestSerializer,
         responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
     )
     def post(self, request):
-        serializer = account_serializers.OTPRequestSerializer(data=request.data)
+        serializer = account_serializers.PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
+
         phone_number = serializer.validated_data['phone_number']
-        
-        # Always return 200 (don't reveal if phone exists)
+        logger = logging.getLogger('saccosphere.otp')
+
+        # Always return 200 (don't reveal if phone exists or is verified)
         try:
             user = get_user_by_phone_number(phone_number)
             if user is None:
-                return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
+                logger.info(
+                    f'Password reset requested for non-existent phone={phone_number}'
+                )
+                return Response(
+                    {'message': 'Password reset OTP sent. Check your phone.'},
+                    status=200
+                )
+
+            # Check if phone is verified
+            if user.phone_verified_at is None:
+                logger.warning(
+                    f'Password reset requested for unverified phone={phone_number}, '
+                    f'user={user.email}'
+                )
+                return Response(
+                    {'message': 'Password reset OTP sent. Check your phone.'},
+                    status=200
+                )
+
             formatted_phone = format_phone_number(phone_number)
             token = create_otp_token(user, formatted_phone, 'PASSWORD_RESET')
 
@@ -1065,49 +1089,148 @@ class PasswordResetRequestView(APIView):
             backend = get_otp_backend('PHONE')
             backend.send(token)
 
-            return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
+            logger.info(
+                f'Password reset OTP sent to verified phone={phone_number}, '
+                f'user={user.email}'
+            )
+            return Response(
+                {'message': 'Password reset OTP sent. Check your phone.'},
+                status=200
+            )
 
         except OTPDeliveryError:
             # Log error but don't reveal to user
-            logger = logging.getLogger('saccosphere.otp')
             logger.error(f'Password reset SMS failed for phone={phone_number}')
-            return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
+            return Response(
+                {'message': 'Password reset OTP sent. Check your phone.'},
+                status=200
+            )
         except Exception as e:
-            logger = logging.getLogger('saccosphere.otp')
             logger.exception(f'Password reset request error: {str(e)}')
-            return Response({'message': 'Password reset OTP sent. Check your phone.'}, status=200)
+            return Response(
+                {'message': 'Password reset OTP sent. Check your phone.'},
+                status=200
+            )
 
 
 class PasswordResetConfirmView(APIView):
-    """Confirm password reset with OTP."""
+    """Verify OTP and return a short-lived password reset token."""
     permission_classes = [AllowAny]
 
     @swagger_auto_schema(
-        operation_summary='Confirm password reset',
-        request_body=account_serializers.PasswordResetConfirmSerializer,
+        operation_summary='Verify OTP for password reset',
+        request_body=account_serializers.OTPVerifySerializer,
+        responses={200: {'type': 'object', 'properties': {'reset_token': {'type': 'string'}}}},
+    )
+    def post(self, request):
+        serializer = account_serializers.OTPVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        phone_number = serializer.validated_data['phone_number']
+        formatted_phone = format_phone_number(phone_number)
+        code = serializer.validated_data['code']
+        logger = logging.getLogger('saccosphere.otp')
+
+        try:
+            otp_token = verify_otp(formatted_phone, code, 'PASSWORD_RESET')
+
+            # Create a short-lived password reset token
+            from datetime import timedelta
+
+            reset_token = PasswordResetToken.objects.create(
+                user=otp_token.user,
+                otp_token=otp_token,
+                expires_at=timezone.now() + timedelta(minutes=15),
+            )
+
+            logger.info(
+                f'Password reset token generated for user={otp_token.user.email}, '
+                f'phone={phone_number}'
+            )
+
+            return Response(
+                {'reset_token': str(reset_token.id)},
+                status=200
+            )
+
+        except OTPError as e:
+            logger.warning(
+                f'Password reset OTP verification failed for phone={phone_number}: {str(e)}'
+            )
+            return Response({'error': str(e)}, status=400)
+        except Exception as e:
+            logger.exception(f'Password reset confirm error: {str(e)}')
+            return Response({'error': 'Internal server error'}, status=500)
+
+
+class PasswordResetCompleteView(APIView):
+    """Complete password reset using the reset token."""
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_summary='Complete password reset',
+        request_body=account_serializers.PasswordResetCompleteSerializer,
         responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
     )
     def post(self, request):
-        serializer = account_serializers.PasswordResetConfirmSerializer(data=request.data)
+        serializer = account_serializers.PasswordResetCompleteSerializer(
+            data=request.data
+        )
         serializer.is_valid(raise_exception=True)
-        
-        phone_number = serializer.validated_data['phone_number']
-        code = serializer.validated_data['code']
+
+        reset_token_id = serializer.validated_data['reset_token']
         new_password = serializer.validated_data['new_password']
-        
+        logger = logging.getLogger('saccosphere.otp')
+
         try:
-            token = verify_otp(phone_number, code, 'PASSWORD_RESET')
-            
+            reset_token = PasswordResetToken.objects.get(id=reset_token_id)
+
+            # Check if token is expired
+            if reset_token.is_expired:
+                logger.warning(
+                    f'Attempted to use expired password reset token for user={reset_token.user.email}'
+                )
+                return Response(
+                    {'error': 'Reset token has expired. Please request a new password reset.'},
+                    status=400
+                )
+
+            # Check if token is already used
+            if reset_token.is_used:
+                logger.warning(
+                    f'Attempted to reuse password reset token for user={reset_token.user.email}'
+                )
+                return Response(
+                    {'error': 'Reset token has already been used. Please request a new password reset.'},
+                    status=400
+                )
+
             # Update user password
-            user = token.user
+            user = reset_token.user
             user.set_password(new_password)
             user.save(update_fields=['password'])
-            
-            return Response({'message': 'Password reset successful.'}, status=200)
-            
-        except OTPError as e:
-            return Response({'error': str(e)}, status=400)
+
+            # Mark reset token as used
+            reset_token.is_used = True
+            reset_token.save(update_fields=['is_used'])
+
+            logger.info(
+                f'Password reset completed for user={user.email}'
+            )
+
+            return Response(
+                {'message': 'Password reset successful.'},
+                status=200
+            )
+
+        except PasswordResetToken.DoesNotExist:
+            logger.warning(f'Invalid password reset token used: {reset_token_id}')
+            return Response(
+                {'error': 'Invalid reset token. Please request a new password reset.'},
+                status=400
+            )
         except Exception as e:
+            logger.exception(f'Password reset complete error: {str(e)}')
             return Response({'error': 'Internal server error'}, status=500)
 
 

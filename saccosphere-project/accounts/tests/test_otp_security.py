@@ -9,15 +9,18 @@ This test file covers all changes made in the OTP security pack:
 - Africa's Talking error handling with retry logic
 - Delivery failure monitoring (Sentry + structured logging)
 - Race condition prevention with unique constraints
+- Password reset security improvements
 """
 
 import hmac
 import time
+from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch, MagicMock, call
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.core.exceptions import ImproperlyConfigured
 from django.conf import settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
 
@@ -731,3 +734,227 @@ class OTPRaceConditionTestCase(TransactionTestCase):
             user__isnull=True,
         )
         self.assertEqual(active_tokens.count(), 1)
+
+
+class PasswordResetSecurityTestCase(TransactionTestCase):
+    """Test password reset security improvements."""
+
+    def setUp(self):
+        """Create test users."""
+        from accounts.otp_utils import format_phone_number
+
+        self.verified_user = User.objects.create_user(
+            email='verified@example.com',
+            phone_number=format_phone_number('+254700000001'),
+            password='testpass123',
+        )
+        self.verified_user.phone_verified_at = timezone.now()
+        self.verified_user.save()
+
+        self.unverified_user = User.objects.create_user(
+            email='unverified@example.com',
+            phone_number=format_phone_number('+254700000002'),
+            password='testpass123',
+        )
+        # phone_verified_at remains None
+
+        self.client = APIClient()
+
+    def test_password_reset_succeeds_for_verified_phone(self):
+        """Test that password reset works for a verified phone."""
+        from unittest.mock import patch
+
+        with patch('accounts.views.get_otp_backend') as mock_backend:
+            mock_backend.return_value.send.return_value = None
+            response = self.client.post(
+                '/api/v1/accounts/password/reset/request/',
+                {'phone_number': '+254700000001'},
+            )
+
+        # Should return generic success message
+        if response.status_code != 200:
+            print(f"Response status: {response.status_code}")
+            print(f"Response data: {response.data}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data['message'],
+            'Password reset OTP sent. Check your phone.'
+        )
+
+        # Verify OTP token was created with PASSWORD_RESET purpose
+        otp_token = OTPToken.objects.filter(
+            user=self.verified_user,
+            purpose='PASSWORD_RESET',
+            is_used=False,
+        ).first()
+        self.assertIsNotNone(otp_token)
+
+    def test_password_reset_rejected_for_unverified_phone(self):
+        """Test that password reset is rejected for an unverified phone."""
+        from unittest.mock import patch
+
+        with patch('accounts.views.get_otp_backend') as mock_backend:
+            mock_backend.return_value.send.return_value = None
+            response = self.client.post(
+                '/api/v1/accounts/password/reset/request/',
+                {'phone_number': '+254700000002'},
+            )
+
+        # Should return same generic message as non-existent phone
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data['message'],
+            'Password reset OTP sent. Check your phone.'
+        )
+
+        # Verify NO OTP token was created
+        otp_token = OTPToken.objects.filter(
+            user=self.unverified_user,
+            purpose='PASSWORD_RESET',
+            is_used=False,
+        ).first()
+        self.assertIsNone(otp_token)
+
+    def test_password_reset_rejected_for_nonexistent_phone(self):
+        """Test that password reset is rejected for a non-existent phone."""
+        from unittest.mock import patch
+
+        with patch('accounts.views.get_otp_backend') as mock_backend:
+            mock_backend.return_value.send.return_value = None
+            response = self.client.post(
+                '/api/v1/accounts/password/reset/request/',
+                {'phone_number': '+254700000999'},
+            )
+
+        # Should return same generic message as unverified phone
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data['message'],
+            'Password reset OTP sent. Check your phone.'
+        )
+
+        # Verify no OTP token was created
+        otp_token = OTPToken.objects.filter(
+            phone_number='+254700000999',
+            purpose='PASSWORD_RESET',
+        ).first()
+        self.assertIsNone(otp_token)
+
+    def test_unverified_and_nonexistent_responses_identical(self):
+        """Test that unverified and non-existent phone responses are identical."""
+        from unittest.mock import patch
+
+        with patch('accounts.views.get_otp_backend') as mock_backend:
+            mock_backend.return_value.send.return_value = None
+            response_unverified = self.client.post(
+                '/api/v1/accounts/password/reset/request/',
+                {'phone_number': '+254700000002'},
+            )
+            response_nonexistent = self.client.post(
+                '/api/v1/accounts/password/reset/request/',
+                {'phone_number': '+254700000999'},
+            )
+
+        # Responses should be exactly equal (no enumeration)
+        self.assertEqual(response_unverified.status_code, response_nonexistent.status_code)
+        self.assertEqual(
+            response_unverified.data,
+            response_nonexistent.data
+        )
+
+    def test_signup_otp_cannot_complete_password_reset(self):
+        """Test that a PHONE_VERIFY OTP cannot be used for password reset."""
+        # Create a PHONE_VERIFY OTP for the verified user
+        signup_otp = create_otp_token(
+            self.verified_user,
+            '+254700000001',
+            'PHONE_VERIFY'
+        )
+
+        # Try to use it for password reset
+        response = self.client.post(
+            '/api/v1/accounts/password/reset/confirm/',
+            {
+                'phone_number': '+254700000001',
+                'code': signup_otp.plaintext_code,
+            },
+        )
+
+        # Should fail - wrong purpose
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('error', response.data)
+
+    def test_password_reset_token_expires(self):
+        """Test that password reset token expires and cannot be used."""
+        from accounts.models import PasswordResetToken
+
+        # Create and verify a PASSWORD_RESET OTP
+        otp_token = create_otp_token(
+            self.verified_user,
+            '+254700000001',
+            'PASSWORD_RESET'
+        )
+
+        # Create a reset token with an expired timestamp
+        reset_token = PasswordResetToken.objects.create(
+            user=self.verified_user,
+            otp_token=otp_token,
+            expires_at=timezone.now() - timedelta(minutes=1),  # Expired
+        )
+
+        # Try to use the expired token
+        response = self.client.post(
+            '/api/v1/accounts/password/reset/complete/',
+            {
+                'reset_token': reset_token.id,
+                'new_password': 'NewPassword123!',
+                'new_password2': 'NewPassword123!',
+            },
+        )
+
+        # Should fail - token expired
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('expired', response.data['error'].lower())
+
+    def test_password_reset_token_single_use(self):
+        """Test that password reset token cannot be reused after successful reset."""
+        from accounts.models import PasswordResetToken
+
+        # Create and verify a PASSWORD_RESET OTP
+        otp_token = create_otp_token(
+            self.verified_user,
+            '+254700000001',
+            'PASSWORD_RESET'
+        )
+
+        # Create a reset token
+        reset_token = PasswordResetToken.objects.create(
+            user=self.verified_user,
+            otp_token=otp_token,
+            expires_at=timezone.now() + timedelta(minutes=15),
+        )
+
+        # Use it successfully
+        response1 = self.client.post(
+            '/api/v1/accounts/password/reset/complete/',
+            {
+                'reset_token': reset_token.id,
+                'new_password': 'NewPassword123!',
+                'new_password2': 'NewPassword123!',
+            },
+        )
+        self.assertEqual(response1.status_code, 200)
+
+        # Try to reuse it
+        response2 = self.client.post(
+            '/api/v1/accounts/password/reset/complete/',
+            {
+                'reset_token': reset_token.id,
+                'new_password': 'AnotherPassword123!',
+                'new_password2': 'AnotherPassword123!',
+            },
+        )
+
+        # Should fail - token already used
+        self.assertEqual(response2.status_code, 400)
+        self.assertIn('already been used', response2.data['error'].lower())

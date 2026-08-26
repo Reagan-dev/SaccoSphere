@@ -425,10 +425,16 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
+    """Serializer for verifying OTP and getting a reset token."""
     phone_number = serializers.CharField(
         validators=[validate_kenyan_phone_number],
     )
     code = serializers.CharField(max_length=6)
+
+
+class PasswordResetCompleteSerializer(serializers.Serializer):
+    """Serializer for completing password reset with the reset token."""
+    reset_token = serializers.UUIDField()
     new_password = serializers.CharField(write_only=True)
     new_password2 = serializers.CharField(write_only=True)
 
