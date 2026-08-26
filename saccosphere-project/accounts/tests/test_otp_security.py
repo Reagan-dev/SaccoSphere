@@ -8,12 +8,14 @@ This test file covers all changes made in the OTP security pack:
 - Phone number normalization and validation
 - Africa's Talking error handling with retry logic
 - Delivery failure monitoring (Sentry + structured logging)
+- Race condition prevention with unique constraints
 """
 
 import hmac
 import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch, MagicMock, call
-from django.test import TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.core.exceptions import ImproperlyConfigured
 from django.conf import settings
 from rest_framework.test import APIClient
@@ -591,3 +593,141 @@ class MonitoringTestCase(TestCase):
         initial_count = backends_module._sms_delivery_failure_count
         backends_module._sms_delivery_failure_count += 1
         self.assertEqual(backends_module._sms_delivery_failure_count, initial_count + 1)
+
+
+class OTPRaceConditionTestCase(TransactionTestCase):
+    """Test race condition prevention with unique constraints."""
+
+    def setUp(self):
+        """Create test user."""
+        self.user = User.objects.create_user(
+            email='race@example.com',
+            phone_number='254700000001',
+            password='testpass123',
+        )
+
+    def test_sequential_token_creation_expires_old_token(self):
+        """
+        Test that creating a new token sequentially expires the old one.
+        This is the happy-path behavior that must be preserved.
+        """
+        # Create first token
+        token1 = create_otp_token(self.user, '+254700000001', 'PHONE_VERIFY')
+        self.assertIsNotNone(token1.plaintext_code)
+        self.assertFalse(token1.is_used)
+
+        # Create second token (should expire the first)
+        token2 = create_otp_token(self.user, '+254700000001', 'PHONE_VERIFY')
+        self.assertIsNotNone(token2.plaintext_code)
+        self.assertFalse(token2.is_used)
+
+        # Refresh from database
+        token1.refresh_from_db()
+        token2.refresh_from_db()
+
+        # First token should be marked as used
+        self.assertTrue(token1.is_used)
+        # Second token should still be active
+        self.assertFalse(token2.is_used)
+
+        # Only one active token should exist
+        active_tokens = OTPToken.objects.filter(
+            phone_number='+254700000001',
+            purpose='PHONE_VERIFY',
+            is_used=False,
+        )
+        self.assertEqual(active_tokens.count(), 1)
+        self.assertEqual(active_tokens.first().id, token2.id)
+
+    def test_concurrent_token_creation_prevents_duplicate_active_tokens(self):
+        """
+        Test that concurrent token creation results in exactly one active token.
+        This test uses ThreadPoolExecutor to simulate concurrent requests.
+        
+        Note: This test is skipped on SQLite due to its locking limitations.
+        Production uses PostgreSQL which properly supports select_for_update.
+        """
+        from django.db import connection
+        
+        # Skip on SQLite due to locking limitations with concurrent writes
+        if connection.vendor == 'sqlite':
+            self.skipTest('SQLite does not support concurrent writes well; use PostgreSQL for this test')
+        
+        phone_number = '+254700000001'
+        purpose = 'PHONE_VERIFY'
+
+        def create_token():
+            """Helper function to create a token in a thread."""
+            return create_otp_token(self.user, phone_number, purpose)
+
+        # Fire 5 concurrent token creation requests
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(create_token) for _ in range(5)]
+            tokens = [future.result() for future in futures]
+
+        # All requests should have returned a token (either created or fetched)
+        self.assertEqual(len(tokens), 5)
+
+        # All tokens should have the same ID (the one that won the race)
+        token_ids = [token.id for token in tokens]
+        self.assertEqual(len(set(token_ids)), 1, "All concurrent requests should return the same token ID")
+
+        # Only one active, unused token should exist in the database
+        active_tokens = OTPToken.objects.filter(
+            phone_number=phone_number,
+            purpose=purpose,
+            is_used=False,
+        )
+        self.assertEqual(
+            active_tokens.count(), 1,
+            "Exactly one active token should exist after concurrent creation"
+        )
+
+        # The winning token should have plaintext_code
+        winning_token = active_tokens.first()
+        self.assertIsNotNone(
+            winning_token.plaintext_code,
+            "Winning token should have plaintext_code for delivery"
+        )
+
+    def test_concurrent_registration_token_creation(self):
+        """
+        Test that concurrent token creation for registration (user=None)
+        results in exactly one active token.
+        
+        Note: This test is skipped on SQLite due to its locking limitations.
+        Production uses PostgreSQL which properly supports select_for_update.
+        """
+        from django.db import connection
+        
+        # Skip on SQLite due to locking limitations with concurrent writes
+        if connection.vendor == 'sqlite':
+            self.skipTest('SQLite does not support concurrent writes well; use PostgreSQL for this test')
+        
+        phone_number = '+254700000002'
+        purpose = 'PHONE_VERIFY'
+
+        def create_token():
+            """Helper function to create a token without a user."""
+            return create_otp_token(None, phone_number, purpose)
+
+        # Fire 5 concurrent token creation requests
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(create_token) for _ in range(5)]
+            tokens = [future.result() for future in futures]
+
+        # All requests should have returned a token
+        self.assertEqual(len(tokens), 5)
+
+        # All tokens should have the same ID
+        token_ids = [token.id for token in tokens]
+        self.assertEqual(len(set(token_ids)), 1)
+
+        # Only one active token should exist
+        active_tokens = OTPToken.objects.filter(
+            phone_number=phone_number,
+            purpose=purpose,
+            is_used=False,
+            user__isnull=True,
+        )
+        self.assertEqual(active_tokens.count(), 1)
