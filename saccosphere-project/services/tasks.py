@@ -714,7 +714,7 @@ def send_disbursement_confirmation_request(loan_id: str):
 @shared_task(name='services.auto_resolve_disbursement')
 def auto_resolve_disbursement(loan_id: str):
     """Auto-check M-Pesa after 24 hours if the member has not responded."""
-    from payments.providers import get_psp_provider
+    
 
     loan = (
         Loan.objects.select_related('membership', 'membership__sacco')
