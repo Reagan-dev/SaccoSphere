@@ -1476,8 +1476,84 @@ class UserConsent(models.Model):
         ordering = ['-timestamp']
 
 
+class DataErasureRequest(models.Model):
+    """Model for tracking user data erasure/anonymization requests."""
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        APPROVED = 'APPROVED', 'Approved'
+        REJECTED = 'REJECTED', 'Rejected'
+        COMPLETED = 'COMPLETED', 'Completed'
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+        help_text='Unique data erasure request identifier.',
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='erasure_requests',
+        help_text='User requesting erasure. Null after anonymization.',
+    )
+    user_email_anonymized = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text='Anonymized email reference for audit trail after user deletion.',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+        help_text='Current status of the erasure request.',
+    )
+    requested_at = models.DateTimeField(
+        auto_now_add=True,
+        db_index=True,
+        help_text='Timestamp when the erasure request was submitted.',
+    )
+    reviewed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Timestamp when the request was reviewed.',
+    )
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_erasure_requests',
+        help_text='Staff user who reviewed the request.',
+    )
+    reviewer_notes = models.TextField(
+        null=True,
+        blank=True,
+        help_text='Notes from the reviewer explaining the decision.',
+    )
+    reason = models.TextField(
+        null=True,
+        blank=True,
+        help_text='User-provided reason for the erasure request.',
+    )
+    completed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Timestamp when anonymization was completed.',
+    )
+
+    class Meta:
+        ordering = ['-requested_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['status', 'requested_at']),
+        ]
 
     def __str__(self):
-
-        return f'{self.user.email} — {self.consent_type} — {self.consented}'
+        user_ref = self.user_email_anonymized or (self.user.email if self.user else 'Unknown')
+        return f'Erasure request for {user_ref} - {self.status}'
 
