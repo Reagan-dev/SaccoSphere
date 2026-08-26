@@ -13,7 +13,6 @@ from django.conf import settings
 
 from .integrations.mpesa.daraja import DarajaClient
 from .models import Callback, MpesaIdempotencyRecord, MpesaTransaction, Transaction
-from .providers.registry import get_provider_class
 
 
 logger = logging.getLogger('saccosphere.payments')
@@ -139,129 +138,31 @@ def process_stk_callback_task(self, callback_id):
     return True
 
 
-@shared_task(
-    bind=True,
-    name='payments.tasks.process_payment_callback',
-    max_retries=3,
-    default_retry_delay=60,
-)
-def process_payment_callback(self, callback_id):
-    """Process a PSP callback through the provider-specific parser."""
-    try:
-        callback = Callback.objects.select_related('provider').get(
-            id=callback_id,
-        )
-    except Callback.DoesNotExist:
-        logger.error('Payment callback not found: %s', callback_id)
-        return False
-
-    if callback.processed:
-        logger.info('Payment callback already processed: %s', callback_id)
-        return True
-
-    provider = get_provider_class(callback.provider.name)()
-    result = provider.parse_callback(callback.raw_payload)
-
-    transaction_id = callback.raw_payload.get('merchantTransactionID')
-    if not transaction_id:
-        transaction_id = callback.raw_payload.get('transaction_id')
-
-    with db_transaction.atomic():
-        try:
-            transaction = Transaction.objects.select_for_update().get(
-                id=transaction_id,
-            )
-        except Transaction.DoesNotExist:
-            logger.error('Transaction not found for callback %s', callback_id)
-            return False
-
-        if transaction.status == Transaction.Status.COMPLETED:
-            callback.processed = True
-            callback.save(update_fields=['processed'])
-            return True
-
-        if result.is_successful:
-            transaction.status = Transaction.Status.COMPLETED
-            transaction.save(update_fields=['status', 'updated_at'])
-            _create_callback_ledger_entry(transaction)
-            _record_platform_fee_for_sacco(
-                transaction,
-                _get_transaction_sacco(transaction),
-            )
-            notify_user_task.delay(
-                str(transaction.user_id),
-                'Deposit Confirmed',
-                'Your deposit has been confirmed.',
-                'payment',
-            )
-            logger.info(
-                'Transaction %s completed via callback',
-                transaction.id,
-            )
-        elif result.is_failed:
-            transaction.status = Transaction.Status.FAILED
-            transaction.save(update_fields=['status', 'updated_at'])
-            notify_user_task.delay(
-                str(transaction.user_id),
-                'Payment Failed',
-                'Your payment could not be completed.',
-                'payment',
-            )
-            logger.info('Transaction %s failed via callback', transaction.id)
-        else:
-            transaction.status = Transaction.Status.PENDING
-            transaction.save(update_fields=['status', 'updated_at'])
-            logger.info('Transaction %s remains pending', transaction.id)
-
-        callback.processed = True
-        callback.save(update_fields=['processed'])
-
-    return True
+@shared_task(name='payments.tasks.process_payment_callback')
+def process_payment_callback(callback_id):
+    """
+    Deprecated: Generic PSP callback processing no longer supported.
+    Use M-Pesa specific callback tasks instead.
+    """
+    logger.warning(
+        'Deprecated task called: process_payment_callback(%s). '
+        'Use M-Pesa specific callback tasks instead.',
+        callback_id,
+    )
+    return False
 
 
 @shared_task(name='payments.tasks.reconcile_pending_transactions')
 def reconcile_pending_transactions():
-    """Query pending transactions and reconcile them with provider status."""
-    cutoff = timezone.now() - timezone.timedelta(minutes=10)
-    pending_transactions = Transaction.objects.filter(
-        status=Transaction.Status.PENDING,
-        created_at__lt=cutoff,
-        provider__isnull=False,
-    ).select_related('provider')
-
-    for transaction in pending_transactions:
-        try:
-            provider = get_provider_class(transaction.provider.name)()
-            result = provider.query_status(str(transaction.id))
-        except Exception as exc:
-            logger.warning(
-                'Reconciliation failed for transaction %s: %s',
-                transaction.id,
-                exc,
-            )
-            continue
-
-        if (
-            not result.is_successful
-            and not result.is_failed
-            and not result.is_pending
-        ):
-            continue
-
-        callback_payload = {
-            'merchantTransactionID': str(transaction.id),
-            'status': result.provider_status,
-            'amount_confirmed': str(result.amount_confirmed or '0.00'),
-        }
-        callback = Callback.objects.create(
-            transaction=transaction,
-            provider=transaction.provider,
-            raw_payload=callback_payload,
-            processed=False,
-        )
-        process_payment_callback.delay(str(callback.id))
-
-    return True
+    """
+    Deprecated: Generic PSP reconciliation no longer supported.
+    Use M-Pesa specific STK status query instead.
+    """
+    logger.warning(
+        'Deprecated task called: reconcile_pending_transactions. '
+        'Use M-Pesa specific STK status query instead.'
+    )
+    return
 
 
 @shared_task(

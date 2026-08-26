@@ -391,8 +391,6 @@ WITHDRAWAL_TIERS = [
     for ceiling, fee in json.loads(_raw_withdrawal_tiers)
 ]
 
-PAYMENT_PROVIDER = config('PAYMENT_PROVIDER', default='')
-
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 
 SESSION_ENGINE = "django.contrib.sessions.backends.cache"

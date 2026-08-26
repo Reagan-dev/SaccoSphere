@@ -7,7 +7,6 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from accounts.models import Sacco
-from payments.providers.registry import PROVIDER_REGISTRY, get_provider_class
 
 
 class Command(BaseCommand):
@@ -15,7 +14,6 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         rows = [
-            self._check_payment_provider(),
             self._check_disbursement_tiers(),
             self._check_withdrawal_tiers(),
             self._check_platform_fees(),
@@ -47,25 +45,6 @@ class Command(BaseCommand):
             'status': 'FAIL',
             'details': details,
         }
-
-    def _check_payment_provider(self):
-        provider = getattr(settings, 'PAYMENT_PROVIDER', '').strip().lower()
-        if not provider:
-            return self._fail(
-                'PAYMENT_PROVIDER',
-                'Not set. Registered providers: '
-                + ', '.join(sorted(PROVIDER_REGISTRY)),
-            )
-
-        try:
-            provider_class = get_provider_class(provider)
-        except Exception as exc:
-            return self._fail('PAYMENT_PROVIDER', str(exc))
-
-        return self._ok(
-            'PAYMENT_PROVIDER',
-            f'{provider} -> {provider_class.__name__}',
-        )
 
     def _check_disbursement_tiers(self):
         tiers = getattr(settings, 'DISBURSEMENT_TIERS', None)

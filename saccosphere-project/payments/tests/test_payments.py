@@ -156,9 +156,8 @@ class DepositInitiateViewTests(TestCase):
         self.assertIn('approved membership', response.data['detail'])
         self.assertFalse(Transaction.objects.exists())
 
-    @override_settings(DEBUG=True, PAYMENT_PROVIDER='')
-    def test_deposit_charges_gross_and_records_net_fee_breakdown(self):
-        """Deposit initiation charges gross while recording net and fee."""
+    def test_deposit_endpoint_deprecated(self):
+        """Deposit endpoint is deprecated and returns 410 Gone."""
         self.client.force_authenticate(user=self.user)
         response = self.client.post(
             reverse('payments:deposit-initiate'),
@@ -170,19 +169,9 @@ class DepositInitiateViewTests(TestCase):
             format='json',
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['amount_depositing'], 'KES 1,000.00')
-        self.assertEqual(response.data['platform_fee'], 'KES 10.00')
-        self.assertEqual(response.data['total_charged'], 'KES 1,010.00')
-        self.assertEqual(response.data['savings_credited'], 'KES 1,000.00')
-        self.assertEqual(response.data['status'], Transaction.Status.PENDING)
-
-        transaction = Transaction.objects.get()
-        self.assertEqual(transaction.amount, Decimal('1000.00'))
-        self.assertEqual(transaction.fee_amount, Decimal('10.00'))
-        self.assertEqual(transaction.metadata['net_amount'], '1000.00')
-        self.assertEqual(transaction.metadata['platform_fee'], '10.00')
-        self.assertEqual(transaction.metadata['gross_amount'], '1010.00')
+        self.assertEqual(response.status_code, status.HTTP_410_GONE)
+        self.assertIn('deprecated', response.data['detail'].lower())
+        self.assertIn('alternative', response.data)
 
 
 class WithdrawalInitiateViewTests(TestCase):
@@ -223,8 +212,8 @@ class WithdrawalInitiateViewTests(TestCase):
             status=Saving.Status.ACTIVE,
         )
 
-    @override_settings(DEBUG=True, PAYMENT_PROVIDER='')
-    def test_withdrawal_sends_net_and_records_gross_fee_breakdown(self):
+    def test_withdrawal_endpoint_deprecated(self):
+        """Withdrawal endpoint is deprecated and returns 410 Gone."""
         self.client.force_authenticate(user=self.user)
         response = self.client.post(
             reverse('payments:withdrawal-initiate'),
@@ -237,21 +226,9 @@ class WithdrawalInitiateViewTests(TestCase):
             format='json',
         )
 
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data['amount_requested'], 'KES 5,000.00')
-        self.assertEqual(response.data['platform_fee'], 'KES 25.00')
-        self.assertEqual(response.data['amount_to_member'], 'KES 4,975.00')
-
-        transaction = Transaction.objects.get(
-            transaction_type=Transaction.TransactionType.WITHDRAWAL,
-        )
-        self.assertEqual(transaction.amount, Decimal('4975.00'))
-        self.assertEqual(transaction.gross_amount, Decimal('5000.00'))
-        self.assertEqual(transaction.platform_fee, Decimal('25.00'))
-        self.assertEqual(transaction.fee_rate, None)
-        self.assertEqual(transaction.sacco, self.sacco)
-        self.assertEqual(transaction.status, Transaction.Status.SENT)
-        self.assertEqual(transaction.metadata['saving_id'], str(self.saving.id))
+        self.assertEqual(response.status_code, status.HTTP_410_GONE)
+        self.assertIn('deprecated', response.data['detail'].lower())
+        self.assertIn('alternative', response.data)
 
 
 class FeePreviewViewTests(TestCase):
@@ -295,68 +272,43 @@ class FeePreviewViewTests(TestCase):
 
 
 class CallbackCreateViewTests(TestCase):
-    """Validate generic PSP callback verification and async dispatch."""
+    """Validate generic PSP callback endpoint is deprecated."""
 
     def setUp(self):
         self.client = APIClient()
-        self.provider = PaymentProvider.objects.create(
-            name='secure-psp',
-            provider_type=PaymentProvider.ProviderType.INTERNAL,
-            is_active=True,
-        )
 
-    @patch('payments.views.get_provider_class')
-    def test_rejects_non_mpesa_callback_when_verification_fails(
-        self,
-        get_provider_class_mock,
-    ):
-        """Failed provider verification rejects the callback."""
-
-        class RejectingProvider:
-            def verify_webhook(self, request):
-                return False
-
-        get_provider_class_mock.return_value = RejectingProvider
-
+    def test_callback_create_deprecated(self):
+        """Callback create endpoint is deprecated and returns 410 Gone."""
         response = self.client.post(
             reverse('payments:callback-create'),
             {
-                'provider': str(self.provider.id),
                 'raw_payload': {'transaction_id': 'txn-001'},
             },
             format='json',
         )
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertFalse(Callback.objects.exists())
+        self.assertEqual(response.status_code, status.HTTP_410_GONE)
+        self.assertIn('deprecated', response.data['detail'].lower())
+        self.assertIn('alternatives', response.data)
 
-    @patch('payments.views.process_payment_callback.delay')
-    @patch('payments.views.get_provider_class')
-    def test_verified_non_mpesa_callback_is_enqueued(
-        self,
-        get_provider_class_mock,
-        delay_mock,
-    ):
-        """Verified callbacks are saved and handed to Celery."""
 
-        class AcceptingProvider:
-            def verify_webhook(self, request):
-                return True
+class PaymentCallbackViewTests(TestCase):
+    """Validate generic payment callback endpoint is deprecated."""
 
-        get_provider_class_mock.return_value = AcceptingProvider
+    def setUp(self):
+        self.client = APIClient()
 
+    def test_payment_callback_deprecated(self):
+        """Payment callback endpoint is deprecated and returns 410 Gone."""
         response = self.client.post(
-            reverse('payments:callback-create'),
-            {
-                'provider': str(self.provider.id),
-                'raw_payload': {'transaction_id': 'txn-002'},
-            },
+            reverse('payments:payment-callback'),
+            {},
             format='json',
         )
 
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        callback = Callback.objects.get()
-        delay_mock.assert_called_once_with(str(callback.id))
+        self.assertEqual(response.status_code, status.HTTP_410_GONE)
+        self.assertIn('deprecated', response.data['detail'].lower())
+        self.assertIn('alternatives', response.data)
 
 
 class STKPushInitiationHardeningTests(TestCase):
