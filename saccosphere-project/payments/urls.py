@@ -13,6 +13,7 @@ from .views import (
     PaymentCallbackView,
     STKPushView,
     STKStatusView,
+    SavingsWithdrawalView,
     TransactionDetailView,
     TransactionListView,
     WithdrawalInitiateView,
@@ -71,6 +72,11 @@ urlpatterns = [
         'mpesa/b2c/disburse/',
         B2CDisbursementView.as_view(),
         name='mpesa-b2c-disburse',
+    ),
+    path(
+        'mpesa/b2c/withdraw/',
+        SavingsWithdrawalView.as_view(),
+        name='mpesa-b2c-withdraw',
     ),
     path(
         'mpesa/b2c/<str:conversation_id>/status/',

@@ -782,7 +782,6 @@ def _process_successful_b2c_callback(
         result,
         'TransactionReceipt',
     )
-    loan = mpesa_transaction.related_loan
     amount = transaction.amount
 
     mpesa_transaction.callback_received = True
@@ -807,22 +806,36 @@ def _process_successful_b2c_callback(
         update_fields=['status', 'external_reference', 'updated_at']
     )
 
-    loan.status = loan.Status.ACTIVE
-    loan.disbursed_amount = amount
-    loan.disbursement_date = timezone.localdate()
-    loan.outstanding_balance = amount
-    loan.save(
-        update_fields=[
-            'status',
-            'disbursed_amount',
-            'disbursement_date',
-            'outstanding_balance',
-            'updated_at',
-        ]
-    )
+    # Handle loan disbursement
+    if mpesa_transaction.related_loan:
+        loan = mpesa_transaction.related_loan
+        loan.status = loan.Status.ACTIVE
+        loan.disbursed_amount = amount
+        loan.disbursement_date = timezone.localdate()
+        loan.outstanding_balance = amount
+        loan.save(
+            update_fields=[
+                'status',
+                'disbursed_amount',
+                'disbursement_date',
+                'outstanding_balance',
+                'updated_at',
+            ]
+        )
+        _create_loan_disbursement_ledger(mpesa_transaction, transaction, amount)
+        _notify_disbursement_success(mpesa_transaction, transaction, amount)
 
-    _create_loan_disbursement_ledger(mpesa_transaction, transaction, amount)
-    _notify_disbursement_success(mpesa_transaction, transaction, amount)
+    # Handle savings withdrawal
+    elif mpesa_transaction.related_saving:
+        saving = mpesa_transaction.related_saving
+        # Balance was already deducted at initiation
+        # Just record the ledger entry and notify
+        _create_withdrawal_ledger(mpesa_transaction, transaction)
+        _record_platform_fee_for_sacco(
+            transaction,
+            saving.membership.sacco,
+        )
+        _notify_withdrawal_success(mpesa_transaction, transaction, amount)
 
 
 def _process_failed_b2c_callback(
@@ -831,10 +844,9 @@ def _process_failed_b2c_callback(
     result,
     result_code,
 ):
-    loan = mpesa_transaction.related_loan
     result_description = result.get(
         'ResultDesc',
-        'M-Pesa loan disbursement failed.',
+        'M-Pesa B2C transaction failed.',
     )
     mpesa_transaction.callback_received = True
     mpesa_transaction.result_code = str(result_code)
@@ -851,14 +863,38 @@ def _process_failed_b2c_callback(
     transaction.status = Transaction.Status.FAILED
     transaction.save(update_fields=['status', 'updated_at'])
 
-    loan.status = loan.Status.APPROVED
-    loan.save(update_fields=['status', 'updated_at'])
+    # Handle loan disbursement failure
+    if mpesa_transaction.related_loan:
+        loan = mpesa_transaction.related_loan
+        loan.status = loan.Status.APPROVED
+        loan.save(update_fields=['status', 'updated_at'])
+        _notify_disbursement_failure(
+            mpesa_transaction,
+            transaction,
+            result_description,
+        )
 
-    _notify_disbursement_failure(
-        mpesa_transaction,
-        transaction,
-        result_description,
-    )
+    # Handle savings withdrawal failure - revert the balance
+    elif mpesa_transaction.related_saving:
+        saving = mpesa_transaction.related_saving
+        gross_amount = _get_authoritative_gross_amount(transaction)
+        with db_transaction.atomic():
+            saving = Saving.objects.select_for_update().get(id=saving.id)
+            saving.amount += gross_amount
+            saving.total_withdrawals -= gross_amount
+            saving.save(
+                update_fields=[
+                    'amount',
+                    'total_withdrawals',
+                    'updated_at',
+                ]
+            )
+        _notify_withdrawal_failure(
+            mpesa_transaction,
+            transaction,
+            result_description,
+        )
+
     logger.info(
         'M-Pesa B2C callback failed for conversation_id=%s: %s.',
         mpesa_transaction.conversation_id,
@@ -1309,5 +1345,78 @@ def _normalize_transaction_type(transaction_type):
         'WITHDRAWAL': 'withdrawal',
     }
     return aliases.get(transaction_type, transaction_type)
+
+
+def _create_withdrawal_ledger(mpesa_transaction, transaction):
+    """Create ledger entry for successful savings withdrawal."""
+    from ledger.models import LedgerEntry
+    from ledger.utils import create_ledger_entry
+
+    saving = mpesa_transaction.related_saving
+    gross_amount = _get_authoritative_gross_amount(transaction)
+    net_amount = transaction.amount
+    platform_fee = _get_authoritative_platform_fee(transaction)
+
+    create_ledger_entry(
+        membership=saving.membership,
+        entry_type=LedgerEntry.EntryType.DEBIT,
+        category=LedgerEntry.Category.SAVING_WITHDRAWAL,
+        amount=gross_amount,
+        description=(
+            f'Withdrawal. Received: KES {net_amount:,.2f}. '
+            f'Processing fee: KES {platform_fee:,.2f}.'
+        ),
+        reference=str(transaction.id),
+        transaction=transaction,
+    )
+
+
+def _notify_withdrawal_success(mpesa_transaction, transaction, amount):
+    """Notify user of successful withdrawal."""
+    from notifications.models import Notification
+    from notifications.utils import create_notification
+
+    user = transaction.user
+    net_amount = transaction.amount
+    platform_fee = _get_authoritative_platform_fee(transaction)
+
+    create_notification(
+        user=user,
+        title='Withdrawal Successful',
+        message=(
+            f'Your withdrawal of KES {net_amount:,.2f} has been processed. '
+            f'Processing fee: KES {platform_fee:,.2f}.'
+        ),
+        notification_type=Notification.NotificationType.TRANSACTION,
+        metadata={
+            'transaction_id': str(transaction.id),
+            'amount': str(net_amount),
+            'platform_fee': str(platform_fee),
+        },
+    )
+
+
+def _notify_withdrawal_failure(mpesa_transaction, transaction, result_description):
+    """Notify user of failed withdrawal."""
+    from notifications.models import Notification
+    from notifications.utils import create_notification
+
+    user = transaction.user
+    gross_amount = _get_authoritative_gross_amount(transaction)
+
+    create_notification(
+        user=user,
+        title='Withdrawal Failed',
+        message=(
+            f'Your withdrawal request for KES {gross_amount:,.2f} failed. '
+            f'Reason: {result_description}'
+        ),
+        notification_type=Notification.NotificationType.TRANSACTION,
+        metadata={
+            'transaction_id': str(transaction.id),
+            'amount': str(gross_amount),
+            'error': result_description,
+        },
+    )
 
 

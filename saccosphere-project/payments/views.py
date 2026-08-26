@@ -29,6 +29,7 @@ from config.response import StandardResponseMixin
 from django.conf import settings
 from guarantor.utils import check_loan_guarantors_complete
 from payments.disbursements import initiate_b2c_loan_disbursement
+from payments.withdrawals import initiate_savings_withdrawal
 from services.models import Loan, Saving
 
 from .fee_calculator import SaccoInvoiceFeeCalculator
@@ -1157,6 +1158,41 @@ class B2CDisbursementView(APIView):
             phone_number=data['phone_number'],
             amount=data['amount'],
             remarks=remarks,
+        )
+
+        return Response(payload, status=http_status)
+
+
+class SavingsWithdrawalView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description='Initiate M-Pesa B2C savings withdrawal.',
+        request_body=WithdrawalRequestSerializer,
+        responses={201: openapi.Response('Created'), 400: 'Bad Request', 401: 'Unauthorized'},
+        security=[{'Bearer': []}],
+    )
+    def post(self, request):
+        serializer = WithdrawalRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        # Validate withdrawal context
+        is_valid, detail = serializer.validate_withdrawal_context(request.user)
+        if not is_valid:
+            return Response(
+                {'detail': detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        saving = data['saving']
+        phone_number = data['phone_number']
+        requested_amount = data['amount']
+
+        _success, payload, http_status = initiate_savings_withdrawal(
+            saving=saving,
+            phone_number=phone_number,
+            requested_amount=requested_amount,
         )
 
         return Response(payload, status=http_status)
