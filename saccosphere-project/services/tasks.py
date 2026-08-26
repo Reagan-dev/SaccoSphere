@@ -714,7 +714,7 @@ def send_disbursement_confirmation_request(loan_id: str):
 @shared_task(name='services.auto_resolve_disbursement')
 def auto_resolve_disbursement(loan_id: str):
     """Auto-check M-Pesa after 24 hours if the member has not responded."""
-    
+    from payments.integrations.mpesa.daraja import DarajaClient
 
     loan = (
         Loan.objects.select_related('membership', 'membership__sacco')
@@ -728,48 +728,50 @@ def auto_resolve_disbursement(loan_id: str):
     ]:
         return
 
-    provider = get_psp_provider(sacco=loan.membership.sacco)
-    mpesa_status = provider.query_b2c_status(loan.mpesa_conversation_id)
-
-    if mpesa_status.is_delivered:
-        with transaction.atomic():
-            loan = Loan.objects.select_for_update().get(id=loan_id)
-            if loan.disbursement_status in [
-                Loan.DisbursementStatus.MEMBER_CONFIRMED,
-                Loan.DisbursementStatus.AUTO_CONFIRMED,
-                Loan.DisbursementStatus.DISPUTED,
-            ]:
-                return
-
-            loan.disbursement_status = Loan.DisbursementStatus.AUTO_CONFIRMED
-            loan.disbursement_confirmed_at = (
-                loan.disbursement_confirmed_at or timezone.now()
-            )
-            loan.save(
-                update_fields=[
-                    'disbursement_status',
-                    'disbursement_confirmed_at',
-                    'updated_at',
-                ],
-            )
-
-            DisbursementAuditLog.objects.create(
-                loan=loan,
-                event='AUTO_CONFIRMED',
-                actor=None,
-                actor_role='system',
-                mpesa_ref=loan.mpesa_transaction_id,
-                details={
-                    'mpesa_confirmed': True,
-                    'reason': '24hr timeout',
-                },
-            )
-
-            _record_disbursement_invoice_item(loan)
+    # Use SACCO-specific Daraja credentials directly (no generic PSP)
+    sacco = loan.membership.sacco
+    if not sacco.payment_ready:
+        logger.warning(
+            'SACCO %s is not payment-ready, cannot auto-resolve disbursement %s',
+            sacco.id,
+            loan.id,
+        )
         return
+
+    try:
+        payment_config = sacco.payment_config
+        if not payment_config.is_active or not payment_config.has_b2c_config():
+            logger.warning(
+                'SACCO %s has no active B2C config, cannot auto-resolve disbursement %s',
+                sacco.id,
+                loan.id,
+            )
+            return
+    except AttributeError:
+        logger.warning(
+            'SACCO %s has no payment config, cannot auto-resolve disbursement %s',
+            sacco.id,
+            loan.id,
+        )
+        return
+
+    # Note: Daraja API does not support B2C status queries
+    # We cannot verify delivery via API - escalate to review
+    logger.info(
+        'M-Pesa B2C status query not supported by Daraja API. '
+        'Escalating disbursement %s to review.',
+        loan.id,
+    )
 
     with transaction.atomic():
         loan = Loan.objects.select_for_update().get(id=loan_id)
+        if loan.disbursement_status in [
+            Loan.DisbursementStatus.MEMBER_CONFIRMED,
+            Loan.DisbursementStatus.AUTO_CONFIRMED,
+            Loan.DisbursementStatus.DISPUTED,
+        ]:
+            return
+
         loan.disbursement_status = Loan.DisbursementStatus.UNDER_REVIEW
         loan.save(update_fields=['disbursement_status', 'updated_at'])
 
@@ -778,17 +780,16 @@ def auto_resolve_disbursement(loan_id: str):
             event='ESCALATED_TO_SUPERADMIN',
             actor=None,
             actor_role='system',
-            details={'reason': '24hr timeout, M-Pesa could not confirm'},
+            details={
+                'reason': '24hr timeout, M-Pesa B2C status query not supported',
+            },
         )
 
-    _notify_superadmins(
-        'Disbursement Auto-Escalation',
-        (
-            f'Loan {loan.id} for {loan.membership.sacco.name} could not '
-            f'be auto-confirmed.'
-        ),
-        related_loan_id=str(loan.id),
-    )
+        _notify_superadmins(
+            'Disbursement Auto-Escalation',
+            f'Loan {loan.id} for {loan.membership.sacco.name} could not be auto-confirmed via M-Pesa status query (not supported by Daraja API).',
+            related_loan_id=str(loan.id),
+        )
 
 
 def _normalize_mpesa_result_code(result_code):
