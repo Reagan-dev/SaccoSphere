@@ -763,6 +763,27 @@ def auto_resolve_disbursement(loan_id: str):
         loan.id,
     )
 
+    # Send alert to Sentry for human visibility
+    try:
+        import sentry_sdk
+        sentry_sdk.set_context('disbursement_escalation', {
+            'sacco_id': str(sacco.id),
+            'sacco_name': sacco.name,
+            'loan_id': str(loan.id),
+            'conversation_id': loan.mpesa_conversation_id or 'unknown',
+            'disbursement_status': loan.disbursement_status,
+            'reason': '24hr timeout, M-Pesa B2C status query not supported',
+        })
+        sentry_sdk.capture_message(
+            f'B2C Disbursement Escalated to Review: SACCO {sacco.name} '
+            f'(ID: {sacco.id}), Loan {loan.id} - No callback received '
+            f'within 24hr window. Daraja API does not support B2C status queries.',
+            level='warning',
+        )
+    except ImportError:
+        # Sentry not configured, log only
+        pass
+
     with transaction.atomic():
         loan = Loan.objects.select_for_update().get(id=loan_id)
         if loan.disbursement_status in [
