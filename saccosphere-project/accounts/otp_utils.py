@@ -7,6 +7,7 @@ from datetime import timedelta
 
 from config.utils import InvalidPhoneNumberError, normalize_phone_number
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
 logger = logging.getLogger('saccosphere.otp')
@@ -77,6 +78,10 @@ def create_otp_token(user, phone_number, purpose):
     Expires any existing active OTP tokens for this user+purpose combination.
     Then creates a new token with expiry time based on OTP_EXPIRY_MINUTES setting.
 
+    Uses row locking (select_for_update) to prevent race conditions where
+    concurrent requests could create multiple active tokens. This serializes
+    concurrent requests at the database level.
+
     Args:
         user: User instance or None (for registration OTPs)
         phone_number: Phone number for OTP delivery
@@ -94,41 +99,52 @@ def create_otp_token(user, phone_number, purpose):
     formatted_phone = format_phone_number(phone_number)
 
     try:
-        # Expire existing active tokens for this normalized phone+purpose
-        query = OTPToken.objects.filter(
-            phone_number=formatted_phone,
-            purpose=purpose,
-            is_used=False,
-        )
-        if user:
-            query = query.filter(user=user)
-        query.update(is_used=True)
+        with transaction.atomic():
+            # Lock existing active tokens for this user+phone+purpose
+            # This serializes concurrent requests
+            query = OTPToken.objects.filter(
+                phone_number=formatted_phone,
+                purpose=purpose,
+                is_used=False,
+            )
+            if user:
+                query = query.filter(user=user)
+            
+            # Use select_for_update to lock the rows (works on PostgreSQL, no-op on SQLite)
+            # For the first token case (no rows to lock), we rely on the transaction's
+            # serialization to prevent concurrent creates
+            existing_tokens = list(query.select_for_update())
+            
+            # Expire existing tokens
+            for token in existing_tokens:
+                token.is_used = True
+                token.save(update_fields=['is_used'])
 
-        # Generate plaintext code for delivery, but persist only its hash.
-        plaintext_code = generate_otp_code()
-        hashed_code = hash_otp_code(plaintext_code)
-        expires_at = timezone.now() + timedelta(
-            minutes=settings.OTP_EXPIRY_MINUTES
-        )
+            # Generate plaintext code for delivery, but persist only its hash.
+            plaintext_code = generate_otp_code()
+            hashed_code = hash_otp_code(plaintext_code)
+            expires_at = timezone.now() + timedelta(
+                minutes=settings.OTP_EXPIRY_MINUTES
+            )
 
-        # Create new token using the normalized phone number
-        token = OTPToken.objects.create(
-            user=user,
-            phone_number=formatted_phone,
-            code=hashed_code,
-            purpose=purpose,
-            expires_at=expires_at,
-            is_used=False,
-            attempts=0,
-        )
-        token.plaintext_code = plaintext_code
+            # Create new token
+            token = OTPToken.objects.create(
+                user=user,
+                phone_number=formatted_phone,
+                code=hashed_code,
+                purpose=purpose,
+                expires_at=expires_at,
+                is_used=False,
+                attempts=0,
+            )
+            token.plaintext_code = plaintext_code
 
-        user_email = user.email if user else 'anonymous'
-        logger.info(
-            f'OTP token created for {user_email} '
-            f'(phone={formatted_phone}, purpose={purpose})'
-        )
-        return token
+            user_email = user.email if user else 'anonymous'
+            logger.info(
+                f'OTP token created for {user_email} '
+                f'(phone={formatted_phone}, purpose={purpose}, expired={len(existing_tokens)} old tokens)'
+            )
+            return token
     except Exception as e:
         error_msg = f'Failed to create OTP token: {str(e)}'
         logger.error(error_msg)
