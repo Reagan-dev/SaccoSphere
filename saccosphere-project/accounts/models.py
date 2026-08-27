@@ -1303,6 +1303,19 @@ class OTPToken(models.Model):
 
         ordering = ['-created_at']
 
+        constraints = [
+            models.UniqueConstraint(
+                fields=['phone_number', 'purpose'],
+                condition=models.Q(is_used=False),
+                name='unique_active_otp_per_phone_purpose',
+                violation_error_message=(
+                    'An active OTP token already exists for this phone number '
+                    'and purpose. Please wait for the existing token to expire '
+                    'or be used before requesting a new one.'
+                ),
+            ),
+        ]
+
 
 
     @property

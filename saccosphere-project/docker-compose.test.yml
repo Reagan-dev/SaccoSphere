@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: saccosphere-postgres-test
+    environment:
+      POSTGRES_DB: saccosphere_test
+      POSTGRES_USER: saccosphere
+      POSTGRES_PASSWORD: saccosphere_test_pass
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U saccosphere"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

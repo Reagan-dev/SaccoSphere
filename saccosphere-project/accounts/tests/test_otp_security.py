@@ -646,16 +646,20 @@ class OTPRaceConditionTestCase(TransactionTestCase):
         """
         Test that concurrent token creation results in exactly one active token.
         This test uses ThreadPoolExecutor to simulate concurrent requests.
-        
-        Note: This test is skipped on SQLite due to its locking limitations.
-        Production uses PostgreSQL which properly supports select_for_update.
+
+        This test requires PostgreSQL to properly test the unique constraint.
+        SQLite will be skipped since it doesn't support partial unique constraints
+        properly for this use case.
         """
         from django.db import connection
-        
-        # Skip on SQLite due to locking limitations with concurrent writes
+
+        # Skip on SQLite due to lack of proper partial unique constraint support
         if connection.vendor == 'sqlite':
-            self.skipTest('SQLite does not support concurrent writes well; use PostgreSQL for this test')
-        
+            self.skipTest(
+                'SQLite does not support partial unique constraints properly; '
+                'use PostgreSQL for this test'
+            )
+
         phone_number = '+254700000001'
         purpose = 'PHONE_VERIFY'
 
@@ -697,16 +701,20 @@ class OTPRaceConditionTestCase(TransactionTestCase):
         """
         Test that concurrent token creation for registration (user=None)
         results in exactly one active token.
-        
-        Note: This test is skipped on SQLite due to its locking limitations.
-        Production uses PostgreSQL which properly supports select_for_update.
+
+        This test requires PostgreSQL to properly test the unique constraint.
+        SQLite will be skipped since it doesn't support partial unique constraints
+        properly for this use case.
         """
         from django.db import connection
-        
-        # Skip on SQLite due to locking limitations with concurrent writes
+
+        # Skip on SQLite due to lack of proper partial unique constraint support
         if connection.vendor == 'sqlite':
-            self.skipTest('SQLite does not support concurrent writes well; use PostgreSQL for this test')
-        
+            self.skipTest(
+                'SQLite does not support partial unique constraints properly; '
+                'use PostgreSQL for this test'
+            )
+
         phone_number = '+254700000002'
         purpose = 'PHONE_VERIFY'
 

@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from config.utils import InvalidPhoneNumberError, normalize_phone_number
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 logger = logging.getLogger('saccosphere.otp')
@@ -78,9 +78,13 @@ def create_otp_token(user, phone_number, purpose):
     Expires any existing active OTP tokens for this user+purpose combination.
     Then creates a new token with expiry time based on OTP_EXPIRY_MINUTES setting.
 
-    Uses row locking (select_for_update) to prevent race conditions where
-    concurrent requests could create multiple active tokens. This serializes
-    concurrent requests at the database level.
+    Uses a database-level partial unique constraint to prevent race conditions
+    where concurrent requests could create multiple active tokens. The constraint
+    enforces uniqueness on (phone_number, purpose) for active (is_used=False) tokens.
+    Row locking (select_for_update) is used to optimize the expiry step.
+
+    On concurrent INSERT conflicts, we retry by fetching the winning token that
+    was inserted by another transaction, rather than raising an error.
 
     Args:
         user: User instance or None (for registration OTPs)
@@ -101,7 +105,7 @@ def create_otp_token(user, phone_number, purpose):
     try:
         with transaction.atomic():
             # Lock existing active tokens for this user+phone+purpose
-            # This serializes concurrent requests
+            # This serializes concurrent requests when rows exist
             query = OTPToken.objects.filter(
                 phone_number=formatted_phone,
                 purpose=purpose,
@@ -109,12 +113,10 @@ def create_otp_token(user, phone_number, purpose):
             )
             if user:
                 query = query.filter(user=user)
-            
-            # Use select_for_update to lock the rows (works on PostgreSQL, no-op on SQLite)
-            # For the first token case (no rows to lock), we rely on the transaction's
-            # serialization to prevent concurrent creates
+
+            # Use select_for_update to lock the rows (works on PostgreSQL)
             existing_tokens = list(query.select_for_update())
-            
+
             # Expire existing tokens
             for token in existing_tokens:
                 token.is_used = True
@@ -128,6 +130,8 @@ def create_otp_token(user, phone_number, purpose):
             )
 
             # Create new token
+            # The partial unique constraint (phone_number, purpose) where is_used=False
+            # will prevent concurrent INSERTs of active tokens
             token = OTPToken.objects.create(
                 user=user,
                 phone_number=formatted_phone,
@@ -145,6 +149,41 @@ def create_otp_token(user, phone_number, purpose):
                 f'(phone={formatted_phone}, purpose={purpose}, expired={len(existing_tokens)} old tokens)'
             )
             return token
+    except IntegrityError:
+        # Concurrent INSERT conflict - another transaction won the race
+        # Fetch the winning token that was inserted by the other transaction
+        logger.info(
+            f'Concurrent OTP creation detected, fetching winning token '
+            f'(phone={formatted_phone}, purpose={purpose})'
+        )
+        query = OTPToken.objects.filter(
+            phone_number=formatted_phone,
+            purpose=purpose,
+            is_used=False,
+        )
+        if user:
+            query = query.filter(user=user)
+
+        winning_token = query.order_by('-created_at').first()
+        if winning_token:
+            # Generate a new plaintext code for the caller (they need to deliver it)
+            # but we can't recover the original code, so we return the existing token
+            # The caller will need to handle this appropriately
+            winning_token.plaintext_code = None  # Can't recover original code
+            logger.warning(
+                f'Returned existing token due to race condition - '
+                f'caller may need to retry delivery '
+                f'(phone={formatted_phone}, purpose={purpose})'
+            )
+            return winning_token
+        else:
+            # Shouldn't happen if IntegrityError was raised, but handle gracefully
+            error_msg = (
+                f'IntegrityError raised but no winning token found '
+                f'(phone={formatted_phone}, purpose={purpose})'
+            )
+            logger.error(error_msg)
+            raise OTPError(error_msg)
     except Exception as e:
         error_msg = f'Failed to create OTP token: {str(e)}'
         logger.error(error_msg)
