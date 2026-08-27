@@ -27,3 +27,19 @@ def cleanup_expired_otps():
     return deleted_count
 
 
+@shared_task(name='accounts.tasks.check_iprs_failure_rate')
+def check_iprs_failure_rate():
+    """
+    Check IPRS failure rate and send alerts if threshold exceeded.
+    
+    This task runs periodically to monitor IPRS service health and
+    send alerts via Sentry when the failure rate exceeds the configured threshold.
+    """
+    try:
+        from accounts.iprs_alerting import check_iprs_failure_rate as check_rate
+        return check_rate()
+    except Exception as exc:
+        logger.error('IPRS failure rate check failed: %s', exc)
+        raise
+
+
