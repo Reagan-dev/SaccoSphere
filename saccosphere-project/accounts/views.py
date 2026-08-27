@@ -1,3 +1,4 @@
+import hashlib
 import logging
 
 from django.contrib.auth import authenticate
@@ -33,6 +34,13 @@ from .models import (
     User,
     PasswordResetToken,
 )
+
+
+# LOCKING ORDER (to avoid deadlocks):
+# 1. KYCVerification row (select_for_update)
+# 2. SystemAuditLog row (created by log_audit)
+# Never acquire locks in reverse order. If you need to lock multiple tables,
+# always acquire KYCVerification lock first, then any other locks.
 from . import serializers as account_serializers
 from .permissions import IsSaccoAdminOrSuperAdmin
 from .utils import get_user_sacco_context
@@ -361,33 +369,66 @@ class KYCUploadView(APIView):
         security=[{'Bearer': []}],
     )
     def post(self, request):
-        """Validate and save a KYC document upload."""
+        """Validate and save a KYC document upload with proper locking."""
         serializer = KYCUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         document_type = serializer.validated_data['document_type']
         uploaded_file = serializer.validated_data['file']
-        kyc, _ = KYCVerification.objects.get_or_create(
-            user=request.user,
-            defaults={'status': KYCVerification.Status.NOT_STARTED},
-        )
 
-        setattr(kyc, document_type, uploaded_file)
-        update_fields = [document_type]
+        # Calculate file hash for idempotency
+        uploaded_file.seek(0)
+        file_hash = hashlib.sha256(uploaded_file.read()).hexdigest()
+        uploaded_file.seek(0)
 
-        if kyc.id_front and kyc.id_back:
-            kyc.status = KYCVerification.Status.PENDING
-            kyc.submitted_at = timezone.now()
-            kyc.rejection_reason = ''
-            update_fields.extend([
-                'status',
-                'submitted_at',
-                'rejection_reason',
-            ])
+        with transaction.atomic():
+            # Lock the KYC row to prevent concurrent uploads from overwriting each other
+            kyc, created = KYCVerification.objects.select_for_update().get_or_create(
+                user=request.user,
+                defaults={'status': KYCVerification.Status.NOT_STARTED},
+            )
 
-        kyc.save(update_fields=update_fields)
-        if kyc.status == KYCVerification.Status.PENDING and kyc.id_number:
-            self._auto_verify_id(kyc)
+            # Idempotency check: if the same file is already uploaded for this side, skip
+            current_file = getattr(kyc, document_type)
+            if current_file:
+                try:
+                    current_file.seek(0)
+                    current_hash = hashlib.sha256(current_file.read()).hexdigest()
+                    current_file.seek(0)
+                    if current_hash == file_hash:
+                        # Same file already uploaded - return success without changes
+                        response_serializer = KYCStatusSerializer(
+                            kyc,
+                            context={'request': request},
+                        )
+                        return Response(
+                            response_serializer.data,
+                            status=status.HTTP_200_OK,
+                        )
+                except (IOError, OSError):
+                    # If we can't read the current file, proceed with upload
+                    pass
+
+            # Update the document field
+            setattr(kyc, document_type, uploaded_file)
+            update_fields = [document_type]
+
+            # Check if both sides are now uploaded
+            if kyc.id_front and kyc.id_back:
+                kyc.status = KYCVerification.Status.PENDING
+                kyc.submitted_at = timezone.now()
+                kyc.rejection_reason = ''
+                update_fields.extend([
+                    'status',
+                    'submitted_at',
+                    'rejection_reason',
+                ])
+
+            kyc.save(update_fields=update_fields)
+
+        # IPRS verification happens outside the transaction to avoid holding locks
+        # during network calls. We re-check the locked state before calling IPRS.
+        self._auto_verify_id(kyc)
 
         response_serializer = KYCStatusSerializer(
             kyc,
@@ -399,7 +440,12 @@ class KYCUploadView(APIView):
         )
 
     def _auto_verify_id(self, kyc):
-        """Run IPRS during upload without blocking document submission."""
+        """Run IPRS verification without holding database locks during the network call."""
+        # Only call IPRS if we have an id_number
+        if not kyc.id_number:
+            return
+
+        # First, call IPRS without holding any lock
         try:
             result = IPRSClient().verify_id(
                 kyc.id_number,
@@ -415,18 +461,27 @@ class KYCUploadView(APIView):
                 'error': 'IPRS request failed.',
             }
 
-        try:
-            apply_iprs_result(kyc, result, request=request)
-        except IntegrityError:
-            return Response(
-                {
-                    'detail': (
-                        'Unable to process your KYC verification. '
-                        'Please contact support if this issue persists.'
+        # Now open a short transaction to apply the result with proper locking
+        with transaction.atomic():
+            # Re-fetch the KYC record with a lock to ensure we're acting on fresh state
+            fresh_kyc = KYCVerification.objects.select_for_update().get(pk=kyc.pk)
+
+            # Only apply IPRS result if the record still has both sides AND id_number
+            # This prevents applying stale results if the record was modified during the IPRS call
+            if (
+                fresh_kyc.id_front
+                and fresh_kyc.id_back
+                and fresh_kyc.id_number
+                and fresh_kyc.status == KYCVerification.Status.PENDING
+            ):
+                try:
+                    apply_iprs_result(fresh_kyc, result, request=None)
+                except IntegrityError:
+                    # Log the error but don't raise - the upload already succeeded
+                    logger.warning(
+                        'IntegrityError applying IPRS result for KYC %s after upload',
+                        fresh_kyc.id,
                     )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
 
 class KYCSubmitIDView(APIView):
@@ -457,11 +512,7 @@ class KYCSubmitIDView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        kyc, _ = KYCVerification.objects.get_or_create(
-            user=request.user,
-            defaults={'status': KYCVerification.Status.NOT_STARTED},
-        )
-
+        # Call IPRS without holding any database lock
         try:
             result = IPRSClient().verify_id(
                 id_number,
@@ -477,18 +528,26 @@ class KYCSubmitIDView(APIView):
                 'error': 'IPRS request failed.',
             }
 
-        try:
-            apply_iprs_result(kyc, result, request=request)
-        except IntegrityError:
-            return Response(
-                {
-                    'detail': (
-                        'Unable to process your KYC verification. '
-                        'Please contact support if this issue persists.'
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+        # Apply the result with proper locking
+        with transaction.atomic():
+            kyc, created = KYCVerification.objects.select_for_update().get_or_create(
+                user=request.user,
+                defaults={'status': KYCVerification.Status.NOT_STARTED},
             )
+
+            try:
+                apply_iprs_result(kyc, result, request=request)
+            except IntegrityError:
+                return Response(
+                    {
+                        'detail': (
+                            'Unable to process your KYC verification. '
+                            'Please contact support if this issue persists.'
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         return Response(
             {
                 'outcome': result.get('outcome'),
