@@ -42,6 +42,10 @@ app.conf.beat_schedule = {
         'task': 'services.tasks.flag_npl_arrears',
         'schedule': crontab(minute=30, hour=6),
     },
+    'iprs-failure-rate-check': {
+        'task': 'accounts.tasks.check_iprs_failure_rate',
+        'schedule': 300.0,  # Every 5 minutes
+    },
 }
 app.conf.task_serializer = 'json'
 app.conf.result_expires = 3600
