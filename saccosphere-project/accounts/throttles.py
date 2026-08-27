@@ -1,10 +1,27 @@
 """Custom throttling classes for OTP endpoints."""
 
+from django.conf import settings
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.exceptions import Throttled
 from django.core.cache import cache
 from django.utils import timezone
 from datetime import timedelta
+
+
+def _get_client_ip(request):
+    """
+    Get the client IP address from the request.
+
+    Checks for X-Forwarded-For header first (for reverse proxies),
+    then falls back to REMOTE_ADDR.
+    """
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        # X-Forwarded-For can contain multiple IPs, take the first one
+        ip = x_forwarded_for.split(',')[0].strip()
+    else:
+        ip = request.META.get('REMOTE_ADDR', 'unknown')
+    return ip
 
 
 class OTPSendThrottle(AnonRateThrottle):
@@ -36,6 +53,40 @@ class OTPSendThrottle(AnonRateThrottle):
     def throttle_failure(self):
         """
         Raise Throttled exception with custom message.
+        """
+        raise Throttled(
+            wait=None,
+            detail='Too many OTP requests. Please try again later.'
+        )
+
+
+class OTPSendIPThrottle(AnonRateThrottle):
+    """
+    Throttle OTP sends by IP address to prevent bulk spam attacks.
+
+    Limits the total number of OTP sends from a single IP address,
+    regardless of the phone numbers used. This prevents attackers
+    from cycling through many phone numbers to bypass per-phone limits.
+
+    Uses a configurable rate from Django settings.
+    Default: 20 per hour.
+    """
+    def __init__(self):
+        rate = getattr(settings, 'OTP_SEND_IP_RATE', '20/hour')
+        self.rate = rate if rate else '20/hour'
+        super().__init__()
+
+    def get_cache_key(self, request, view):
+        """
+        Use client IP address for cache key.
+        """
+        ip = _get_client_ip(request)
+        return f'otp_send_ip_{ip}'
+
+    def throttle_failure(self):
+        """
+        Raise Throttled exception with same message as phone throttle
+        to avoid leaking strategy to attackers.
         """
         raise Throttled(
             wait=None,

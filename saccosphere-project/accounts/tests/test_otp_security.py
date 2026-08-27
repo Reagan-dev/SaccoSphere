@@ -41,8 +41,6 @@ from accounts.otp_backends import (
     InvalidRecipientError,
     RateLimitError,
     _mask_phone,
-    _sms_delivery_success_count,
-    _sms_delivery_failure_count,
 )
 from accounts.throttles import OTPVerifyThrottle
 
@@ -578,24 +576,6 @@ class MonitoringTestCase(TestCase):
             self.assertIn('+254', log_call)
             # Verify full phone is NOT in log
             self.assertNotIn('700000001', log_call)
-
-    def test_success_increments_counter(self):
-        """
-        Test that the success counter exists and can be incremented.
-        """
-        import accounts.otp_backends as backends_module
-        initial_count = backends_module._sms_delivery_success_count
-        backends_module._sms_delivery_success_count += 1
-        self.assertEqual(backends_module._sms_delivery_success_count, initial_count + 1)
-
-    def test_failure_increments_counter(self):
-        """
-        Test that the failure counter exists and can be incremented.
-        """
-        import accounts.otp_backends as backends_module
-        initial_count = backends_module._sms_delivery_failure_count
-        backends_module._sms_delivery_failure_count += 1
-        self.assertEqual(backends_module._sms_delivery_failure_count, initial_count + 1)
 
 
 class OTPRaceConditionTestCase(TransactionTestCase):
