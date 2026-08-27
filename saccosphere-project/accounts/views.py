@@ -4,8 +4,10 @@ import time
 
 from config.utils import sanitize_pii
 from django.contrib.auth import authenticate
-from django.core.exceptions import FieldError
+from django.core.exceptions import FieldError, PermissionDenied
+from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 from django.db.models import Count, Q
+from django.http import FileResponse, Http404
 from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
@@ -1606,4 +1608,65 @@ class DataErasureReviewView(APIView):
             f'User anonymized: user_id={user.id}, erasure_request_id={erasure_request.id}'
         )
 
+
+class KYCDocumentServeView(APIView):
+    """
+    Serve KYC documents via signed URLs for local storage backend.
+
+    This view validates the signed token and serves the document if valid.
+    For S3 storage, presigned URLs are used directly without this view.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, kyc_id, document_field, token):
+        """
+        Serve a KYC document after validating the signed token.
+
+        Args:
+            request: HTTP request
+            kyc_id: KYCVerification ID
+            document_field: Document field name
+            token: Signed token for validation
+
+        Returns:
+            FileResponse with the document or 404/403 on error
+        """
+        try:
+            signer = TimestampSigner()
+            data = signer.unsign_object(token, max_age=15 * 60)  # 15 minutes
+
+            # Validate token matches request
+            if (
+                data.get('kyc_id') != kyc_id
+                or data.get('document_field') != document_field
+            ):
+                raise PermissionDenied('Invalid token')
+
+            # Get KYC verification
+            kyc = KYCVerification.objects.get(id=kyc_id)
+
+            # Check permissions - only staff or the user themselves can access
+            if not (request.user.is_staff or request.user == kyc.user):
+                raise PermissionDenied(
+                    'You do not have permission to access this document'
+                )
+
+            # Get the document
+            document = getattr(kyc, document_field, None)
+            if not document or not document.name:
+                raise Http404('Document not found')
+
+            # Serve the file
+            return FileResponse(
+                document.open('rb'),
+                content_type='image/jpeg',
+            )
+
+        except SignatureExpired:
+            raise PermissionDenied('Document access URL has expired')
+        except BadSignature:
+            raise PermissionDenied('Invalid document access token')
+        except KYCVerification.DoesNotExist:
+            raise Http404('KYC verification not found')
 
