@@ -4,6 +4,7 @@
 # activates production verification with no further code changes.
 import logging
 import random
+import time
 
 import requests
 from django.conf import settings
@@ -15,6 +16,17 @@ from tenacity import (
     retry_if_exception_type,
 )
 from config.utils import sanitize_pii
+
+
+try:
+    from accounts.kyc_metrics import (
+        increment_iprs_call,
+        observe_iprs_call_duration,
+    )
+except ImportError:
+    # Metrics module not available (e.g., during initial migration)
+    increment_iprs_call = None
+    observe_iprs_call_duration = None
 
 
 logger = logging.getLogger('saccosphere.iprs')
@@ -234,6 +246,11 @@ class IPRSClient:
                 'IPRS mock verification',
                 extra={**log_context, 'outcome': 'verified'},
             )
+            # Record metrics for mock mode
+            if increment_iprs_call:
+                increment_iprs_call('success')
+            if observe_iprs_call_duration:
+                observe_iprs_call_duration(0.0)
             return {
                 'outcome': 'verified',
                 'verified': True,
@@ -255,11 +272,28 @@ class IPRSClient:
             'Content-Type': 'application/json',
         }
 
+        start_time = time.time()
         try:
             data = self._verify_id_with_retry(
                 payload, headers, correlation_id, kyc_submission_id
             )
+            duration = time.time() - start_time
+
+            # Record metrics
+            if increment_iprs_call:
+                increment_iprs_call('success')
+            if observe_iprs_call_duration:
+                observe_iprs_call_duration(duration)
+
         except TransientIPRSError:
+            duration = time.time() - start_time
+
+            # Record metrics
+            if increment_iprs_call:
+                increment_iprs_call('failure')
+            if observe_iprs_call_duration:
+                observe_iprs_call_duration(duration)
+
             logger.warning(
                 'IPRS unavailable after retries',
                 extra={
@@ -273,6 +307,14 @@ class IPRSClient:
                 'IPRS unavailable after retries.',
             )
         except IPRSError as exc:
+            duration = time.time() - start_time
+
+            # Record metrics
+            if increment_iprs_call:
+                increment_iprs_call('failure')
+            if observe_iprs_call_duration:
+                observe_iprs_call_duration(duration)
+
             # Permanent error, return rejected response
             logger.warning(
                 'IPRS permanent error',
