@@ -1,15 +1,19 @@
+"""Google OAuth tests."""
+import hmac
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch, MagicMock
 import importlib
 
 from django.conf import settings
+from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
-from django.test import override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
 from accounts.models import KYCVerification, User
-
+from accounts.oauth_views import NONCE_TTL_SECONDS
 
 class GoogleOAuthTest(APITestCase):
     """Regression tests for existing OAuth functionality."""
@@ -203,21 +207,23 @@ class GoogleOAuthNonceValidationTest(APITestCase):
         from accounts.oauth_views import GoogleOAuthCallbackView, GoogleOAuthLinkView
         GoogleOAuthCallbackView.throttle_classes = []
         GoogleOAuthLinkView.throttle_classes = []
+        # Clear cache before each test
+        cache.clear()
 
-    def _google_payload(self, email, nonce='test-nonce'):
+    def _google_payload(self, email, nonce='test-nonce', sub='google-sub-123'):
         return {
             'email': email,
             'given_name': 'Google',
             'family_name': 'User',
             'name': 'Google User',
             'email_verified': True,
-            'sub': 'google-sub-123',
+            'sub': sub,
             'nonce': nonce,
         }
 
     @patch('accounts.oauth_views.verify_google_id_token')
     def test_matching_nonce_succeeds(self, verify_token):
-        verify_token.return_value = self._google_payload('new@example.com', nonce='test-nonce')
+        verify_token.return_value = self._google_payload('unique-match@example.com', nonce='test-nonce', sub='google-sub-match')
 
         response = self.client.post(
             self.url,
@@ -229,7 +235,7 @@ class GoogleOAuthNonceValidationTest(APITestCase):
 
     @patch('accounts.oauth_views.verify_google_id_token')
     def test_mismatched_nonce_returns_401(self, verify_token):
-        verify_token.return_value = self._google_payload('new@example.com', nonce='token-nonce')
+        verify_token.return_value = self._google_payload('new@example.com', nonce='token-nonce', sub='google-sub-mismatch')
 
         response = self.client.post(
             self.url,
@@ -240,39 +246,69 @@ class GoogleOAuthNonceValidationTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     @patch('accounts.oauth_views.verify_google_id_token')
-    def test_nonce_replay_succeeds_currently_no_state_tracking(self, verify_token):
+    def test_nonce_replay_is_rejected(self, verify_token):
         """
-        Test that nonce replay currently succeeds due to lack of state tracking.
-        
-        This test documents the current behavior: the same nonce can be reused
-        because there is no storage of consumed nonces. This is a security gap
-        that should be addressed with proper nonce state management (e.g., cache
-        or database) with TTL.
-        """
-        verify_token.return_value = self._google_payload('new@example.com', nonce='reused-nonce')
+        Test that nonce replay is rejected after first successful validation.
 
-        # First request with the nonce
+        This test confirms that the nonce state tracking prevents replay attacks.
+        Once a nonce is successfully validated, subsequent attempts with the
+        same nonce are rejected.
+        """
+        verify_token.return_value = self._google_payload('unique-replay@example.com', nonce='replay-nonce', sub='google-sub-replay')
+
+        # First request with the nonce should succeed
         response1 = self.client.post(
             self.url,
-            {'id_token': 'valid-token', 'flow': 'signup', 'nonce': 'reused-nonce'},
+            {'id_token': 'valid-token', 'flow': 'signup', 'nonce': 'replay-nonce'},
             format='json',
         )
         self.assertEqual(response1.status_code, status.HTTP_201_CREATED)
 
-        # Replay the same nonce - currently succeeds (security gap)
+        # Replay the same nonce - should now be rejected
         response2 = self.client.post(
             self.url,
-            {'id_token': 'valid-token', 'flow': 'signup', 'nonce': 'reused-nonce'},
+            {'id_token': 'valid-token', 'flow': 'signup', 'nonce': 'replay-nonce'},
             format='json',
         )
-        # This should ideally fail, but currently succeeds
-        # Returns 200 because user already exists from first request
-        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        # Replay should fail with 401
+        self.assertEqual(response2.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @patch('accounts.oauth_views.verify_google_id_token')
+    def test_concurrent_nonce_validation_only_one_succeeds(self, verify_token):
+        """
+        Test that concurrent nonce validation with the same nonce
+        results in only one request succeeding.
+
+        This uses ThreadPoolExecutor to simulate concurrent replay attempts.
+        The atomic cache.add() ensures only one request can consume the nonce.
+        """
+        verify_token.return_value = self._google_payload('unique-concurrent@example.com', nonce='concurrent-nonce', sub='google-sub-concurrent')
+
+        def validate_nonce():
+            """Helper function to validate nonce in a thread."""
+            return self.client.post(
+                self.url,
+                {'id_token': 'valid-token', 'flow': 'signup', 'nonce': 'concurrent-nonce'},
+                format='json',
+            )
+
+        # Fire 5 concurrent requests with the same nonce
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(validate_nonce) for _ in range(5)]
+            responses = [future.result() for future in futures]
+
+        # Count successes (201) and failures (401)
+        success_count = sum(1 for r in responses if r.status_code == status.HTTP_201_CREATED)
+        failure_count = sum(1 for r in responses if r.status_code == status.HTTP_401_UNAUTHORIZED)
+
+        # Exactly one should succeed, the rest should fail
+        self.assertEqual(success_count, 1, "Exactly one concurrent request should succeed")
+        self.assertEqual(failure_count, 4, "Four concurrent requests should fail due to nonce replay")
 
     @override_settings(NONCE_REQUIRED=False)
     @patch('accounts.oauth_views.verify_google_id_token')
     def test_missing_nonce_succeeds_when_nonce_required_false(self, verify_token):
-        verify_token.return_value = self._google_payload('new@example.com', nonce=None)
+        verify_token.return_value = self._google_payload('unique-no-nonce@example.com', nonce=None, sub='google-sub-no-nonce')
 
         response = self.client.post(
             self.url,
@@ -285,7 +321,7 @@ class GoogleOAuthNonceValidationTest(APITestCase):
     @override_settings(NONCE_REQUIRED=True)
     @patch('accounts.oauth_views.verify_google_id_token')
     def test_missing_nonce_fails_when_nonce_required_true(self, verify_token):
-        verify_token.return_value = self._google_payload('new@example.com', nonce=None)
+        verify_token.return_value = self._google_payload('new@example.com', nonce=None, sub='google-sub-req-true')
 
         response = self.client.post(
             self.url,
@@ -298,16 +334,14 @@ class GoogleOAuthNonceValidationTest(APITestCase):
     @patch('accounts.oauth_views.verify_google_id_token')
     def test_link_view_matching_nonce_succeeds(self, verify_token):
         """Test that matching nonce is accepted in link view."""
-        password_user = User.objects.create_user(
-            email='password@example.com',
-            password='StrongPass1',
+        # Create a user without Google linked
+        user = User.objects.create_user(
+            email='link-test@example.com',
+            password='testpass123',
         )
-        verify_token.return_value = self._google_payload(
-            password_user.email,
-            nonce='link-nonce',
-        )
+        self.client.force_authenticate(user=user)
 
-        self.client.force_authenticate(user=password_user)
+        verify_token.return_value = self._google_payload('link-test@example.com', nonce='link-nonce', sub='google-sub-link')
 
         response = self.client.post(
             self.link_url,
@@ -327,6 +361,7 @@ class GoogleOAuthNonceValidationTest(APITestCase):
         verify_token.return_value = self._google_payload(
             password_user.email,
             nonce='token-nonce',
+            sub='google-sub-link-mismatch',
         )
 
         self.client.force_authenticate(user=password_user)
@@ -347,7 +382,7 @@ class GoogleOAuthNonceValidationTest(APITestCase):
             email='password@example.com',
             password='StrongPass1',
         )
-        verify_token.return_value = self._google_payload(password_user.email, nonce=None)
+        verify_token.return_value = self._google_payload(password_user.email, nonce=None, sub='google-sub-link-req-true')
 
         self.client.force_authenticate(user=password_user)
 

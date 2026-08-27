@@ -2,6 +2,7 @@ import logging
 import hmac
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from rest_framework import status
 from rest_framework.exceptions import AuthenticationFailed
@@ -15,6 +16,10 @@ from .serializers import GoogleAuthSerializer, UserProfileSerializer
 from .throttles import GoogleOAuthThrottle
 
 logger = logging.getLogger('accounts.oauth')
+
+# Nonce TTL: slightly longer than Google ID token lifetime (1 hour)
+# to account for clock skew and network delays
+NONCE_TTL_SECONDS = 3900  # 65 minutes
 
 
 def _mask_email(email):
@@ -349,6 +354,11 @@ class GoogleOAuthCallbackView(APIView):
         in the request using constant-time comparison to prevent timing
         attacks.
 
+        Nonce state is tracked in the cache to prevent replay attacks:
+        - On first successful validation, the nonce is atomically consumed
+        - Subsequent attempts with the same nonce are rejected
+        - Nonces expire after NONCE_TTL_SECONDS (65 minutes)
+
         If no nonce is provided and NONCE_REQUIRED is False, a warning is
         logged but the request proceeds (for backward compatibility with
         older mobile app versions). If NONCE_REQUIRED is True, missing
@@ -365,6 +375,26 @@ class GoogleOAuthCallbackView(APIView):
                 logger.warning(
                     'Nonce mismatch in Google OAuth callback: '
                     'request nonce does not match token nonce.'
+                )
+                raise AuthenticationFailed(
+                    'Nonce validation failed. The provided nonce does not '
+                    'match the token\'s nonce claim.'
+                )
+
+            # Check if nonce has already been consumed (replay protection)
+            # Use cache.add() which is atomic: returns True if key was added,
+            # False if key already exists. This prevents race conditions.
+            cache_key = f'oauth_nonce:{request_nonce}'
+            nonce_already_used = not cache.add(
+                cache_key,
+                'consumed',
+                timeout=NONCE_TTL_SECONDS
+            )
+
+            if nonce_already_used:
+                logger.warning(
+                    'Nonce replay detected in Google OAuth callback: '
+                    'nonce has already been used.'
                 )
                 raise AuthenticationFailed(
                     'Nonce validation failed. The provided nonce does not '
@@ -538,6 +568,11 @@ class GoogleOAuthLinkView(APIView):
         in the request using constant-time comparison to prevent timing
         attacks.
 
+        Nonce state is tracked in the cache to prevent replay attacks:
+        - On first successful validation, the nonce is atomically consumed
+        - Subsequent attempts with the same nonce are rejected
+        - Nonces expire after NONCE_TTL_SECONDS (65 minutes)
+
         If no nonce is provided and NONCE_REQUIRED is False, a warning is
         logged but the request proceeds (for backward compatibility with
         older mobile app versions). If NONCE_REQUIRED is True, missing
@@ -551,6 +586,22 @@ class GoogleOAuthLinkView(APIView):
                 request_nonce.encode('utf-8'),
                 (token_nonce or '').encode('utf-8'),
             ):
+                raise AuthenticationFailed(
+                    'Nonce validation failed. The provided nonce does not '
+                    'match the token\'s nonce claim.'
+                )
+
+            # Check if nonce has already been consumed (replay protection)
+            # Use cache.add() which is atomic: returns True if key was added,
+            # False if key already exists. This prevents race conditions.
+            cache_key = f'oauth_nonce:{request_nonce}'
+            nonce_already_used = not cache.add(
+                cache_key,
+                'consumed',
+                timeout=NONCE_TTL_SECONDS
+            )
+
+            if nonce_already_used:
                 raise AuthenticationFailed(
                     'Nonce validation failed. The provided nonce does not '
                     'match the token\'s nonce claim.'
