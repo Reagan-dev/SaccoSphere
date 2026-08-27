@@ -49,7 +49,7 @@ from .serializers import (
 )
 from .otp_utils import create_otp_token, verify_otp, OTPError, format_phone_number
 from .otp_backends import get_otp_backend, OTPDeliveryError
-from .throttles import OTPSendThrottle, OTPVerifyThrottle
+from .throttles import OTPSendThrottle, OTPSendIPThrottle, OTPVerifyThrottle
 
 
 def _mask_contact(channel, destination):
@@ -847,7 +847,7 @@ class SaccoDetailView(StandardResponseMixin, RetrieveAPIView):
 class OTPSendView(APIView):
     """Send OTP to user's phone number or email."""
     permission_classes = [AllowAny]
-    throttle_classes = [OTPSendThrottle]
+    throttle_classes = [OTPSendThrottle, OTPSendIPThrottle]
 
     @swagger_auto_schema(
         operation_summary='Send OTP code',
@@ -959,7 +959,7 @@ class OTPVerifyView(APIView):
 class OTPResendView(APIView):
     """Resend OTP code."""
     permission_classes = [AllowAny]
-    throttle_classes = [OTPSendThrottle]
+    throttle_classes = [OTPSendThrottle, OTPSendIPThrottle]
 
     @swagger_auto_schema(
         operation_summary='Resend OTP code',
