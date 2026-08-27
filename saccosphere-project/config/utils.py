@@ -1,5 +1,6 @@
 """Shared utility functions."""
 
+import hashlib
 import re
 from uuid import uuid4
 
@@ -62,3 +63,28 @@ def normalize_phone_number(raw: str, region: str = 'KE') -> str:
 
 def get_request_id(request):
     return request.headers.get('X-Correlation-ID') or str(uuid4())
+
+
+def sanitize_pii(value, max_length=8):
+    """
+    Sanitize PII for logging by returning a truncated/hashed reference.
+    
+    Args:
+        value: The PII value to sanitize (e.g., id_number, phone number)
+        max_length: Maximum length of the truncated reference (default: 8)
+    
+    Returns:
+        str: A truncated reference (first N chars + '...' + last 4 chars)
+             or a SHA256 hash if the value is too short for truncation
+    """
+    if not value:
+        return '[REDACTED]'
+    
+    value_str = str(value)
+    
+    # If value is short enough, just show first N and last 4 chars
+    if len(value_str) > max_length + 4:
+        return f'{value_str[:max_length]}...{value_str[-4:]}'
+    
+    # For short values, use a hash instead
+    return f'[HASH:{hashlib.sha256(value_str.encode()).hexdigest()[:8]}]'

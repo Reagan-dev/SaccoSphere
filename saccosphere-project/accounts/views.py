@@ -1,6 +1,7 @@
 import hashlib
 import logging
 
+from config.utils import sanitize_pii
 from django.contrib.auth import authenticate
 from django.core.exceptions import FieldError
 from django.db.models import Count, Q
@@ -135,7 +136,7 @@ def get_user_by_phone_number(phone_number):
     )
 
 
-def apply_iprs_result(kyc, result, request=None):
+def apply_iprs_result(kyc, result, request=None, correlation_id=None):
     """Save IPRS verification details on a KYC record."""
     outcome = result.get('outcome')
     if not outcome and result.get('verified'):
@@ -174,15 +175,17 @@ def apply_iprs_result(kyc, result, request=None):
                 ],
             )
     except IntegrityError:
-        # Duplicate ID number detected - log for compliance review
-        # Use a separate transaction to avoid transaction management issues
-        import logging
-        logger = logging.getLogger('saccosphere.audit')
+        # Log the duplicate ID error with structured context
         logger.warning(
-            'Duplicate ID attempt detected for user %s (KYC ID: %s). '
-            'IPRS verification failed due to duplicate ID number.',
-            kyc.user.id,
-            kyc.id,
+            'Duplicate ID number detected',
+            extra={
+                'correlation_id': correlation_id or '-',
+                'kyc_submission_id': str(kyc.id),
+                'id_number_ref': sanitize_pii(kyc.id_number),
+                'step': 'apply_iprs_result',
+                'error_type': 'integrity_error',
+                'outcome': 'duplicate_id',
+            },
         )
         # Try to log to audit table in a separate transaction
         try:
@@ -375,6 +378,7 @@ class KYCUploadView(APIView):
 
         document_type = serializer.validated_data['document_type']
         uploaded_file = serializer.validated_data['file']
+        correlation_id = getattr(request, 'correlation_id', None)
 
         # Calculate file hash for idempotency
         uploaded_file.seek(0)
@@ -428,7 +432,7 @@ class KYCUploadView(APIView):
 
         # IPRS verification happens outside the transaction to avoid holding locks
         # during network calls. We re-check the locked state before calling IPRS.
-        self._auto_verify_id(kyc)
+        self._auto_verify_id(kyc, correlation_id=correlation_id)
 
         response_serializer = KYCStatusSerializer(
             kyc,
@@ -439,7 +443,7 @@ class KYCUploadView(APIView):
             status=status.HTTP_200_OK,
         )
 
-    def _auto_verify_id(self, kyc):
+    def _auto_verify_id(self, kyc, correlation_id=None):
         """Run IPRS verification without holding database locks during the network call."""
         # Only call IPRS if we have an id_number
         if not kyc.id_number:
@@ -451,6 +455,8 @@ class KYCUploadView(APIView):
                 kyc.id_number,
                 date_of_birth=kyc.user.date_of_birth,
                 full_name=kyc.user.get_full_name(),
+                correlation_id=correlation_id,
+                kyc_submission_id=str(kyc.id),
             )
         except IPRSError:
             result = {
@@ -475,12 +481,20 @@ class KYCUploadView(APIView):
                 and fresh_kyc.status == KYCVerification.Status.PENDING
             ):
                 try:
-                    apply_iprs_result(fresh_kyc, result, request=None)
+                    apply_iprs_result(
+                        fresh_kyc, result, request=None, correlation_id=correlation_id
+                    )
                 except IntegrityError:
                     # Log the error but don't raise - the upload already succeeded
                     logger.warning(
                         'IntegrityError applying IPRS result for KYC %s after upload',
                         fresh_kyc.id,
+                        extra={
+                            'correlation_id': correlation_id or '-',
+                            'kyc_submission_id': str(fresh_kyc.id),
+                            'step': 'apply_iprs_result',
+                            'error_type': 'integrity_error',
+                        },
                     )
 
 
@@ -505,6 +519,7 @@ class KYCSubmitIDView(APIView):
     def post(self, request):
         id_number = request.data.get('id_number')
         date_of_birth = request.data.get('date_of_birth')
+        correlation_id = getattr(request, 'correlation_id', None)
 
         if not id_number:
             return Response(
@@ -518,6 +533,7 @@ class KYCSubmitIDView(APIView):
                 id_number,
                 date_of_birth=date_of_birth,
                 full_name=request.user.get_full_name(),
+                correlation_id=correlation_id,
             )
         except IPRSError:
             result = {
@@ -536,7 +552,7 @@ class KYCSubmitIDView(APIView):
             )
 
             try:
-                apply_iprs_result(kyc, result, request=request)
+                apply_iprs_result(kyc, result, request=request, correlation_id=correlation_id)
             except IntegrityError:
                 return Response(
                     {
