@@ -15,8 +15,10 @@ import abc
 import logging
 import smtplib
 import time
+from datetime import datetime
 
 from django.conf import settings
+from django.core.cache import cache
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 
@@ -25,9 +27,74 @@ from .models import OTPToken
 logger = logging.getLogger(__name__)
 sms_logger = logging.getLogger('accounts.sms')
 
-# In-process counters for SMS delivery metrics
-_sms_delivery_success_count = 0
-_sms_delivery_failure_count = 0
+# Redis key prefix for SMS delivery metrics
+SMS_METRICS_KEY_PREFIX = 'otp:sms'
+# TTL for daily metrics keys (90 days to allow historical analysis)
+SMS_METRICS_TTL_SECONDS = 90 * 24 * 60 * 60
+
+
+def _get_metrics_date():
+    """Get current date in YYYYMMDD format for time-bucketed keys."""
+    return datetime.now().strftime('%Y%m%d')
+
+
+def _increment_sms_metric(status: str, purpose: str = None) -> None:
+    """
+    Atomically increment SMS delivery metric in Redis.
+
+    Args:
+        status: Either 'success' or 'failure'
+        purpose: OTP purpose (PHONE_VERIFY, PASSWORD_RESET, LOGIN) for granularity
+    """
+    date_str = _get_metrics_date()
+
+    # Always increment the aggregated key (without purpose)
+    aggregated_key = f'{SMS_METRICS_KEY_PREFIX}:{status}:{date_str}'
+    try:
+        cache.incr(aggregated_key)
+        cache.set(aggregated_key, cache.get(aggregated_key), SMS_METRICS_TTL_SECONDS)
+    except ValueError:
+        cache.set(aggregated_key, 1, SMS_METRICS_TTL_SECONDS)
+
+    # Also increment per-purpose key if purpose is specified
+    if purpose:
+        purpose_key = f'{SMS_METRICS_KEY_PREFIX}:{status}:{purpose}:{date_str}'
+        try:
+            cache.incr(purpose_key)
+            cache.set(purpose_key, cache.get(purpose_key), SMS_METRICS_TTL_SECONDS)
+        except ValueError:
+            cache.set(purpose_key, 1, SMS_METRICS_TTL_SECONDS)
+
+
+def get_sms_metrics(date_str: str = None, purpose: str = None) -> dict:
+    """
+    Get SMS delivery metrics for a specific date.
+
+    Args:
+        date_str: Date in YYYYMMDD format. Defaults to today.
+        purpose: Filter by OTP purpose. If None, returns aggregated totals.
+
+    Returns:
+        dict: {'success': int, 'failure': int, 'total': int}
+    """
+    if date_str is None:
+        date_str = _get_metrics_date()
+
+    if purpose:
+        success_key = f'{SMS_METRICS_KEY_PREFIX}:success:{purpose}:{date_str}'
+        failure_key = f'{SMS_METRICS_KEY_PREFIX}:failure:{purpose}:{date_str}'
+    else:
+        success_key = f'{SMS_METRICS_KEY_PREFIX}:success:{date_str}'
+        failure_key = f'{SMS_METRICS_KEY_PREFIX}:failure:{date_str}'
+
+    success_count = cache.get(success_key, 0)
+    failure_count = cache.get(failure_key, 0)
+
+    return {
+        'success': success_count,
+        'failure': failure_count,
+        'total': success_count + failure_count,
+    }
 
 
 def _mask_phone(phone_number: str) -> str:
@@ -248,8 +315,6 @@ class PhoneOTPBackend(BaseOTPBackend):
         Returns:
             None
         """
-        global _sms_delivery_success_count, _sms_delivery_failure_count
-
         # In DEBUG mode, log instead of sending
         if settings.DEBUG:
             logger.info(
@@ -287,7 +352,7 @@ class PhoneOTPBackend(BaseOTPBackend):
                 # Classify response into specific error types
                 self._classify_error(response)
 
-                _sms_delivery_success_count += 1
+                _increment_sms_metric('success', token.purpose)
                 logger.info(
                     f'OTP sent successfully to {masked_phone} '
                     f'(purpose={token.purpose}, channel={self.channel})'
@@ -296,7 +361,7 @@ class PhoneOTPBackend(BaseOTPBackend):
 
             except (InvalidRecipientError, InsufficientBalanceError, RateLimitError) as e:
                 # These errors should not be retried
-                _sms_delivery_failure_count += 1
+                _increment_sms_metric('failure', token.purpose)
                 error_type = type(e).__name__
 
                 # Log to dedicated SMS logger with structured data
@@ -322,7 +387,7 @@ class PhoneOTPBackend(BaseOTPBackend):
 
             except OTPDeliveryError as e:
                 # Other OTP delivery errors
-                _sms_delivery_failure_count += 1
+                _increment_sms_metric('failure', token.purpose)
                 error_type = type(e).__name__
 
                 sms_logger.error(
@@ -354,7 +419,7 @@ class PhoneOTPBackend(BaseOTPBackend):
                     time.sleep(1)
                 else:
                     # Retry also failed
-                    _sms_delivery_failure_count += 1
+                    _increment_sms_metric('failure', token.purpose)
                     sms_logger.error(
                         f'SMS delivery failed after retry: network_error | '
                         f'purpose={token.purpose} | channel={self.channel} | '
