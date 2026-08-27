@@ -980,6 +980,10 @@ class KYCVerification(models.Model):
 
         NOT_STARTED = 'NOT_STARTED', 'Not started'
 
+        IPRS_REJECTED = 'IPRS_REJECTED', 'Rejected by IPRS'
+
+        IPRS_UNAVAILABLE = 'IPRS_UNAVAILABLE', 'IPRS unavailable'
+
 
 
     id = models.UUIDField(

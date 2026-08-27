@@ -150,11 +150,18 @@ def apply_iprs_result(kyc, result, request=None, correlation_id=None):
 
     if outcome == 'mismatch':
         kyc.status = KYCVerification.Status.IPRS_MISMATCH
+    elif outcome == 'rejected_by_iprs':
+        kyc.status = KYCVerification.Status.IPRS_REJECTED
+    elif outcome == 'iprs_unavailable':
+        kyc.status = KYCVerification.Status.IPRS_UNAVAILABLE
     elif outcome == 'unavailable':
-        kyc.status = KYCVerification.Status.PENDING_MANUAL
+        # Backward compatibility: map old unavailable to iprs_unavailable
+        kyc.status = KYCVerification.Status.IPRS_UNAVAILABLE
     elif outcome == 'verified' and kyc.status in {
         KYCVerification.Status.IPRS_MISMATCH,
         KYCVerification.Status.PENDING_MANUAL,
+        KYCVerification.Status.IPRS_REJECTED,
+        KYCVerification.Status.IPRS_UNAVAILABLE,
     }:
         if kyc.id_front and kyc.id_back:
             kyc.status = KYCVerification.Status.PENDING
