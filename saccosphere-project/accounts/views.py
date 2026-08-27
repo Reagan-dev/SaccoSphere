@@ -390,6 +390,10 @@ class KYCUploadView(APIView):
 
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+    throttle_classes = [
+        'accounts.throttles.KYCUploadUserThrottle',
+        'accounts.throttles.KYCUploadIPThrottle',
+    ]
 
     @swagger_auto_schema(
         operation_description='Upload a KYC document for the authenticated user.',

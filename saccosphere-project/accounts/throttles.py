@@ -1,11 +1,15 @@
 """Custom throttling classes for OTP endpoints."""
 
+import logging
 from django.conf import settings
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from rest_framework.exceptions import Throttled
 from django.core.cache import cache
 from django.utils import timezone
 from datetime import timedelta
+
+
+logger = logging.getLogger(__name__)
 
 
 def _get_client_ip(request):
@@ -114,3 +118,109 @@ class OTPVerifyThrottle(AnonRateThrottle):
     Uses IP-based throttling since this endpoint is anonymous (AllowAny).
     """
     rate = '10/minute'
+
+
+class KYCUploadUserThrottle(UserRateThrottle):
+    """
+    Throttle KYC document uploads for authenticated users.
+
+    Limits uploads per user to prevent storage exhaustion while allowing
+    legitimate retries for document errors. Uses a configurable rate from
+    Django settings. Default: 10 per hour.
+
+    Justification: A legitimate user typically uploads 2 documents (front/back)
+    once, with a few retries for errors. 10/hour allows for legitimate retries
+    while preventing storage exhaustion abuse.
+    """
+
+    def __init__(self):
+        rate = getattr(settings, 'KYC_UPLOAD_USER_RATE', '10/hour')
+        self.rate = rate if rate else '10/hour'
+        super().__init__()
+
+    def get_cache_key(self, request, view):
+        """
+        Use user ID for cache key.
+        """
+        if request.user and request.user.is_authenticated:
+            return f'kyc_upload_user_{request.user.id}'
+        return None
+
+    def allow_request(self, request, view):
+        """
+        Store request reference before checking throttle.
+        """
+        self.request = request
+        return super().allow_request(request, view)
+
+    def throttle_failure(self):
+        """
+        Raise Throttled exception with Retry-After header and log the event.
+        """
+        wait = self.wait()
+        logger.warning(
+            'KYC upload throttled for user %s. Wait: %s seconds',
+            getattr(self.request.user, 'id', 'anonymous'),
+            wait,
+            extra={
+                'user_id': getattr(self.request.user, 'id', None),
+                'throttle_type': 'user',
+                'wait_seconds': wait,
+            },
+        )
+        raise Throttled(
+            wait=wait,
+            detail='Too many KYC upload requests. Please try again later.',
+        )
+
+
+class KYCUploadIPThrottle(AnonRateThrottle):
+    """
+    Throttle KYC document uploads by IP address.
+
+    Defense-in-depth measure to prevent bulk attacks even if authentication
+    changes. Limits total uploads from a single IP regardless of user.
+    Uses a configurable rate from Django settings. Default: 20 per hour.
+
+    Matches OTP_SEND_IP_RATE for consistency across sensitive endpoints.
+    """
+
+    def __init__(self):
+        rate = getattr(settings, 'KYC_UPLOAD_IP_RATE', '20/hour')
+        self.rate = rate if rate else '20/hour'
+        super().__init__()
+
+    def get_cache_key(self, request, view):
+        """
+        Use client IP address for cache key.
+        """
+        ip = _get_client_ip(request)
+        return f'kyc_upload_ip_{ip}'
+
+    def allow_request(self, request, view):
+        """
+        Store request reference before checking throttle.
+        """
+        self.request = request
+        return super().allow_request(request, view)
+
+    def throttle_failure(self):
+        """
+        Raise Throttled exception with Retry-After header and log the event.
+        """
+        wait = self.wait()
+        ip = _get_client_ip(self.request)
+        logger.warning(
+            'KYC upload throttled for IP %s. Wait: %s seconds',
+            ip,
+            wait,
+            extra={
+                'client_ip': ip,
+                'throttle_type': 'ip',
+                'wait_seconds': wait,
+            },
+        )
+        raise Throttled(
+            wait=wait,
+            detail='Too many KYC upload requests. Please try again later.',
+        )

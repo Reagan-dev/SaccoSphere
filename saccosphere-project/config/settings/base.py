@@ -262,6 +262,18 @@ IPRS_API_URL = config(
 )
 IPRS_MOCK = config('IPRS_MOCK', cast=bool, default=True)
 
+# KYC Upload Rate Limiting Configuration
+# Limits for authenticated users: 10 uploads per hour per user
+# Justification: A legitimate user typically uploads 2 documents (front/back) once,
+# with a few retries for errors. 10/hour allows for legitimate retries while
+# preventing storage exhaustion abuse.
+KYC_UPLOAD_USER_RATE = config('KYC_UPLOAD_USER_RATE', default='10/hour')
+
+# Limits for IP-based throttling: 20 uploads per hour per IP
+# Defense-in-depth measure to prevent bulk attacks even if authentication changes.
+# Matches OTP_SEND_IP_RATE for consistency.
+KYC_UPLOAD_IP_RATE = config('KYC_UPLOAD_IP_RATE', default='20/hour')
+
 # Metropol CRB Configuration
 METROPOL_API_KEY = config('METROPOL_API_KEY', default='')
 METROPOL_API_URL = config(
