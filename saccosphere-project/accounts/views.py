@@ -21,6 +21,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from config.response import StandardResponseMixin
+from django.db import IntegrityError, transaction
 from saccomanagement.audit_logger import log_audit
 from saccomanagement.odpc_logging import DataAccessMixin
 
@@ -126,7 +127,7 @@ def get_user_by_phone_number(phone_number):
     )
 
 
-def apply_iprs_result(kyc, result):
+def apply_iprs_result(kyc, result, request=None):
     """Save IPRS verification details on a KYC record."""
     outcome = result.get('outcome')
     if not outcome and result.get('verified'):
@@ -151,16 +152,46 @@ def apply_iprs_result(kyc, result):
         else:
             kyc.status = KYCVerification.Status.NOT_STARTED
 
-    kyc.save(
-        update_fields=[
-            'id_number',
-            'iprs_verified',
-            'iprs_reference',
-            'iprs_attempted_at',
-            'iprs_error',
-            'status',
-        ],
-    )
+    try:
+        with transaction.atomic():
+            kyc.save(
+                update_fields=[
+                    'id_number',
+                    'normalized_id_number',
+                    'iprs_verified',
+                    'iprs_reference',
+                    'iprs_attempted_at',
+                    'iprs_error',
+                    'status',
+                ],
+            )
+    except IntegrityError:
+        # Duplicate ID number detected - log for compliance review
+        # Use a separate transaction to avoid transaction management issues
+        import logging
+        logger = logging.getLogger('saccosphere.audit')
+        logger.warning(
+            'Duplicate ID attempt detected for user %s (KYC ID: %s). '
+            'IPRS verification failed due to duplicate ID number.',
+            kyc.user.id,
+            kyc.id,
+        )
+        # Try to log to audit table in a separate transaction
+        try:
+            with transaction.atomic(savepoint=False):
+                log_audit(
+                    user=kyc.user,
+                    action='DUPLICATE_ID_ATTEMPT',
+                    resource_type='KYCVerification',
+                    resource_id=kyc.id,
+                    old_values={},
+                    new_values={'id_number': '[REDACTED]'},  # Never log raw PII
+                    request=request,
+                )
+        except Exception:
+            # Audit log failed, but we already logged to the standard logger
+            pass
+        raise
 
 
 class RegisterView(StandardResponseMixin, CreateAPIView):
@@ -384,7 +415,18 @@ class KYCUploadView(APIView):
                 'error': 'IPRS request failed.',
             }
 
-        apply_iprs_result(kyc, result)
+        try:
+            apply_iprs_result(kyc, result, request=request)
+        except IntegrityError:
+            return Response(
+                {
+                    'detail': (
+                        'Unable to process your KYC verification. '
+                        'Please contact support if this issue persists.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 class KYCSubmitIDView(APIView):
@@ -435,7 +477,18 @@ class KYCSubmitIDView(APIView):
                 'error': 'IPRS request failed.',
             }
 
-        apply_iprs_result(kyc, result)
+        try:
+            apply_iprs_result(kyc, result, request=request)
+        except IntegrityError:
+            return Response(
+                {
+                    'detail': (
+                        'Unable to process your KYC verification. '
+                        'Please contact support if this issue persists.'
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response(
             {
                 'outcome': result.get('outcome'),

@@ -13,6 +13,47 @@ from django.db import models
 from django.utils import timezone
 
 from .storage import KYCDocumentStorage
+import re
+
+
+def normalize_id_number(id_number):
+    """
+    Normalize a Kenyan national ID number for comparison and storage.
+
+    Normalization rules:
+    - Strip leading/trailing whitespace
+    - Remove all non-alphanumeric characters (spaces, dashes, slashes, etc.)
+    - Convert to uppercase for consistency
+
+    This ensures that "12345678", "1234-5678", and " 12345678 " are treated
+    as the same ID number.
+
+    Args:
+        id_number: The raw ID number string (can be None or empty)
+
+    Returns:
+        Normalized ID number string, or None if input is None, empty string if input is empty/whitespace
+    """
+    if id_number is None:
+        return None
+
+    if not isinstance(id_number, str):
+        id_number = str(id_number)
+
+    # Strip whitespace
+    id_number = id_number.strip()
+
+    # Return empty string if input was just whitespace
+    if not id_number:
+        return ''
+
+    # Remove all non-alphanumeric characters
+    normalized = re.sub(r'[^a-zA-Z0-9]', '', id_number)
+
+    # Convert to uppercase
+    normalized = normalized.upper()
+
+    return normalized
 
 
 class EncryptedFieldMixin:
@@ -977,6 +1018,20 @@ class KYCVerification(models.Model):
 
     )
 
+    normalized_id_number = models.CharField(
+
+        max_length=20,
+
+        null=True,
+
+        blank=True,
+
+        db_index=True,
+
+        help_text='Normalized ID number (stripped of punctuation, uppercase).',
+
+    )
+
     id_front = models.ImageField(
 
         storage=KYCDocumentStorage(),
@@ -1171,7 +1226,27 @@ class KYCVerification(models.Model):
 
         ordering = ['-created_at']
 
+        constraints = [
+            models.UniqueConstraint(
+                fields=['normalized_id_number'],
+                condition=~models.Q(normalized_id_number__isnull=True)
+                & ~models.Q(normalized_id_number__exact=''),
+                name='unique_normalized_id_number',
+                violation_error_message=(
+                    'A user with this national ID number already exists.'
+                ),
+            )
+        ]
 
+    def save(self, *args, **kwargs):
+        """Normalize id_number before saving."""
+        if self.id_number:
+            self.normalized_id_number = normalize_id_number(self.id_number)
+        elif self.id_number == '':
+            self.normalized_id_number = ''
+        else:
+            self.normalized_id_number = None
+        super().save(*args, **kwargs)
 
     def __str__(self):
 
