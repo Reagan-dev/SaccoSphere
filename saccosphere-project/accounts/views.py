@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import time
 
 from config.utils import sanitize_pii
 from django.contrib.auth import authenticate
@@ -28,6 +29,16 @@ from saccomanagement.audit_logger import log_audit
 from saccomanagement.odpc_logging import DataAccessMixin
 
 from .integrations.iprs_client import IPRSClient, IPRSError
+
+try:
+    from accounts.kyc_metrics import (
+        increment_kyc_submission,
+        observe_processing_time,
+    )
+except ImportError:
+    # Metrics module not available (e.g., during initial migration)
+    increment_kyc_submission = None
+    observe_processing_time = None
 from .models import (
     DataErasureRequest,
     KYCVerification,
@@ -152,11 +163,17 @@ def apply_iprs_result(kyc, result, request=None, correlation_id=None):
         kyc.status = KYCVerification.Status.IPRS_MISMATCH
     elif outcome == 'rejected_by_iprs':
         kyc.status = KYCVerification.Status.IPRS_REJECTED
+        if increment_kyc_submission:
+            increment_kyc_submission('rejected')
     elif outcome == 'iprs_unavailable':
         kyc.status = KYCVerification.Status.IPRS_UNAVAILABLE
+        if increment_kyc_submission:
+            increment_kyc_submission('iprs_unavailable')
     elif outcome == 'unavailable':
         # Backward compatibility: map old unavailable to iprs_unavailable
         kyc.status = KYCVerification.Status.IPRS_UNAVAILABLE
+        if increment_kyc_submission:
+            increment_kyc_submission('iprs_unavailable')
     elif outcome == 'verified' and kyc.status in {
         KYCVerification.Status.IPRS_MISMATCH,
         KYCVerification.Status.PENDING_MANUAL,
@@ -165,6 +182,8 @@ def apply_iprs_result(kyc, result, request=None, correlation_id=None):
     }:
         if kyc.id_front and kyc.id_back:
             kyc.status = KYCVerification.Status.PENDING
+            if increment_kyc_submission:
+                increment_kyc_submission('approved')
         else:
             kyc.status = KYCVerification.Status.NOT_STARTED
 
@@ -380,6 +399,7 @@ class KYCUploadView(APIView):
     )
     def post(self, request):
         """Validate and save a KYC document upload with proper locking."""
+        start_time = time.time()
         serializer = KYCUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -434,12 +454,21 @@ class KYCUploadView(APIView):
                     'submitted_at',
                     'rejection_reason',
                 ])
+                
+                # Record submission metric
+                if increment_kyc_submission:
+                    increment_kyc_submission('submitted')
 
             kyc.save(update_fields=update_fields)
 
         # IPRS verification happens outside the transaction to avoid holding locks
         # during network calls. We re-check the locked state before calling IPRS.
         self._auto_verify_id(kyc, correlation_id=correlation_id)
+
+        # Record processing time
+        duration = time.time() - start_time
+        if observe_processing_time:
+            observe_processing_time(duration)
 
         response_serializer = KYCStatusSerializer(
             kyc,
