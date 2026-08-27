@@ -87,6 +87,7 @@ sentry-sdk==2.59.0
 simple-websocket==1.1.0
 six==1.17.0
 sqlparse==0.5.5
+tenacity==9.0.0
 tinycss2==1.5.1
 tinyhtml5==2.1.0
 tzdata==2026.2

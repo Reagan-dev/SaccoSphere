@@ -3,10 +3,17 @@
 # that flipping IPRS_MOCK=False and supplying real IPRS_API_KEY / IPRS_API_URL
 # activates production verification with no further code changes.
 import logging
-import time
+import random
 
 import requests
 from django.conf import settings
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential_jitter,
+    before_sleep_log,
+    retry_if_exception_type,
+)
 from config.utils import sanitize_pii
 
 
@@ -19,18 +26,191 @@ class IPRSError(Exception):
     pass
 
 
+class TransientIPRSError(IPRSError):
+    """Raised for transient IPRS errors that should be retried."""
+
+    pass
+
+
 class IPRSClient:
     """Client for verifying Kenyan identity details through IPRS."""
 
-    MAX_RETRIES = 2
+    MAX_RETRIES = 3
     TIMEOUT_SECONDS = 8
+    TRANSIENT_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+    PERMANENT_HTTP_STATUS_CODES = {400, 401, 403, 404, 422}
 
     def __init__(self):
         self.api_key = settings.IPRS_API_KEY
         self.api_url = settings.IPRS_API_URL
         self.mock = settings.DEBUG or settings.IPRS_MOCK
 
-    def verify_id(self, id_number, date_of_birth=None, full_name=None, correlation_id=None, kyc_submission_id=None):
+    def _is_transient_error(self, status_code, exception=None):
+        """
+        Determine if an error is transient (worth retrying) or permanent.
+
+        Args:
+            status_code: HTTP status code (if available)
+            exception: The exception that occurred (if available)
+
+        Returns:
+            bool: True if the error is transient, False if permanent
+        """
+        if status_code in self.TRANSIENT_HTTP_STATUS_CODES:
+            return True
+        if status_code in self.PERMANENT_HTTP_STATUS_CODES:
+            return False
+        if exception:
+            # Connection errors and timeouts are transient
+            if isinstance(exception, (requests.ConnectionError, requests.Timeout)):
+                return True
+        # Unknown status codes are treated as transient for safety
+        return status_code is None or status_code >= 500
+
+    def _make_iprs_request(self, payload, headers, correlation_id=None, kyc_submission_id=None):
+        """
+        Make a single IPRS API request.
+
+        Args:
+            payload: Request payload
+            headers: Request headers
+            correlation_id: Correlation ID for tracing
+            kyc_submission_id: KYC submission UUID for tracing
+
+        Returns:
+            tuple: (response_dict, is_transient_error)
+        """
+        sanitized_id = sanitize_pii(payload.get('id_number', ''))
+        log_context = {
+            'correlation_id': correlation_id or '-',
+            'kyc_submission_id': kyc_submission_id or '-',
+            'id_number_ref': sanitized_id,
+            'step': 'iprs_verification',
+        }
+
+        try:
+            response = requests.post(
+                self.api_url,
+                json=payload,
+                headers=headers,
+                timeout=self.TIMEOUT_SECONDS,
+            )
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            logger.warning(
+                'IPRS connection error',
+                extra={
+                    **log_context,
+                    'error_type': 'connection_error',
+                    'error_class': exc.__class__.__name__,
+                    'outcome': 'iprs_unavailable',
+                },
+            )
+            return None, True  # Transient error
+        except requests.RequestException as exc:
+            logger.warning(
+                'IPRS request error',
+                extra={
+                    **log_context,
+                    'error_type': 'request_error',
+                    'error_class': exc.__class__.__name__,
+                    'outcome': 'iprs_unavailable',
+                },
+            )
+            return None, False  # Permanent error
+
+        if not 200 <= response.status_code < 300:
+            is_transient = self._is_transient_error(response.status_code)
+            error_type = 'transient_http_error' if is_transient else 'permanent_http_error'
+            outcome = 'iprs_unavailable' if is_transient else 'rejected_by_iprs'
+
+            logger.warning(
+                'IPRS HTTP error',
+                extra={
+                    **log_context,
+                    'error_type': error_type,
+                    'http_status': response.status_code,
+                    'outcome': outcome,
+                },
+            )
+            return None, is_transient
+
+        try:
+            data = response.json()
+        except ValueError:
+            logger.warning(
+                'IPRS JSON decode error',
+                extra={
+                    **log_context,
+                    'error_type': 'json_decode_error',
+                    'outcome': 'iprs_unavailable',
+                },
+            )
+            return None, True  # Treat as transient
+
+        return data, False
+    @retry(
+        stop=stop_after_attempt(MAX_RETRIES),
+        wait=wait_exponential_jitter(
+            initial=1,
+            max=32,
+            jitter=1,
+        ),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+        retry=retry_if_exception_type(TransientIPRSError),
+    )
+    def _verify_id_with_retry(
+        self,
+        payload,
+        headers,
+        correlation_id=None,
+        kyc_submission_id=None,
+    ):
+        """
+        Execute IPRS verification with exponential backoff retry for transient errors.
+
+        Args:
+            payload: Request payload
+            headers: Request headers
+            correlation_id: Correlation ID for tracing
+            kyc_submission_id: KYC submission UUID for tracing
+
+        Returns:
+            dict: IPRS response data
+
+        Raises:
+            IPRSError: If all retries are exhausted for transient errors
+        """
+        sanitized_id = sanitize_pii(payload.get('id_number', ''))
+        log_context = {
+            'correlation_id': correlation_id or '-',
+            'kyc_submission_id': kyc_submission_id or '-',
+            'id_number_ref': sanitized_id,
+            'step': 'iprs_verification',
+        }
+
+        response_data, is_transient = self._make_iprs_request(
+            payload, headers, correlation_id, kyc_submission_id
+        )
+
+        if response_data is None:
+            if is_transient:
+                # Raise to trigger retry
+                raise TransientIPRSError('Transient IPRS error, retrying')
+            else:
+                # Permanent error, raise to avoid retry
+                raise IPRSError('Permanent IPRS error, no retry')
+
+        return response_data
+
+    def verify_id(
+        self,
+        id_number,
+        date_of_birth=None,
+        full_name=None,
+        correlation_id=None,
+        kyc_submission_id=None,
+    ):
         """
         Verify a national ID number and return a standard response dict.
 
@@ -75,108 +255,68 @@ class IPRSClient:
             'Content-Type': 'application/json',
         }
 
-        for attempt in range(self.MAX_RETRIES + 1):
-            try:
-                response = requests.post(
-                    self.api_url,
-                    json=payload,
-                    headers=headers,
-                    timeout=self.TIMEOUT_SECONDS,
-                )
-            except (
-                requests.ConnectionError,
-                requests.Timeout,
-            ) as exc:
-                if attempt < self.MAX_RETRIES:
-                    time.sleep(attempt + 1)
-                    continue
-
-                logger.warning(
-                    'IPRS connection error',
-                    extra={
-                        **log_context,
-                        'error_type': 'connection_error',
-                        'error_class': exc.__class__.__name__,
-                        'outcome': 'unavailable',
-                    },
-                )
-                return self._unavailable_response(
-                    id_number,
-                    'IPRS connection or timeout error.',
-                )
-            except requests.RequestException as exc:
-                logger.warning(
-                    'IPRS request error',
-                    extra={
-                        **log_context,
-                        'error_type': 'request_error',
-                        'error_class': exc.__class__.__name__,
-                        'outcome': 'unavailable',
-                    },
-                )
-                return self._unavailable_response(
-                    id_number,
-                    'IPRS request failed.',
-                )
-
-            if not 200 <= response.status_code < 300:
-                logger.warning(
-                    'IPRS HTTP error',
-                    extra={
-                        **log_context,
-                        'error_type': 'http_error',
-                        'http_status': response.status_code,
-                        'outcome': 'unavailable',
-                    },
-                )
-                return self._unavailable_response(
-                    id_number,
-                    f'IPRS returned HTTP {response.status_code}.',
-                )
-
-            try:
-                data = response.json()
-            except ValueError:
-                logger.warning(
-                    'IPRS JSON decode error',
-                    extra={
-                        **log_context,
-                        'error_type': 'json_decode_error',
-                        'outcome': 'unavailable',
-                    },
-                )
-                return self._unavailable_response(
-                    id_number,
-                    'IPRS returned invalid JSON.',
-                )
-
-            result = self._standardize_response(
-                data,
+        try:
+            data = self._verify_id_with_retry(
+                payload, headers, correlation_id, kyc_submission_id
+            )
+        except TransientIPRSError:
+            logger.warning(
+                'IPRS unavailable after retries',
+                extra={
+                    **log_context,
+                    'error_type': 'max_retries_exceeded',
+                    'outcome': 'iprs_unavailable',
+                },
+            )
+            return self._unavailable_response(
                 id_number,
-                date_of_birth=date_of_birth,
-                full_name=full_name,
+                'IPRS unavailable after retries.',
+            )
+        except IPRSError as exc:
+            # Permanent error, return rejected response
+            logger.warning(
+                'IPRS permanent error',
+                extra={
+                    **log_context,
+                    'error_type': 'permanent_error',
+                    'outcome': 'rejected_by_iprs',
+                },
+            )
+            return self._rejected_response(
+                id_number,
+                str(exc),
             )
 
+        # If the response already has a final outcome (rejected/unavailable),
+        # return it directly without standardization
+        if data.get('outcome') in {'rejected_by_iprs', 'iprs_unavailable'}:
             logger.info(
                 'IPRS verification completed',
                 extra={
                     **log_context,
-                    'outcome': result.get('outcome'),
-                    'verified': result.get('verified'),
+                    'outcome': data.get('outcome'),
+                    'verified': data.get('verified'),
                 },
             )
+            return data
 
-            return result
+        result = self._standardize_response(
+            data,
+            id_number,
+            date_of_birth=date_of_birth,
+            full_name=full_name,
+        )
 
-        logger.warning(
-            'IPRS unavailable after retries',
+        logger.info(
+            'IPRS verification completed',
             extra={
                 **log_context,
-                'error_type': 'max_retries_exceeded',
-                'outcome': 'unavailable',
+                'outcome': result.get('outcome'),
+                'verified': result.get('verified'),
             },
         )
-        return self._unavailable_response(id_number, 'IPRS unavailable.')
+
+        return result
 
     def _standardize_response(
         self,
@@ -277,9 +417,22 @@ class IPRSClient:
     def _normalize_text(self, value):
         return ' '.join(str(value).lower().split())
 
-    def _unavailable_response(self, id_number, error):
+    def _rejected_response(self, id_number, error):
+        """Return a response for permanent IPRS rejection."""
         return {
-            'outcome': 'unavailable',
+            'outcome': 'rejected_by_iprs',
+            'verified': False,
+            'id_number': id_number,
+            'name': None,
+            'date_of_birth': None,
+            'iprs_reference': None,
+            'error': error,
+        }
+
+    def _unavailable_response(self, id_number, error):
+        """Return a response for transient IPRS unavailability."""
+        return {
+            'outcome': 'iprs_unavailable',
             'verified': False,
             'id_number': id_number,
             'name': None,
