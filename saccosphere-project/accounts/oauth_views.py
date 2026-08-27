@@ -342,20 +342,20 @@ class GoogleOAuthCallbackView(APIView):
     def _validate_nonce(self, request_nonce, token_payload):
         """
         Validate nonce for replay protection.
-        
+
         The mobile app generates a nonce, passes it to Google's SDK when
         requesting the token, and sends it alongside the ID token. This
         method verifies that the nonce in the token matches the one sent
         in the request using constant-time comparison to prevent timing
         attacks.
-        
+
         If no nonce is provided and NONCE_REQUIRED is False, a warning is
         logged but the request proceeds (for backward compatibility with
         older mobile app versions). If NONCE_REQUIRED is True, missing
         nonces are rejected with 401.
         """
         token_nonce = token_payload.get('nonce')
-        
+
         if request_nonce:
             # Use constant-time comparison to prevent timing attacks
             if not hmac.compare_digest(
@@ -531,20 +531,20 @@ class GoogleOAuthLinkView(APIView):
     def _validate_nonce(self, request_nonce, token_payload):
         """
         Validate nonce for replay protection.
-        
+
         The mobile app generates a nonce, passes it to Google's SDK when
         requesting the token, and sends it alongside the ID token. This
         method verifies that the nonce in the token matches the one sent
         in the request using constant-time comparison to prevent timing
         attacks.
-        
+
         If no nonce is provided and NONCE_REQUIRED is False, a warning is
         logged but the request proceeds (for backward compatibility with
         older mobile app versions). If NONCE_REQUIRED is True, missing
         nonces are rejected with 401.
         """
         token_nonce = token_payload.get('nonce')
-        
+
         if request_nonce:
             # Use constant-time comparison to prevent timing attacks
             if not hmac.compare_digest(

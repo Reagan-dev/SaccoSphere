@@ -195,12 +195,14 @@ class GoogleOAuthAudienceValidationTest(APITestCase):
 
 class GoogleOAuthNonceValidationTest(APITestCase):
     """Test nonce validation for replay protection."""
-    
+
     def setUp(self):
         self.url = reverse('accounts:google-oauth-callback')
+        self.link_url = reverse('accounts:google-oauth-link')
         # Disable throttling for these tests
-        from accounts.oauth_views import GoogleOAuthCallbackView
+        from accounts.oauth_views import GoogleOAuthCallbackView, GoogleOAuthLinkView
         GoogleOAuthCallbackView.throttle_classes = []
+        GoogleOAuthLinkView.throttle_classes = []
 
     def _google_payload(self, email, nonce='test-nonce'):
         return {
@@ -237,6 +239,36 @@ class GoogleOAuthNonceValidationTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    @patch('accounts.oauth_views.verify_google_id_token')
+    def test_nonce_replay_succeeds_currently_no_state_tracking(self, verify_token):
+        """
+        Test that nonce replay currently succeeds due to lack of state tracking.
+        
+        This test documents the current behavior: the same nonce can be reused
+        because there is no storage of consumed nonces. This is a security gap
+        that should be addressed with proper nonce state management (e.g., cache
+        or database) with TTL.
+        """
+        verify_token.return_value = self._google_payload('new@example.com', nonce='reused-nonce')
+
+        # First request with the nonce
+        response1 = self.client.post(
+            self.url,
+            {'id_token': 'valid-token', 'flow': 'signup', 'nonce': 'reused-nonce'},
+            format='json',
+        )
+        self.assertEqual(response1.status_code, status.HTTP_201_CREATED)
+
+        # Replay the same nonce - currently succeeds (security gap)
+        response2 = self.client.post(
+            self.url,
+            {'id_token': 'valid-token', 'flow': 'signup', 'nonce': 'reused-nonce'},
+            format='json',
+        )
+        # This should ideally fail, but currently succeeds
+        # Returns 200 because user already exists from first request
+        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+
     @override_settings(NONCE_REQUIRED=False)
     @patch('accounts.oauth_views.verify_google_id_token')
     def test_missing_nonce_succeeds_when_nonce_required_false(self, verify_token):
@@ -258,6 +290,70 @@ class GoogleOAuthNonceValidationTest(APITestCase):
         response = self.client.post(
             self.url,
             {'id_token': 'valid-token', 'flow': 'signup'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @patch('accounts.oauth_views.verify_google_id_token')
+    def test_link_view_matching_nonce_succeeds(self, verify_token):
+        """Test that matching nonce is accepted in link view."""
+        password_user = User.objects.create_user(
+            email='password@example.com',
+            password='StrongPass1',
+        )
+        verify_token.return_value = self._google_payload(
+            password_user.email,
+            nonce='link-nonce',
+        )
+
+        self.client.force_authenticate(user=password_user)
+
+        response = self.client.post(
+            self.link_url,
+            {'id_token': 'valid-token', 'nonce': 'link-nonce'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    @patch('accounts.oauth_views.verify_google_id_token')
+    def test_link_view_mismatched_nonce_returns_401(self, verify_token):
+        """Test that mismatched nonce is rejected in link view."""
+        password_user = User.objects.create_user(
+            email='password@example.com',
+            password='StrongPass1',
+        )
+        verify_token.return_value = self._google_payload(
+            password_user.email,
+            nonce='token-nonce',
+        )
+
+        self.client.force_authenticate(user=password_user)
+
+        response = self.client.post(
+            self.link_url,
+            {'id_token': 'valid-token', 'nonce': 'request-nonce'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @override_settings(NONCE_REQUIRED=True)
+    @patch('accounts.oauth_views.verify_google_id_token')
+    def test_link_view_missing_nonce_fails_when_nonce_required_true(self, verify_token):
+        """Test that missing nonce is rejected in link view when NONCE_REQUIRED=True."""
+        password_user = User.objects.create_user(
+            email='password@example.com',
+            password='StrongPass1',
+        )
+        verify_token.return_value = self._google_payload(password_user.email, nonce=None)
+
+        self.client.force_authenticate(user=password_user)
+
+        response = self.client.post(
+            self.link_url,
+            {'id_token': 'valid-token'},
             format='json',
         )
 
