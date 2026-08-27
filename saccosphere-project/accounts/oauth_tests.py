@@ -147,21 +147,21 @@ class GoogleOAuthStartupSafetyTest(APITestCase):
 
 class GoogleOAuthAudienceValidationTest(APITestCase):
     """Test audience validation for multiple client IDs."""
-    
+
     def setUp(self):
         self.url = reverse('accounts:google-oauth-callback')
         # Disable throttling for these tests
         from accounts.oauth_views import GoogleOAuthCallbackView
         GoogleOAuthCallbackView.throttle_classes = []
 
-    def _google_payload(self, email, aud='client-id-1'):
+    def _google_payload(self, email, aud='client-id-1', sub='google-sub-123'):
         return {
             'email': email,
             'given_name': 'Google',
             'family_name': 'User',
             'name': 'Google User',
             'email_verified': True,
-            'sub': 'google-sub-123',
+            'sub': sub,
             'aud': aud,
         }
 
@@ -171,6 +171,7 @@ class GoogleOAuthAudienceValidationTest(APITestCase):
         verify_token.return_value = self._google_payload(
             'new@example.com',
             aud='client-id-1',
+            sub='google-sub-aud-1',
         )
 
         response = self.client.post(
@@ -184,13 +185,90 @@ class GoogleOAuthAudienceValidationTest(APITestCase):
     @override_settings(GOOGLE_OAUTH_ALLOWED_CLIENT_IDS=['client-id-1', 'client-id-2'])
     @patch('accounts.oauth_views.verify_google_id_token')
     def test_token_with_disallowed_audience_is_rejected(self, verify_token):
+        # Mock verify_google_id_token to raise AuthenticationFailed (simulating audience mismatch)
         from rest_framework.exceptions import AuthenticationFailed
-        # Mock to raise error for invalid audience
         verify_token.side_effect = AuthenticationFailed('Invalid Google token.')
 
         response = self.client.post(
             self.url,
             {'id_token': 'valid-token', 'flow': 'signup'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @override_settings(GOOGLE_OAUTH_ALLOWED_CLIENT_IDS=['client-id-1', 'client-id-2'])
+    @patch('accounts.oauth_views.verify_google_id_token')
+    def test_multiple_client_ids_each_accepted(self, verify_token):
+        """Test that each configured client ID is individually accepted."""
+        # Test first client ID
+        verify_token.return_value = self._google_payload(
+            'new@example.com',
+            aud='client-id-1',
+            sub='google-sub-multi-1',
+        )
+
+        response1 = self.client.post(
+            self.url,
+            {'id_token': 'valid-token', 'flow': 'signup'},
+            format='json',
+        )
+        self.assertEqual(response1.status_code, status.HTTP_201_CREATED)
+
+        # Test second client ID
+        verify_token.return_value = self._google_payload(
+            'new2@example.com',
+            aud='client-id-2',
+            sub='google-sub-multi-2',
+        )
+
+        response2 = self.client.post(
+            self.url,
+            {'id_token': 'valid-token', 'flow': 'signup'},
+            format='json',
+        )
+        self.assertEqual(response2.status_code, status.HTTP_201_CREATED)
+
+    @patch('accounts.oauth_views.verify_google_id_token')
+    def test_signature_verification_failure_is_rejected(self, verify_token):
+        """Test that token with invalid signature is rejected."""
+        # Mock verify_google_id_token to raise AuthenticationFailed (simulating signature failure)
+        from rest_framework.exceptions import AuthenticationFailed
+        verify_token.side_effect = AuthenticationFailed('Invalid Google token.')
+
+        response = self.client.post(
+            self.url,
+            {'id_token': 'invalid-token', 'flow': 'signup'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @patch('accounts.oauth_views.verify_google_id_token')
+    def test_missing_aud_claim_is_rejected(self, verify_token):
+        """Test that token with missing aud claim is rejected."""
+        # Mock verify_google_id_token to raise AuthenticationFailed (simulating missing aud)
+        from rest_framework.exceptions import AuthenticationFailed
+        verify_token.side_effect = AuthenticationFailed('Invalid Google token.')
+
+        response = self.client.post(
+            self.url,
+            {'id_token': 'token-without-aud', 'flow': 'signup'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @patch('accounts.oauth_views.verify_google_id_token')
+    def test_empty_aud_claim_is_rejected(self, verify_token):
+        """Test that token with empty aud claim is rejected."""
+        # Mock verify_google_id_token to raise AuthenticationFailed (simulating empty aud)
+        from rest_framework.exceptions import AuthenticationFailed
+        verify_token.side_effect = AuthenticationFailed('Invalid Google token.')
+
+        response = self.client.post(
+            self.url,
+            {'id_token': 'token-with-empty-aud', 'flow': 'signup'},
             format='json',
         )
 
