@@ -1,6 +1,10 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
+from django.core.signing import TimestampSigner
+from django.http import HttpRequest
+from django.urls import reverse
 
+from .kyc_document_access import generate_kyc_document_url
 from .models import (
     DataErasureRequest,
     KYCVerification,
@@ -316,10 +320,58 @@ class KYCVerificationAdmin(admin.ModelAdmin):
     )
     list_filter = ('status', 'iprs_verified')
     search_fields = ('user__email', 'user__first_name', 'user__last_name')
+    readonly_fields = (
+        'id_front_link',
+        'id_back_link',
+        'passport_link',
+        'huduma_link',
+    )
 
     @admin.display(description='User email', ordering='user__email')
     def user_email(self, obj):
         return obj.user.email
+
+    def id_front_link(self, obj):
+        return self._document_link(obj, 'id_front')
+
+    def id_back_link(self, obj):
+        return self._document_link(obj, 'id_back')
+
+    def passport_link(self, obj):
+        return self._document_link(obj, 'passport')
+
+    def huduma_link(self, obj):
+        return self._document_link(obj, 'huduma')
+
+    def _document_link(self, obj, field_name):
+        """Generate a signed URL for document viewing with audit logging."""
+        if not getattr(obj, field_name):
+            return 'No document'
+
+        # Create a mock request for audit logging
+        request = HttpRequest()
+        request.META = {
+            'REMOTE_ADDR': '127.0.0.1',
+            'HTTP_USER_AGENT': 'Django Admin',
+        }
+
+        try:
+            url = generate_kyc_document_url(
+                kyc_verification=obj,
+                document_field=field_name,
+                viewer=self.request.user if hasattr(self, 'request') else None,
+                request=request,
+            )
+            if url:
+                return f'<a href="{url}" target="_blank">View Document</a>'
+            return 'Error generating URL'
+        except Exception:
+            return 'Error generating URL'
+
+    id_front_link.short_description = 'ID Front'
+    id_back_link.short_description = 'ID Back'
+    passport_link.short_description = 'Passport'
+    huduma_link.short_description = 'Huduma'
 
 
 @admin.register(OTPToken)

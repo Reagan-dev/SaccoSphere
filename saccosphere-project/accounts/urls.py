@@ -13,6 +13,7 @@ from .oauth_views import GoogleOAuthCallbackView, GoogleOAuthLinkView
 from .views import (
     DataErasureRequestView,
     DataErasureReviewView,
+    KYCDocumentServeView,
     KYCSubmitIDView,
     KYCStatusView,
     KYCUploadView,
@@ -70,6 +71,11 @@ urlpatterns = [
     path('kyc/submit-id/', KYCSubmitIDView.as_view(), name='kyc-submit-id'),
     path('kyc/upload/', KYCUploadView.as_view(), name='kyc-upload'),
     path('kyc/status/', KYCStatusView.as_view(), name='kyc-status'),
+    path(
+        'kyc/documents/<uuid:kyc_id>/<str:document_field>/<str:token>/',
+        KYCDocumentServeView.as_view(),
+        name='kyc-document-serve',
+    ),
     path(
         'password/change/',
         PasswordChangeView.as_view(),
