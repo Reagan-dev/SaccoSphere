@@ -1,6 +1,8 @@
 import re
+from io import BytesIO
 from pathlib import Path
 
+import filetype
 from config.utils import InvalidPhoneNumberError, normalize_phone_number
 from django.conf import settings
 from PIL import Image, UnidentifiedImageError
@@ -294,6 +296,24 @@ class KYCStatusSerializer(serializers.ModelSerializer):
 class KYCUploadSerializer(serializers.Serializer):
     """Validate KYC document upload input."""
 
+    # Allowed MIME types based on current product requirements
+    ALLOWED_MIME_TYPES = {
+        'image/jpeg',
+        'image/png',
+        'application/pdf',
+    }
+
+    # Mapping of MIME types to expected extensions
+    MIME_TO_EXTENSION = {
+        'image/jpeg': ['jpg', 'jpeg'],
+        'image/png': ['png'],
+        'application/pdf': ['pdf'],
+    }
+
+    # Maximum image dimensions to prevent decompression bombs
+    # 10000x10000 = 100 megapixels, which is a reasonable upper bound
+    MAX_IMAGE_DIMENSION = 10000
+
     document_type = serializers.ChoiceField(
         choices=(
             ('id_front', 'ID front'),
@@ -305,32 +325,90 @@ class KYCUploadSerializer(serializers.Serializer):
     file = serializers.FileField()
 
     def validate_file(self, value):
-        """Validate uploaded KYC document size, type, and dimensions."""
+        """Validate uploaded KYC document with comprehensive security checks."""
+        # 1. Size limit check first (fail fast before expensive operations)
         max_size = settings.FILE_UPLOAD_MAX_MEMORY_SIZE
-        allowed_extensions = {'jpg', 'jpeg', 'png', 'pdf'}
-        extension = Path(value.name).suffix.lower().lstrip('.')
-
         if value.size > max_size:
             raise serializers.ValidationError(
                 'File size must not exceed 5MB.'
             )
 
-        if extension not in allowed_extensions:
+        # 2. Detect actual file type from magic bytes
+        value.seek(0)
+        file_bytes = value.read()
+        value.seek(0)
+
+        detected_type = filetype.guess(file_bytes)
+        if detected_type is None:
             raise serializers.ValidationError(
-                'File extension must be jpg, jpeg, png, or pdf.'
+                'Unsupported file type.'
             )
 
-        if extension != 'pdf':
-            self._validate_image_dimensions(value)
+        detected_mime = detected_type.mime
+        detected_extension = detected_type.extension
+
+        # 3. Check against MIME type allow-list
+        if detected_mime not in self.ALLOWED_MIME_TYPES:
+            raise serializers.ValidationError(
+                'Unsupported file type.'
+            )
+
+        # 4. Validate extension matches detected type
+        declared_extension = Path(value.name).suffix.lower().lstrip('.')
+        expected_extensions = self.MIME_TO_EXTENSION.get(detected_mime, [])
+
+        if declared_extension not in expected_extensions:
+            # Decision: Reject mismatched extensions to prevent confusion
+            # and ensure file integrity
+            raise serializers.ValidationError(
+                'Unsupported file type.'
+            )
+
+        # 5. For images, validate with Pillow and strip EXIF
+        if detected_mime != 'application/pdf':
+            value = self._validate_and_clean_image(value, detected_mime)
 
         return value
 
-    def _validate_image_dimensions(self, value):
-        """Validate minimum image dimensions for uploaded images."""
+    def _validate_and_clean_image(self, value, detected_mime):
+        """Validate image with Pillow and strip EXIF metadata."""
         try:
             value.seek(0)
             with Image.open(value) as image:
+                # Check dimensions before loading to prevent decompression bombs
                 width, height = image.size
+
+                if width > self.MAX_IMAGE_DIMENSION or height > self.MAX_IMAGE_DIMENSION:
+                    raise serializers.ValidationError(
+                        'Image dimensions exceed maximum allowed size.'
+                    )
+
+                # Check minimum dimensions
+                if width < 400 or height < 300:
+                    raise serializers.ValidationError(
+                        'Image dimensions must be at least 400x300 pixels.'
+                    )
+
+                # Strip EXIF metadata by converting to RGB and saving
+                # This removes all metadata including GPS coordinates
+                output = BytesIO()
+
+                # Convert to RGB to ensure consistent format
+                if image.mode in ('RGBA', 'P'):
+                    image = image.convert('RGB')
+
+                # Save without EXIF
+                image.save(output, format='JPEG' if detected_mime == 'image/jpeg' else 'PNG')
+                output.seek(0)
+
+                # Replace the original file with the cleaned version
+                value.file = output
+                value.size = output.getbuffer().nbytes
+
+        except Image.DecompressionBombError as exc:
+            raise serializers.ValidationError(
+                'Image dimensions exceed maximum allowed size.'
+            ) from exc
         except (UnidentifiedImageError, OSError) as exc:
             raise serializers.ValidationError(
                 'Uploaded image is invalid or corrupted.'
@@ -338,10 +416,7 @@ class KYCUploadSerializer(serializers.Serializer):
         finally:
             value.seek(0)
 
-        if width < 400 or height < 300:
-            raise serializers.ValidationError(
-                'Image dimensions must be at least 400x300 pixels.'
-            )
+        return value
 
 
 class AdminKYCReviewSerializer(serializers.Serializer):
