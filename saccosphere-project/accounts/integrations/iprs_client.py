@@ -7,6 +7,7 @@ import time
 
 import requests
 from django.conf import settings
+from config.utils import sanitize_pii
 
 
 logger = logging.getLogger('saccosphere.iprs')
@@ -29,11 +30,30 @@ class IPRSClient:
         self.api_url = settings.IPRS_API_URL
         self.mock = settings.DEBUG or settings.IPRS_MOCK
 
-    def verify_id(self, id_number, date_of_birth=None, full_name=None):
+    def verify_id(self, id_number, date_of_birth=None, full_name=None, correlation_id=None, kyc_submission_id=None):
         """
         Verify a national ID number and return a standard response dict.
+
+        Args:
+            id_number: The national ID number to verify
+            date_of_birth: Optional date of birth for verification
+            full_name: Optional full name for verification
+            correlation_id: Correlation ID for tracing the request
+            kyc_submission_id: KYC submission UUID for tracing
         """
+        sanitized_id = sanitize_pii(id_number)
+        log_context = {
+            'correlation_id': correlation_id or '-',
+            'kyc_submission_id': kyc_submission_id or '-',
+            'id_number_ref': sanitized_id,
+            'step': 'iprs_verification',
+        }
+
         if self.mock:
+            logger.info(
+                'IPRS mock verification',
+                extra={**log_context, 'outcome': 'verified'},
+            )
             return {
                 'outcome': 'verified',
                 'verified': True,
@@ -71,13 +91,29 @@ class IPRSClient:
                     time.sleep(attempt + 1)
                     continue
 
-                logger.warning('IPRS unavailable after retries: %s', exc)
+                logger.warning(
+                    'IPRS connection error',
+                    extra={
+                        **log_context,
+                        'error_type': 'connection_error',
+                        'error_class': exc.__class__.__name__,
+                        'outcome': 'unavailable',
+                    },
+                )
                 return self._unavailable_response(
                     id_number,
                     'IPRS connection or timeout error.',
                 )
             except requests.RequestException as exc:
-                logger.warning('IPRS request failed: %s', exc)
+                logger.warning(
+                    'IPRS request error',
+                    extra={
+                        **log_context,
+                        'error_type': 'request_error',
+                        'error_class': exc.__class__.__name__,
+                        'outcome': 'unavailable',
+                    },
+                )
                 return self._unavailable_response(
                     id_number,
                     'IPRS request failed.',
@@ -85,8 +121,13 @@ class IPRSClient:
 
             if not 200 <= response.status_code < 300:
                 logger.warning(
-                    'IPRS returned non-2xx status: %s.',
-                    response.status_code,
+                    'IPRS HTTP error',
+                    extra={
+                        **log_context,
+                        'error_type': 'http_error',
+                        'http_status': response.status_code,
+                        'outcome': 'unavailable',
+                    },
                 )
                 return self._unavailable_response(
                     id_number,
@@ -96,19 +137,45 @@ class IPRSClient:
             try:
                 data = response.json()
             except ValueError:
-                logger.warning('IPRS returned invalid JSON.')
+                logger.warning(
+                    'IPRS JSON decode error',
+                    extra={
+                        **log_context,
+                        'error_type': 'json_decode_error',
+                        'outcome': 'unavailable',
+                    },
+                )
                 return self._unavailable_response(
                     id_number,
                     'IPRS returned invalid JSON.',
                 )
 
-            return self._standardize_response(
+            result = self._standardize_response(
                 data,
                 id_number,
                 date_of_birth=date_of_birth,
                 full_name=full_name,
             )
 
+            logger.info(
+                'IPRS verification completed',
+                extra={
+                    **log_context,
+                    'outcome': result.get('outcome'),
+                    'verified': result.get('verified'),
+                },
+            )
+
+            return result
+
+        logger.warning(
+            'IPRS unavailable after retries',
+            extra={
+                **log_context,
+                'error_type': 'max_retries_exceeded',
+                'outcome': 'unavailable',
+            },
+        )
         return self._unavailable_response(id_number, 'IPRS unavailable.')
 
     def _standardize_response(
