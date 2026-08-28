@@ -1560,7 +1560,9 @@ class UserConsent(models.Model):
 
         blank=True,
 
-        help_text='IP address used when consent was recorded.',
+        help_text='IP address used when consent was recorded. '
+                  'Nullable at model level for admin/migrated records, '
+                  'but API layer should require this for public consent endpoints.',
 
     )
 
@@ -1587,8 +1589,20 @@ class UserConsent(models.Model):
 
 
     class Meta:
-
         ordering = ['-timestamp']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'consent_type', 'version'],
+                name='unique_user_consent_per_version',
+                violation_error_message='A consent record for this user, consent type, and version already exists.',
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=['user', 'consent_type', '-timestamp'],
+                name='user_consent_lookup_idx',
+            ),
+        ]
 
 
 class DataErasureRequest(models.Model):

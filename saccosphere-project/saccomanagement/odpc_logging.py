@@ -17,9 +17,15 @@ def create_data_consent_log(
     Log access to member personal data by an admin for ODPC compliance.
     """
     try:
+        # Create immutable snapshots for audit trail preservation
+        user_ref = f"{user.id}:{user.email}" if user else "unknown"
+        accessed_by_ref = f"{accessed_by.id}:{accessed_by.email}" if accessed_by else "unknown"
+
         return DataConsentLog.objects.create(
             user=user,
             accessed_by=accessed_by,
+            user_reference=user_ref,
+            accessed_by_reference=accessed_by_ref,
             data_type=data_type,
             reason=reason,
         )
