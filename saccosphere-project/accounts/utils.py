@@ -3,6 +3,31 @@
 from saccomanagement.models import Role
 
 
+def get_client_ip(request):
+    """
+    Extract the client IP address from the request.
+
+    Checks X-Forwarded-For header (for proxy/load balancer setups) and falls
+    back to REMOTE_ADDR. Takes the leftmost IP from X-Forwarded-For as the
+    client IP, assuming the proxy is configured correctly.
+
+    Args:
+        request: The Django request object.
+
+    Returns:
+        str: The client IP address, or None if not found.
+    """
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        # X-Forwarded-For can contain multiple IPs: client, proxy1, proxy2
+        # The leftmost is the original client
+        ip = x_forwarded_for.split(',')[0].strip()
+        return ip if ip else None
+
+    remote_addr = request.META.get('REMOTE_ADDR')
+    return remote_addr
+
+
 def get_user_sacco_context(user):
     """
     Return the user's primary SACCO role context for login and profile responses.

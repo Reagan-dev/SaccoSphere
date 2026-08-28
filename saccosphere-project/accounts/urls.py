@@ -11,6 +11,10 @@ from .biometric_views import (
 )
 from .oauth_views import GoogleOAuthCallbackView, GoogleOAuthLinkView
 from .views import (
+    ConsentGiveView,
+    ConsentHistoryView,
+    ConsentListView,
+    ConsentWithdrawView,
     DataErasureRequestView,
     DataErasureReviewView,
     KYCDocumentServeView,
@@ -95,4 +99,13 @@ urlpatterns = [
     # Data erasure endpoints
     path('me/erasure-requests/', DataErasureRequestView.as_view(), name='erasure-request'),
     path('erasure-requests/<uuid:request_id>/review/', DataErasureReviewView.as_view(), name='erasure-review'),
+    # Consent management endpoints
+    path('consents/', ConsentGiveView.as_view(), name='consent-give'),
+    path('consents/list/', ConsentListView.as_view(), name='consent-list'),
+    path('consents/history/', ConsentHistoryView.as_view(), name='consent-history'),
+    path(
+        'consents/<str:consent_type>/withdraw/',
+        ConsentWithdrawView.as_view(),
+        name='consent-withdraw',
+    ),
 ]

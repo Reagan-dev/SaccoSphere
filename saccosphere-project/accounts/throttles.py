@@ -224,3 +224,215 @@ class KYCUploadIPThrottle(AnonRateThrottle):
             wait=wait,
             detail='Too many KYC upload requests. Please try again later.',
         )
+
+
+class ConsentGiveUserThrottle(UserRateThrottle):
+    """
+    Throttle consent give requests for authenticated users.
+
+    Limits consent submissions per user to prevent consent spam while allowing
+    legitimate updates. Uses a configurable rate from Django settings.
+    Default: 10 per hour.
+
+    Justification: A legitimate user typically gives consent once per consent type,
+    with occasional updates when policies change. 10/hour allows for legitimate
+    updates while preventing abuse.
+    """
+
+    def __init__(self):
+        rate = getattr(settings, 'CONSENT_GIVE_USER_RATE', '10/hour')
+        self.rate = rate if rate else '10/hour'
+        super().__init__()
+
+    def get_cache_key(self, request, view):
+        """
+        Use user ID for cache key.
+        """
+        if request.user and request.user.is_authenticated:
+            return f'consent_give_user_{request.user.id}'
+        return None
+
+    def allow_request(self, request, view):
+        """
+        Store request reference before checking throttle.
+        """
+        self.request = request
+        return super().allow_request(request, view)
+
+    def throttle_failure(self):
+        """
+        Raise Throttled exception with Retry-After header and log the event.
+        """
+        wait = self.wait()
+        logger.warning(
+            'Consent give throttled for user %s. Wait: %s seconds',
+            getattr(self.request.user, 'id', 'anonymous'),
+            wait,
+            extra={
+                'user_id': getattr(self.request.user, 'id', None),
+                'throttle_type': 'user',
+                'wait_seconds': wait,
+            },
+        )
+        raise Throttled(
+            wait=wait,
+            detail='Too many consent requests. Please try again later.',
+        )
+
+
+class ConsentGiveIPThrottle(AnonRateThrottle):
+    """
+    Throttle consent give requests by IP address.
+
+    Defense-in-depth measure to prevent bulk consent spam even if authentication
+    changes. Limits total consent submissions from a single IP regardless of user.
+    Uses a configurable rate from Django settings. Default: 20 per hour.
+
+    Matches KYC_UPLOAD_IP_RATE for consistency across sensitive endpoints.
+    """
+
+    def __init__(self):
+        rate = getattr(settings, 'CONSENT_GIVE_IP_RATE', '20/hour')
+        self.rate = rate if rate else '20/hour'
+        super().__init__()
+
+    def get_cache_key(self, request, view):
+        """
+        Use client IP address for cache key.
+        """
+        ip = _get_client_ip(request)
+        return f'consent_give_ip_{ip}'
+
+    def allow_request(self, request, view):
+        """
+        Store request reference before checking throttle.
+        """
+        self.request = request
+        return super().allow_request(request, view)
+
+    def throttle_failure(self):
+        """
+        Raise Throttled exception with Retry-After header and log the event.
+        """
+        wait = self.wait()
+        ip = _get_client_ip(self.request)
+        logger.warning(
+            'Consent give throttled for IP %s. Wait: %s seconds',
+            ip,
+            wait,
+            extra={
+                'client_ip': ip,
+                'throttle_type': 'ip',
+                'wait_seconds': wait,
+            },
+        )
+        raise Throttled(
+            wait=wait,
+            detail='Too many consent requests. Please try again later.',
+        )
+
+
+class ConsentWithdrawUserThrottle(UserRateThrottle):
+    """
+    Throttle consent withdraw requests for authenticated users.
+
+    Limits consent withdrawals per user to prevent abuse while allowing
+    legitimate changes. Uses a configurable rate from Django settings.
+    Default: 10 per hour.
+
+    Justification: Withdrawal is a sensitive action but users may legitimately
+    change their mind. 10/hour allows for legitimate changes while preventing abuse.
+    """
+
+    def __init__(self):
+        rate = getattr(settings, 'CONSENT_WITHDRAW_USER_RATE', '10/hour')
+        self.rate = rate if rate else '10/hour'
+        super().__init__()
+
+    def get_cache_key(self, request, view):
+        """
+        Use user ID for cache key.
+        """
+        if request.user and request.user.is_authenticated:
+            return f'consent_withdraw_user_{request.user.id}'
+        return None
+
+    def allow_request(self, request, view):
+        """
+        Store request reference before checking throttle.
+        """
+        self.request = request
+        return super().allow_request(request, view)
+
+    def throttle_failure(self):
+        """
+        Raise Throttled exception with Retry-After header and log the event.
+        """
+        wait = self.wait()
+        logger.warning(
+            'Consent withdraw throttled for user %s. Wait: %s seconds',
+            getattr(self.request.user, 'id', 'anonymous'),
+            wait,
+            extra={
+                'user_id': getattr(self.request.user, 'id', None),
+                'throttle_type': 'user',
+                'wait_seconds': wait,
+            },
+        )
+        raise Throttled(
+            wait=wait,
+            detail='Too many consent withdrawal requests. Please try again later.',
+        )
+
+
+class ConsentWithdrawIPThrottle(AnonRateThrottle):
+    """
+    Throttle consent withdraw requests by IP address.
+
+    Defense-in-depth measure to prevent bulk consent withdrawal spam.
+    Limits total withdrawals from a single IP regardless of user.
+    Uses a configurable rate from Django settings. Default: 20 per hour.
+
+    Matches CONSENT_GIVE_IP_RATE for consistency.
+    """
+
+    def __init__(self):
+        rate = getattr(settings, 'CONSENT_WITHDRAW_IP_RATE', '20/hour')
+        self.rate = rate if rate else '20/hour'
+        super().__init__()
+
+    def get_cache_key(self, request, view):
+        """
+        Use client IP address for cache key.
+        """
+        ip = _get_client_ip(request)
+        return f'consent_withdraw_ip_{ip}'
+
+    def allow_request(self, request, view):
+        """
+        Store request reference before checking throttle.
+        """
+        self.request = request
+        return super().allow_request(request, view)
+
+    def throttle_failure(self):
+        """
+        Raise Throttled exception with Retry-After header and log the event.
+        """
+        wait = self.wait()
+        ip = _get_client_ip(self.request)
+        logger.warning(
+            'Consent withdraw throttled for IP %s. Wait: %s seconds',
+            ip,
+            wait,
+            extra={
+                'client_ip': ip,
+                'throttle_type': 'ip',
+                'wait_seconds': wait,
+            },
+        )
+        raise Throttled(
+            wait=wait,
+            detail='Too many consent withdrawal requests. Please try again later.',
+        )
+
