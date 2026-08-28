@@ -1216,6 +1216,16 @@ class KYCVerification(models.Model):
 
     )
 
+    retention_until = models.DateTimeField(
+
+        null=True,
+
+        blank=True,
+
+        help_text='Date until which KYC documents must be retained.',
+
+    )
+
     created_at = models.DateTimeField(
 
         auto_now_add=True,
@@ -1243,13 +1253,26 @@ class KYCVerification(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        """Normalize id_number before saving."""
+        """Normalize id_number and set retention_until before saving."""
         if self.id_number:
             self.normalized_id_number = normalize_id_number(self.id_number)
         elif self.id_number == '':
             self.normalized_id_number = ''
         else:
             self.normalized_id_number = None
+
+        # Set retention_until if not already set and submitted_at is present
+        from django.conf import settings
+        retention_days = getattr(settings, 'KYC_RETENTION_DAYS', None)
+        if (
+            retention_days
+            and not self.retention_until
+            and self.submitted_at
+        ):
+            from datetime import timedelta
+            from django.utils import timezone
+            self.retention_until = self.submitted_at + timedelta(days=retention_days)
+
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -1576,6 +1599,13 @@ class DataErasureRequest(models.Model):
         APPROVED = 'APPROVED', 'Approved'
         REJECTED = 'REJECTED', 'Rejected'
         COMPLETED = 'COMPLETED', 'Completed'
+        ON_HOLD = 'ON_HOLD', 'On Hold'
+
+    class HoldReason(models.TextChoices):
+        REGULATORY_INVESTIGATION = 'REGULATORY_INVESTIGATION', 'Regulatory Investigation'
+        DISPUTE_IN_PROGRESS = 'DISPUTE_IN_PROGRESS', 'Dispute In Progress'
+        LEGAL_HOLD = 'LEGAL_HOLD', 'Legal Hold'
+        AUDIT_IN_PROGRESS = 'AUDIT_IN_PROGRESS', 'Audit In Progress'
 
     id = models.UUIDField(
         primary_key=True,
@@ -1603,6 +1633,18 @@ class DataErasureRequest(models.Model):
         default=Status.PENDING,
         db_index=True,
         help_text='Current status of the erasure request.',
+    )
+    hold_reason = models.CharField(
+        max_length=50,
+        choices=HoldReason.choices,
+        null=True,
+        blank=True,
+        help_text='Reason for hold if status is ON_HOLD.',
+    )
+    hold_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Date until which the hold applies.',
     )
     requested_at = models.DateTimeField(
         auto_now_add=True,
@@ -1643,9 +1685,18 @@ class DataErasureRequest(models.Model):
         indexes = [
             models.Index(fields=['user', 'status']),
             models.Index(fields=['status', 'requested_at']),
+            models.Index(fields=['status', 'hold_until']),
         ]
 
     def __str__(self):
         user_ref = self.user_email_anonymized or (self.user.email if self.user else 'Unknown')
         return f'Erasure request for {user_ref} - {self.status}'
+
+    def is_on_hold(self):
+        """Check if the request is currently on hold."""
+        if self.status != self.Status.ON_HOLD:
+            return False
+        if self.hold_until and self.hold_until > timezone.now():
+            return True
+        return False
 

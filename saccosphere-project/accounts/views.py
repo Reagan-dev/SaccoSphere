@@ -1411,46 +1411,107 @@ class PasswordResetCompleteView(APIView):
 
 
 class DataErasureRequestView(CreateAPIView):
-    """Endpoint for authenticated users to submit data erasure requests."""
+    """
+    Endpoint for authenticated users to submit data erasure requests.
+
+    Checks for regulatory or dispute holds before processing:
+    - If no hold applies: executes deletion immediately
+    - If hold applies: queues the request with hold details
+    """
     permission_classes = [IsAuthenticated]
     serializer_class = account_serializers.DataErasureRequestSerializer
 
     def post(self, request):
+        from .kyc_retention import check_kyc_erasure_holds, anonymize_kyc_record
+
         serializer = self.serializer_class(
             data=request.data,
             context={'request': request}
         )
         serializer.is_valid(raise_exception=True)
 
-        erasure_request = serializer.save()
+        # Check for holds before processing
+        has_hold, hold_reason, hold_until = check_kyc_erasure_holds(request.user)
 
-        # Log the request creation
-        log_audit(
-            user=request.user,
-            action='CREATE',
-            resource_type='DataErasureRequest',
-            resource_id=str(erasure_request.id),
-            new_values={'reason': erasure_request.reason},
-            request=request,
-        )
+        if has_hold:
+            # Queue the request on hold
+            erasure_request = serializer.save(
+                status=DataErasureRequest.Status.ON_HOLD,
+                hold_reason=hold_reason,
+                hold_until=hold_until,
+            )
 
-        # Notify the user
-        from notifications.utils import create_notification
-        create_notification(
-            user=request.user,
-            title='Data Erasure Request Submitted',
-            message='Your data erasure request has been submitted and is pending review.',
-            category='SYSTEM',
-        )
+            log_audit(
+                user=request.user,
+                action='ERASURE_REQUEST_QUEUED',
+                resource_type='DataErasureRequest',
+                resource_id=str(erasure_request.id),
+                new_values={
+                    'hold_reason': hold_reason,
+                    'hold_until': str(hold_until) if hold_until else None,
+                },
+                request=request,
+            )
 
-        return Response(
-            {
-                'id': str(erasure_request.id),
-                'status': erasure_request.status,
-                'message': 'Your erasure request has been submitted for review.',
-            },
-            status=201
-        )
+            return Response(
+                {
+                    'id': str(erasure_request.id),
+                    'status': erasure_request.status,
+                    'message': (
+                        f'Your erasure request is on hold due to: {hold_reason}. '
+                        f'Hold expires: {hold_until or "indefinite"}.'
+                    ),
+                    'hold_reason': hold_reason,
+                    'hold_until': hold_until,
+                },
+                status=202  # Accepted but not processed
+            )
+        else:
+            # No hold - execute immediately
+            erasure_request = serializer.save(
+                status=DataErasureRequest.Status.APPROVED,
+                reviewed_by=request.user,
+                reviewed_at=timezone.now(),
+            )
+
+            # Anonymize KYC data
+            kyc = KYCVerification.objects.filter(user=request.user).first()
+            if kyc:
+                success = anonymize_kyc_record(
+                    kyc,
+                    triggered_by=request.user,
+                    reason='User-initiated erasure request',
+                )
+                if success:
+                    erasure_request.status = DataErasureRequest.Status.COMPLETED
+                    erasure_request.completed_at = timezone.now()
+                    erasure_request.save()
+                else:
+                    erasure_request.status = DataErasureRequest.Status.REJECTED
+                    erasure_request.reviewer_notes = 'Failed to anonymize KYC data'
+                    erasure_request.save()
+
+            log_audit(
+                user=request.user,
+                action='ERASURE_REQUEST_PROCESSED',
+                resource_type='DataErasureRequest',
+                resource_id=str(erasure_request.id),
+                new_values={'status': erasure_request.status},
+                request=request,
+            )
+
+            return Response(
+                {
+                    'id': str(erasure_request.id),
+                    'status': erasure_request.status,
+                    'message': (
+                        'Your erasure request has been processed.'
+                        if erasure_request.status == DataErasureRequest.Status.COMPLETED
+                        else 'Your erasure request could not be processed.'
+                    ),
+                },
+                status=200 if erasure_request.status == DataErasureRequest.Status.COMPLETED else 500
+            )
 
 
 class DataErasureReviewView(APIView):
