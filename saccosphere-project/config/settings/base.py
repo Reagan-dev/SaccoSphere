@@ -118,6 +118,10 @@ AWS_STORAGE_BUCKET_NAME = config('AWS_STORAGE_BUCKET_NAME', default='')
 AWS_S3_ENDPOINT_URL = config('AWS_S3_ENDPOINT_URL', default='')
 AWS_S3_REGION_NAME = config('AWS_S3_REGION_NAME', default='')
 AWS_S3_SIGNATURE_VERSION = 's3v4'
+# KMS key ID for SSE-KMS encryption of KYC documents
+# If set, uses SSE-KMS with the specified key; otherwise falls back to SSE-S3
+# Format: arn:aws:kms:region:account-id:key/key-id
+AWS_KMS_KEY_ID = config('AWS_KMS_KEY_ID', default=None)
 AWS_DEFAULT_ACL = None
 AWS_QUERYSTRING_AUTH = config('AWS_QUERYSTRING_AUTH', default=True, cast=bool)
 
