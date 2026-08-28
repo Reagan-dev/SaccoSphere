@@ -42,13 +42,33 @@ class DataConsentLog(models.Model):
     )
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name='data_consent_logs',
     )
     accessed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name='data_access_logs',
+    )
+    # Immutable snapshot fields for audit trail preservation after user deletion
+    # Under Kenya's Data Protection Act (2019), legal/compliance retention obligations
+    # may justify retaining these records after account deletion. This assumption should
+    # be confirmed with legal counsel before production deployment.
+    user_reference = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        editable=False,
+        help_text='Immutable snapshot: user ID and email at time of logging.',
+    )
+    accessed_by_reference = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        editable=False,
+        help_text='Immutable snapshot: accessed_by ID and email at time of logging.',
     )
     data_type = models.CharField(max_length=100)
     reason = models.CharField(max_length=200)
