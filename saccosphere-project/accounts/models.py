@@ -1624,17 +1624,10 @@ class UserConsent(models.Model):
         - withdrawn: User explicitly withdrew consent
         - never_given: No consent record exists
 
-        TODO: This is a placeholder. Full implementation requires:
-        - Version comparison logic against CONSENT_POLICY_VERSIONS setting
-        - Policy version history tracking
+        Uses the consent service for accurate status determination.
         """
-        # Placeholder: check withdrawn_at first, then consented
-        # This will be enhanced once version-validation logic lands
-        if self.withdrawn_at is not None:
-            return 'withdrawn'
-        if self.consented:
-            return 'active'
-        return 'never_given'
+        from .services.consent import get_consent_status
+        return get_consent_status(self.user, self.consent_type)
 
 
 class DataErasureRequest(models.Model):
