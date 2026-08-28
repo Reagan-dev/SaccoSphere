@@ -47,6 +47,7 @@ from .models import (
     Sacco,
     User,
     PasswordResetToken,
+    UserConsent,
 )
 
 
@@ -57,9 +58,10 @@ from .models import (
 # always acquire KYCVerification lock first, then any other locks.
 from . import serializers as account_serializers
 from .permissions import IsSaccoAdminOrSuperAdmin
-from .utils import get_user_sacco_context
 from .serializers import (
     AdminKYCReviewSerializer,
+    ConsentGiveSerializer,
+    ConsentSerializer,
     KYCStatusSerializer,
     KYCUploadSerializer,
     PasswordChangeSerializer,
@@ -70,9 +72,17 @@ from .serializers import (
     UserProfileSerializer,
     UserRegistrationSerializer,
 )
+from .throttles import (
+    ConsentGiveIPThrottle,
+    ConsentGiveUserThrottle,
+    ConsentWithdrawIPThrottle,
+    ConsentWithdrawUserThrottle,
+    OTPSendThrottle,
+    OTPSendIPThrottle,
+    OTPVerifyThrottle,
+)
 from .otp_utils import create_otp_token, verify_otp, OTPError, format_phone_number
 from .otp_backends import get_otp_backend, OTPDeliveryError
-from .throttles import OTPSendThrottle, OTPSendIPThrottle, OTPVerifyThrottle
 
 
 logger = logging.getLogger(__name__)
@@ -1733,4 +1743,176 @@ class KYCDocumentServeView(APIView):
             raise PermissionDenied('Invalid document access token')
         except KYCVerification.DoesNotExist:
             raise Http404('KYC verification not found')
+
+
+class ConsentGiveView(APIView):
+    """Record a new consent for the authenticated user."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [
+        ConsentGiveUserThrottle,
+        ConsentGiveIPThrottle,
+    ]
+
+    def post(self, request):
+        """Create a new consent record for the authenticated user."""
+        serializer = ConsentGiveSerializer(
+            data=request.data,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        consent_type = serializer.validated_data['consent_type']
+        version = serializer.validated_data['version']
+        consented = serializer.validated_data['consented']
+
+        # Check if an identical consent already exists (idempotency)
+        existing_consent = UserConsent.objects.filter(
+            user=user,
+            consent_type=consent_type,
+            version=version,
+            withdrawn_at__isnull=True,
+        ).first()
+
+        if existing_consent:
+            # Return existing record if it matches
+            response_serializer = ConsentSerializer(existing_consent)
+            return Response(
+                response_serializer.data,
+                status=status.HTTP_200_OK,
+            )
+
+        # Get client IP
+        from .utils import get_client_ip
+        ip_address = get_client_ip(request)
+
+        # Get user agent
+        user_agent = request.META.get('HTTP_USER_AGENT', '')[:255]
+
+        try:
+            consent = UserConsent.objects.create(
+                user=user,
+                consent_type=consent_type,
+                version=version,
+                consented=consented,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+        except IntegrityError:
+            # Handle race condition: another request created the same consent
+            # Re-fetch and return the existing record
+            existing_consent = UserConsent.objects.filter(
+                user=user,
+                consent_type=consent_type,
+                version=version,
+            ).first()
+            if existing_consent:
+                response_serializer = ConsentSerializer(existing_consent)
+                return Response(
+                    response_serializer.data,
+                    status=status.HTTP_200_OK,
+                )
+            raise
+
+        response_serializer = ConsentSerializer(consent)
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ConsentWithdrawView(APIView):
+    """Withdraw consent for a specific consent type."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [
+        ConsentWithdrawUserThrottle,
+        ConsentWithdrawIPThrottle,
+    ]
+
+    def post(self, request, consent_type):
+        """Withdraw the most recent active consent for the given type."""
+        if consent_type not in UserConsent.ConsentType.values:
+            return Response(
+                {'detail': 'Invalid consent type.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+
+        # Find the most recent active consent for this type
+        consent = UserConsent.objects.filter(
+            user=user,
+            consent_type=consent_type,
+            withdrawn_at__isnull=True,
+        ).order_by('-timestamp').first()
+
+        if not consent:
+            return Response(
+                {'detail': 'No active consent found for this type.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Mark as withdrawn
+        from django.utils import timezone
+        consent.withdrawn_at = timezone.now()
+        consent.save()
+
+        response_serializer = ConsentSerializer(consent)
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class ConsentListView(APIView):
+    """List the authenticated user's current consent status for all types."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """Return current consent status for each consent type."""
+        user = request.user
+        results = []
+
+        for consent_type in UserConsent.ConsentType.values:
+            # Get the most recent consent for this type
+            consent = UserConsent.objects.filter(
+                user=user,
+                consent_type=consent_type,
+            ).order_by('-timestamp').first()
+
+            if consent:
+                serializer = ConsentSerializer(consent)
+                results.append(serializer.data)
+            else:
+                # Return a placeholder for never-given consent
+                results.append({
+                    'consent_type': consent_type,
+                    'consent_type_display': UserConsent.ConsentType(consent_type).label,
+                    'status': 'never_given',
+                    'version': None,
+                    'consented': False,
+                })
+
+        return Response(results, status=status.HTTP_200_OK)
+
+
+class ConsentHistoryView(APIView):
+    """List the authenticated user's full consent history."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """Return chronological consent history for the authenticated user."""
+        user = request.user
+
+        consents = UserConsent.objects.filter(
+            user=user,
+        ).order_by('-timestamp')
+
+        serializer = ConsentSerializer(consents, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 

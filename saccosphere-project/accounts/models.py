@@ -1586,6 +1586,16 @@ class UserConsent(models.Model):
 
     )
 
+    withdrawn_at = models.DateTimeField(
+
+        null=True,
+
+        blank=True,
+
+        help_text='Date and time consent was withdrawn. Null for active consents.',
+
+    )
+
 
 
     class Meta:
@@ -1616,11 +1626,12 @@ class UserConsent(models.Model):
 
         TODO: This is a placeholder. Full implementation requires:
         - Version comparison logic against CONSENT_POLICY_VERSIONS setting
-        - Withdrawal tracking (add a withdrawn_at field or separate model)
         - Policy version history tracking
         """
-        # Placeholder: return 'active' if consented=True, otherwise 'never_given'
+        # Placeholder: check withdrawn_at first, then consented
         # This will be enhanced once version-validation logic lands
+        if self.withdrawn_at is not None:
+            return 'withdrawn'
         if self.consented:
             return 'active'
         return 'never_given'
