@@ -75,6 +75,9 @@ from .otp_backends import get_otp_backend, OTPDeliveryError
 from .throttles import OTPSendThrottle, OTPSendIPThrottle, OTPVerifyThrottle
 
 
+logger = logging.getLogger(__name__)
+
+
 def _mask_contact(channel, destination):
     """
     Mask contact information for API responses.
