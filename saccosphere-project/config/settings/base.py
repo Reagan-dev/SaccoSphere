@@ -278,6 +278,14 @@ KYC_UPLOAD_USER_RATE = config('KYC_UPLOAD_USER_RATE', default='10/hour')
 # Matches OTP_SEND_IP_RATE for consistency.
 KYC_UPLOAD_IP_RATE = config('KYC_UPLOAD_IP_RATE', default='20/hour')
 
+# KYC Document Retention Configuration
+# Number of days to retain KYC documents after submission.
+# This is a compliance decision - consult legal/compliance before setting.
+# Common values: 2555 days (7 years) for financial KYC in Kenya.
+# Set to None to disable automatic retention-based cleanup.
+_KYC_RETENTION_DAYS = config('KYC_RETENTION_DAYS', default='')
+KYC_RETENTION_DAYS = int(_KYC_RETENTION_DAYS) if _KYC_RETENTION_DAYS else None
+
 # Metropol CRB Configuration
 METROPOL_API_KEY = config('METROPOL_API_KEY', default='')
 METROPOL_API_URL = config(

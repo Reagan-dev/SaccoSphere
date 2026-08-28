@@ -565,7 +565,8 @@ class DataErasureRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = DataErasureRequest
-        fields = ('reason',)
+        fields = ('reason', 'status', 'hold_reason', 'hold_until')
+        read_only_fields = ('status', 'hold_reason', 'hold_until')
 
     def validate(self, attrs):
         request = self.context.get('request')
@@ -593,9 +594,17 @@ class DataErasureRequestSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         user = request.user
 
+        # Extract optional fields that may be set by the view
+        status = validated_data.pop('status', DataErasureRequest.Status.PENDING)
+        hold_reason = validated_data.pop('hold_reason', None)
+        hold_until = validated_data.pop('hold_until', None)
+
         return DataErasureRequest.objects.create(
             user=user,
             reason=validated_data.get('reason'),
+            status=status,
+            hold_reason=hold_reason,
+            hold_until=hold_until,
         )
 
 

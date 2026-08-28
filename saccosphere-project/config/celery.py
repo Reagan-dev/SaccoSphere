@@ -46,6 +46,14 @@ app.conf.beat_schedule = {
         'task': 'accounts.tasks.check_iprs_failure_rate',
         'schedule': 300.0,  # Every 5 minutes
     },
+    'cleanup-expired-kyc': {
+        'task': 'accounts.tasks.cleanup_expired_kyc',
+        'schedule': crontab(minute=0, hour=2),  # Daily at 2 AM
+    },
+    'process-queued-erasure-requests': {
+        'task': 'accounts.tasks.process_queued_erasure_requests',
+        'schedule': crontab(minute='*/30'),  # Every 30 minutes
+    },
 }
 app.conf.task_serializer = 'json'
 app.conf.result_expires = 3600

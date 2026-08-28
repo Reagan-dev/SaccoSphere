@@ -31,7 +31,7 @@ def cleanup_expired_otps():
 def check_iprs_failure_rate():
     """
     Check IPRS failure rate and send alerts if threshold exceeded.
-    
+
     This task runs periodically to monitor IPRS service health and
     send alerts via Sentry when the failure rate exceeds the configured threshold.
     """
@@ -42,4 +42,43 @@ def check_iprs_failure_rate():
         logger.error('IPRS failure rate check failed: %s', exc)
         raise
 
+
+@shared_task(name='accounts.tasks.cleanup_expired_kyc')
+def cleanup_expired_kyc():
+    """
+    Clean up KYC documents past their retention period.
+
+    This task runs periodically to find KYC records past retention_until
+    and anonymize them by deleting S3 objects and PII fields while
+    preserving minimal verification trail.
+    """
+    try:
+        from django.core.management import call_command
+        from io import StringIO
+
+        output = StringIO()
+        call_command('cleanup_expired_kyc', stdout=output)
+        result = output.getvalue()
+        logger.info('KYC retention cleanup completed: %s', result)
+        return result
+    except Exception as exc:
+        logger.error('KYC retention cleanup failed: %s', exc)
+        raise
+
+
+@shared_task(name='accounts.tasks.process_queued_erasure_requests')
+def process_queued_erasure_requests():
+    """
+    Process erasure requests that were on hold but are now eligible.
+
+    This task runs periodically to check for erasure requests whose
+    holds have expired and process them.
+    """
+    try:
+        from accounts.kyc_retention import process_queued_erasure_requests
+        process_queued_erasure_requests()
+        logger.info('Queued erasure requests processed successfully')
+    except Exception as exc:
+        logger.error('Failed to process queued erasure requests: %s', exc)
+        raise
 
