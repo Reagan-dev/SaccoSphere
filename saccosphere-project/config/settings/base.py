@@ -522,3 +522,14 @@ LOGGING = {
         },
     },
 }
+
+# Consent policy versions
+# Maps consent_type to the current policy version string.
+# This should move to a proper model (e.g., ConsentPolicyVersion) if policy versions
+# need admin-editable history, versioning, or audit trails in the future.
+CONSENT_POLICY_VERSIONS = {
+    'TERMS': 'v1.0',
+    'PRIVACY': 'v1.0',
+    'DATA_PROCESSING': 'v1.0',
+    'MARKETING': 'v1.0',
+}

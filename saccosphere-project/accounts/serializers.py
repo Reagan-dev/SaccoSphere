@@ -8,12 +8,15 @@ from django.conf import settings
 from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
 
+from saccomanagement.models import DataConsentLog
+
 from .models import (
     DataErasureRequest,
     KYCVerification,
     OTPToken,
     Sacco,
     User,
+    UserConsent,
     UserDevice,
 )
 from .role_utils import get_sacco_admin_id
@@ -626,3 +629,101 @@ class DataErasureReviewSerializer(serializers.Serializer):
         return attrs
 
 
+class ConsentGiveSerializer(serializers.Serializer):
+    """Serializer for recording a new consent from an authenticated user."""
+
+    consent_type = serializers.ChoiceField(choices=UserConsent.ConsentType.choices)
+    version = serializers.CharField(max_length=20)
+    consented = serializers.BooleanField()
+
+    def validate_consent_type(self, value):
+        """Validate consent_type is one of the defined choices."""
+        if value not in UserConsent.ConsentType.values:
+            raise serializers.ValidationError(
+                f'Invalid consent_type. Must be one of: {", ".join(UserConsent.ConsentType.values)}'
+            )
+        return value
+
+    def validate_version(self, value):
+        """Validate version is non-empty and follows basic versioning scheme."""
+        if not value or not value.strip():
+            raise serializers.ValidationError('Version cannot be empty.')
+        # Basic validation: should start with 'v' and contain at least one dot
+        # This is a loose check - stricter validation can be added if needed
+        if not value.startswith('v'):
+            raise serializers.ValidationError('Version should start with "v" (e.g., v1.0).')
+        return value.strip()
+
+    def validate(self, attrs):
+        """Reject client-supplied fields that must be set server-side."""
+        request = self.context.get('request')
+        data = self.initial_data.copy()
+
+        # These fields must be set by the view, not the client
+        protected_fields = ['user', 'ip_address', 'timestamp', 'user_agent']
+        for field in protected_fields:
+            if field in data:
+                raise serializers.ValidationError(
+                    f'{field} cannot be set by client. It will be set server-side.'
+                )
+
+        return attrs
+
+
+class ConsentSerializer(serializers.ModelSerializer):
+    """Read-only serializer for consent status."""
+
+    status = serializers.SerializerMethodField()
+    consent_type_display = serializers.CharField(
+        source='get_consent_type_display',
+        read_only=True,
+    )
+
+    class Meta:
+        model = UserConsent
+        fields = [
+            'id',
+            'user',
+            'consent_type',
+            'consent_type_display',
+            'version',
+            'consented',
+            'status',
+            'timestamp',
+        ]
+        read_only_fields = fields
+
+    def get_status(self, obj):
+        """Return the current status of this consent record."""
+        return obj.get_status()
+
+
+class DataConsentLogSerializer(serializers.ModelSerializer):
+    """Read-only serializer for data consent audit logs."""
+
+    user_email = serializers.SerializerMethodField()
+    accessed_by_email = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DataConsentLog
+        fields = [
+            'id',
+            'user',
+            'user_email',
+            'user_reference',
+            'accessed_by',
+            'accessed_by_email',
+            'accessed_by_reference',
+            'data_type',
+            'reason',
+            'timestamp',
+        ]
+        read_only_fields = fields
+
+    def get_user_email(self, obj):
+        """Return user email if available, otherwise None."""
+        return obj.user.email if obj.user else None
+
+    def get_accessed_by_email(self, obj):
+        """Return accessed_by email if available, otherwise None."""
+        return obj.accessed_by.email if obj.accessed_by else None

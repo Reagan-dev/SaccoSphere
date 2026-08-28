@@ -1604,6 +1604,27 @@ class UserConsent(models.Model):
             ),
         ]
 
+    def get_status(self):
+        """
+        Return the current status of this consent record.
+
+        Possible statuses:
+        - active: This is the current, valid consent for this consent_type
+        - outdated: Superseded by a newer policy version
+        - withdrawn: User explicitly withdrew consent
+        - never_given: No consent record exists
+
+        TODO: This is a placeholder. Full implementation requires:
+        - Version comparison logic against CONSENT_POLICY_VERSIONS setting
+        - Withdrawal tracking (add a withdrawn_at field or separate model)
+        - Policy version history tracking
+        """
+        # Placeholder: return 'active' if consented=True, otherwise 'never_given'
+        # This will be enhanced once version-validation logic lands
+        if self.consented:
+            return 'active'
+        return 'never_given'
+
 
 class DataErasureRequest(models.Model):
     """Model for tracking user data erasure/anonymization requests."""
