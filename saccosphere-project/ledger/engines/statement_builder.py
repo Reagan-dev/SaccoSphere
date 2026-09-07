@@ -83,11 +83,18 @@ def _get_sacco_logo_url(membership):
 def _record_statement_access(membership, requesting_user=None):
     try:
         from saccomanagement import create_data_consent_log
+        from saccomanagement.odpc_logging import ConsentLogWriteError
     except ImportError:
         return
 
-    create_data_consent_log(
-        user=requesting_user or membership.user,
-        data_type='MEMBER_STATEMENT',
-        reason='Self-service download',
-    )
+    try:
+        create_data_consent_log(
+            user=requesting_user or membership.user,
+            data_type='MEMBER_STATEMENT',
+            reason='Self-service download',
+        )
+    except ConsentLogWriteError:
+        # Already logged and counted inside create_data_consent_log. A
+        # failed audit-log write must not block the member from getting
+        # their own statement.
+        pass

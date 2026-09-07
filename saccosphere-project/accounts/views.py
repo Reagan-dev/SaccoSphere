@@ -2,7 +2,7 @@ import hashlib
 import logging
 import time
 
-from config.utils import sanitize_pii
+from config.utils import emit_metric, sanitize_pii
 from django.contrib.auth import authenticate
 from django.core.exceptions import FieldError, PermissionDenied
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
@@ -1799,6 +1799,11 @@ class ConsentGiveView(APIView):
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
+            emit_metric(
+                'consent_given',
+                consent_type=consent_type,
+                user_id=user.id,
+            )
         except IntegrityError:
             # Handle race condition: another request created the same consent
             # Re-fetch and return the existing record
@@ -1858,6 +1863,11 @@ class ConsentWithdrawView(APIView):
         from django.utils import timezone
         consent.withdrawn_at = timezone.now()
         consent.save()
+        emit_metric(
+            'consent_withdrawn',
+            consent_type=consent_type,
+            user_id=user.id,
+        )
 
         response_serializer = ConsentSerializer(consent)
         return Response(
