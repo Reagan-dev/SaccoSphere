@@ -1,11 +1,12 @@
 from decimal import Decimal
 from unittest.mock import patch
 
+from django.conf import settings
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from accounts.models import Sacco, SaccoSettings, User
+from accounts.models import Sacco, SaccoSettings, User, UserConsent
 from saccomanagement.models import (
     Role,
     SMSCampaign,
@@ -52,11 +53,13 @@ class BulkSMSTests(TestCase):
             email='first@example.com',
             phone_number='254712345001',
             member_number='SMS-M001',
+            marketing_consent=True,
         )
         self._membership(
             email='second@example.com',
             phone_number='254712345002',
             member_number='SMS-M002',
+            marketing_consent=True,
         )
         self._membership(
             email='pending@example.com',
@@ -124,6 +127,7 @@ class BulkSMSTests(TestCase):
             email='bosa@example.com',
             phone_number='254712345006',
             member_number='SMS-M006',
+            marketing_consent=True,
         )
         fosa_member = self._membership(
             email='fosa@example.com',
@@ -160,6 +164,64 @@ class BulkSMSTests(TestCase):
         campaign = SMSCampaign.objects.get(id=response.json()['data']['id'])
         self.assertEqual(campaign.total_recipients, 1)
         self.assertEqual(campaign.recipients.get().membership, bosa_member)
+
+    def test_create_campaign_excludes_members_without_marketing_consent(self):
+        """A member who never gave MARKETING consent is not a campaign recipient."""
+        consented_member = self._membership(
+            email='consented@example.com',
+            phone_number='254712345008',
+            member_number='SMS-M008',
+            marketing_consent=True,
+        )
+        self._membership(
+            email='no-consent@example.com',
+            phone_number='254712345009',
+            member_number='SMS-M009',
+        )
+
+        response = self.client.post(
+            '/api/v1/management/sms/campaigns/',
+            {
+                'message': 'Special offer for members.',
+                'audience_filter': {'status': Membership.Status.APPROVED},
+            },
+            format='json',
+            HTTP_X_SACCO_ID=str(self.sacco.id),
+        )
+
+        self.assertEqual(response.status_code, 201)
+        campaign = SMSCampaign.objects.get(id=response.json()['data']['id'])
+        self.assertEqual(campaign.total_recipients, 1)
+        self.assertEqual(campaign.recipients.get().membership, consented_member)
+
+    def test_create_campaign_excludes_members_with_withdrawn_marketing_consent(self):
+        """A member who withdrew MARKETING consent is not a campaign recipient."""
+        withdrawn_user = User.objects.create_user(
+            email='withdrawn@example.com',
+            password='secret',
+            phone_number='254712345010',
+        )
+        self._give_marketing_consent(withdrawn_user, withdrawn=True)
+        Membership.objects.create(
+            user=withdrawn_user,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number='SMS-M010',
+        )
+
+        response = self.client.post(
+            '/api/v1/management/sms/campaigns/',
+            {
+                'message': 'Special offer for members.',
+                'audience_filter': {'status': Membership.Status.APPROVED},
+            },
+            format='json',
+            HTTP_X_SACCO_ID=str(self.sacco.id),
+        )
+
+        self.assertEqual(response.status_code, 201)
+        campaign = SMSCampaign.objects.get(id=response.json()['data']['id'])
+        self.assertEqual(campaign.total_recipients, 0)
 
     @patch('notifications.tasks.send_bulk_sms_campaign_task.delay')
     def test_send_view_only_queues_draft_campaign(self, delay_mock):
@@ -271,18 +333,33 @@ class BulkSMSTests(TestCase):
         member_number,
         sacco=None,
         status=Membership.Status.APPROVED,
+        marketing_consent=False,
     ):
         user = User.objects.create_user(
             email=email,
             password='secret',
             phone_number=phone_number,
         )
+        if marketing_consent:
+            self._give_marketing_consent(user)
         return Membership.objects.create(
             user=user,
             sacco=sacco or self.sacco,
             status=status,
             member_number=member_number,
         )
+
+    def _give_marketing_consent(self, user, withdrawn=False):
+        consent = UserConsent.objects.create(
+            user=user,
+            consent_type=UserConsent.ConsentType.MARKETING,
+            version=settings.CONSENT_POLICY_VERSIONS['MARKETING'],
+            consented=True,
+        )
+        if withdrawn:
+            consent.withdrawn_at = timezone.now()
+            consent.save(update_fields=['withdrawn_at'])
+        return consent
 
     def _campaign(self, status):
         return SMSCampaign.objects.create(
