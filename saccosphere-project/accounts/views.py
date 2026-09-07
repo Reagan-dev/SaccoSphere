@@ -1823,12 +1823,16 @@ class ConsentGiveView(APIView):
                 user_id=user.id,
             )
         except IntegrityError:
-            # Handle race condition: another request created the same consent
-            # Re-fetch and return the existing record
+            # Handle race condition: another request created the same
+            # active consent. Scoped to withdrawn_at__isnull=True to match
+            # the constraint itself - a withdrawn row for this version can
+            # coexist with the new active one, and must never be returned
+            # here as if it were the successful result of this request.
             existing_consent = UserConsent.objects.filter(
                 user=user,
                 consent_type=consent_type,
                 version=version,
+                withdrawn_at__isnull=True,
             ).first()
             if existing_consent:
                 response_serializer = ConsentSerializer(existing_consent)
