@@ -194,6 +194,95 @@ class GetConsentStatusTestCase(TestCase):
         self.assertEqual(status, 'active')
 
 
+class ConsentExpiryTestCase(TestCase):
+    """Test that expires_at affects get_consent_status/has_active_consent.
+
+    Whether any consent_type should expire, and after what duration, is a
+    product/legal policy decision (see settings.CONSENT_EXPIRY_DURATIONS'
+    own docstring) - these tests only verify the mechanism, using an
+    explicit expires_at value on the fixture rather than relying on any
+    particular duration being configured.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='expiry-service@example.com',
+            phone_number='+254700000050',
+            password='testpass123',
+        )
+
+    def test_no_expires_at_never_reports_outdated_due_to_expiry(self):
+        """A consent with expires_at=None (no duration configured) stays active."""
+        UserConsent.objects.create(
+            user=self.user,
+            consent_type=UserConsent.ConsentType.MARKETING,
+            version='v1.0',
+            consented=True,
+            expires_at=None,
+        )
+
+        self.assertEqual(
+            get_consent_status(self.user, UserConsent.ConsentType.MARKETING),
+            'active',
+        )
+        self.assertTrue(
+            has_active_consent(self.user, UserConsent.ConsentType.MARKETING)
+        )
+
+    def test_expired_consent_reports_outdated(self):
+        """A consent whose expires_at has passed reports 'outdated', not 'active'."""
+        from django.utils import timezone
+
+        UserConsent.objects.create(
+            user=self.user,
+            consent_type=UserConsent.ConsentType.MARKETING,
+            version='v1.0',
+            consented=True,
+            expires_at=timezone.now() - timezone.timedelta(days=1),
+        )
+
+        self.assertEqual(
+            get_consent_status(self.user, UserConsent.ConsentType.MARKETING),
+            'outdated',
+        )
+
+    def test_expired_consent_is_not_active_consent(self):
+        """has_active_consent returns False once expires_at has passed."""
+        from django.utils import timezone
+
+        UserConsent.objects.create(
+            user=self.user,
+            consent_type=UserConsent.ConsentType.MARKETING,
+            version='v1.0',
+            consented=True,
+            expires_at=timezone.now() - timezone.timedelta(days=1),
+        )
+
+        self.assertFalse(
+            has_active_consent(self.user, UserConsent.ConsentType.MARKETING)
+        )
+
+    def test_future_expires_at_still_reports_active(self):
+        """A consent that hasn't reached expires_at yet is still active."""
+        from django.utils import timezone
+
+        UserConsent.objects.create(
+            user=self.user,
+            consent_type=UserConsent.ConsentType.MARKETING,
+            version='v1.0',
+            consented=True,
+            expires_at=timezone.now() + timezone.timedelta(days=30),
+        )
+
+        self.assertEqual(
+            get_consent_status(self.user, UserConsent.ConsentType.MARKETING),
+            'active',
+        )
+        self.assertTrue(
+            has_active_consent(self.user, UserConsent.ConsentType.MARKETING)
+        )
+
+
 class RequireConsentDecoratorTestCase(TestCase):
     """Test require_consent decorator."""
 

@@ -2,6 +2,8 @@
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
+from django.db.models import Q
+from django.utils import timezone
 
 
 class ConsentRequiredError(PermissionDenied):
@@ -21,6 +23,7 @@ def has_active_consent(user, consent_type):
     - A UserConsent record exists for the user and consent_type
     - withdrawn_at is null (not withdrawn)
     - version matches the current policy version from CONSENT_POLICY_VERSIONS
+    - expires_at is null, or in the future (not expired)
 
     Args:
         user: The User instance
@@ -47,6 +50,8 @@ def has_active_consent(user, consent_type):
         version=current_version,
         withdrawn_at__isnull=True,
         consented=True,
+    ).filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now()),
     ).exists()
 
 
@@ -55,8 +60,10 @@ def get_consent_status(user, consent_type):
     Get the current consent status for a user and consent type.
 
     Returns one of:
-    - "active": User has consented to the current policy version
-    - "outdated": User has consented, but to an outdated version
+    - "active": User has consented to the current policy version and it
+      has not expired
+    - "outdated": User has consented, but to an outdated version, or the
+      consent has expired (see settings.CONSENT_EXPIRY_DURATIONS)
     - "withdrawn": User had consent but withdrew it
     - "never_given": User has never given consent for this type
 
@@ -88,6 +95,11 @@ def get_consent_status(user, consent_type):
     # Check if withdrawn
     if consent.withdrawn_at is not None:
         return 'withdrawn'
+
+    # An expired consent is treated the same as a stale policy version -
+    # it can no longer count as active, and needs to be re-given.
+    if consent.expires_at is not None and consent.expires_at <= timezone.now():
+        return 'outdated'
 
     # Get current policy version
     current_version = settings.CONSENT_POLICY_VERSIONS.get(consent_type)

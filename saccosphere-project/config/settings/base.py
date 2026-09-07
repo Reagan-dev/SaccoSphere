@@ -533,3 +533,20 @@ CONSENT_POLICY_VERSIONS = {
     'DATA_PROCESSING': 'v1.0',
     'MARKETING': 'v1.0',
 }
+
+# Consent expiry durations
+# Maps consent_type to a timedelta after which a given consent record
+# should be treated as expired (and therefore no longer "active" - see
+# accounts.services.consent.get_consent_status).
+#
+# Whether any consent_type should expire at all, and after what duration,
+# is a product/legal policy decision under Kenya's Data Protection Act
+# (2019) - not something to guess at in code. This is intentionally left
+# empty: no consent_type expires by default. A type is only ever treated
+# as expiring once someone deliberately adds it here with a duration that
+# reflects an actual policy decision (e.g. MARKETING consent lapsing after
+# 12 months of inactivity is a plausible real-world pattern, but this
+# codebase does not assume it - confirm with compliance/legal first).
+CONSENT_EXPIRY_DURATIONS = {
+    # 'MARKETING': timedelta(days=365),
+}
