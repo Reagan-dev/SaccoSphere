@@ -1,5 +1,6 @@
 """Unit tests for consent service functions."""
 
+from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from django.test import TestCase
 from django.core.exceptions import PermissionDenied
@@ -281,6 +282,44 @@ class ConsentExpiryTestCase(TestCase):
         self.assertTrue(
             has_active_consent(self.user, UserConsent.ConsentType.MARKETING)
         )
+
+
+class NewConsentTypeExtensibilityTestCase(TestCase):
+    """
+    Confirm the service layer degrades safely for a consent_type that has
+    no prior UserConsent history - the state every consent_type is in on
+    day one, immediately after being added.
+
+    This deliberately uses a string that is NOT one of UserConsent.
+    ConsentType's current values (no new value is being added by this
+    test) - get_consent_status/has_active_consent don't validate
+    consent_type against the model's choices, they just filter by
+    whatever string they're given, so this is a faithful simulation of
+    "a brand-new type with zero history yet" without touching the
+    taxonomy itself.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='new-type-service@example.com',
+            phone_number='+254700000051',
+            password='testpass123',
+        )
+        self.hypothetical_type = 'SMS_MARKETING'
+
+    def test_get_consent_status_reports_never_given(self):
+        """A type with no history and no CONSENT_POLICY_VERSIONS entry is never_given."""
+        self.assertNotIn(
+            self.hypothetical_type, settings.CONSENT_POLICY_VERSIONS,
+        )
+
+        status = get_consent_status(self.user, self.hypothetical_type)
+        self.assertEqual(status, 'never_given')
+
+    def test_has_active_consent_returns_false(self):
+        """has_active_consent is False, not an error, for an unknown type."""
+        result = has_active_consent(self.user, self.hypothetical_type)
+        self.assertFalse(result)
 
 
 class RequireConsentDecoratorTestCase(TestCase):
