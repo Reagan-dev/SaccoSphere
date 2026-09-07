@@ -7,7 +7,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.models import UserConsent
 from accounts.permissions import IsSaccoAdmin
+from accounts.services.consent import has_active_consent
 from saccomembership.models import Membership
 from services.models import SavingsType
 
@@ -222,7 +224,27 @@ class BulkSMSCreateView(BulkSMSBaseView):
                 saving__savings_type__name=savings_type,
             ).distinct()
 
-        return queryset.order_by('created_at')
+        # Bulk SMS campaigns are promotional/broadcast messaging, not a
+        # transactional notification (OTPs, loan/payment alerts, guarantor
+        # requests, etc. go through notifications.tasks separately and are
+        # not consent-gated). ODPC requires opt-in consent before sending
+        # marketing communications, so only members with active MARKETING
+        # consent are eligible recipients here.
+        #
+        # NOTE: SMSCampaign has no campaign_type/purpose field distinguishing
+        # promotional content from operational SACCO announcements (e.g. "AGM
+        # postponed", "branch closed tomorrow") that admins might also send
+        # through this same tool. Gating all bulk SMS on MARKETING consent is
+        # the best-available assumption given the current data model; confirm
+        # with product/legal whether operational announcements need a
+        # separate, non-consent-gated campaign type.
+        return [
+            membership for membership in queryset.order_by('created_at')
+            if has_active_consent(
+                membership.user,
+                UserConsent.ConsentType.MARKETING,
+            )
+        ]
 
 
 class BulkSMSSendView(BulkSMSBaseView):

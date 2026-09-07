@@ -3,6 +3,10 @@
 from django.contrib.auth.models import AnonymousUser
 from django.test import TestCase
 from django.core.exceptions import PermissionDenied
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.test import APIRequestFactory, force_authenticate
+from rest_framework.views import APIView
 
 from accounts.models import User, UserConsent
 from accounts.services.consent import (
@@ -314,3 +318,57 @@ class ConsentRequiredErrorTestCase(TestCase):
         """ConsentRequiredError is a PermissionDenied subclass."""
         error = ConsentRequiredError('MARKETING')
         self.assertIsInstance(error, PermissionDenied)
+
+
+class _ConsentGatedTestView(APIView):
+    """Minimal view used only to prove ConsentRequiredError maps to HTTP 403.
+
+    Not a production endpoint or URL - exists solely so this test exercises
+    the project's actual DRF exception-handling pipeline (settings.REST_
+    FRAMEWORK['EXCEPTION_HANDLER']) end to end, rather than asserting on
+    DRF's documented behavior without verifying it against this codebase's
+    configuration.
+    """
+
+    @require_consent('MARKETING')
+    def get(self, request):
+        return Response({'ok': True})
+
+
+class RequireConsentDRFMappingTestCase(TestCase):
+    """Test that ConsentRequiredError is mapped to HTTP 403 in a DRF view."""
+
+    def setUp(self):
+        self.factory = APIRequestFactory()
+        self.user = User.objects.create_user(
+            email='consent-403@example.com',
+            phone_number='+254700000099',
+            password='testpass123',
+        )
+
+    def test_missing_consent_returns_403_via_drf_view(self):
+        """A view decorated with require_consent returns 403 without consent."""
+        request = self.factory.get('/')
+        force_authenticate(request, user=self.user)
+
+        response = _ConsentGatedTestView.as_view()(request)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data['success'], False)
+        self.assertEqual(response.data['error_code'], 'PERMISSION_DENIED')
+
+    def test_active_consent_allows_view_to_run(self):
+        """A view decorated with require_consent succeeds with active consent."""
+        UserConsent.objects.create(
+            user=self.user,
+            consent_type=UserConsent.ConsentType.MARKETING,
+            version='v1.0',
+            consented=True,
+        )
+        request = self.factory.get('/')
+        force_authenticate(request, user=self.user)
+
+        response = _ConsentGatedTestView.as_view()(request)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['ok'])
