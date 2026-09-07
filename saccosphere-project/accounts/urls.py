@@ -11,6 +11,7 @@ from .biometric_views import (
 )
 from .oauth_views import GoogleOAuthCallbackView, GoogleOAuthLinkView
 from .views import (
+    ConsentExportView,
     ConsentGiveView,
     ConsentHistoryView,
     ConsentListView,
@@ -103,6 +104,7 @@ urlpatterns = [
     path('consents/', ConsentGiveView.as_view(), name='consent-give'),
     path('consents/list/', ConsentListView.as_view(), name='consent-list'),
     path('consents/history/', ConsentHistoryView.as_view(), name='consent-history'),
+    path('consents/export/', ConsentExportView.as_view(), name='consent-export'),
     path(
         'consents/<str:consent_type>/withdraw/',
         ConsentWithdrawView.as_view(),

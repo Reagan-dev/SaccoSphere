@@ -35,3 +35,28 @@ class FinancialPagination(SaccoSpherePagination):
 
 class NotificationPagination(SaccoSpherePagination):
     page_size = 30
+
+
+class ConsentExportConsentsPagination(SaccoSpherePagination):
+    """Paginates the UserConsent section of the consent data-export endpoint.
+
+    Uses its own page/page_size query params (rather than the default
+    'page'/'page_size') so the consents and audit-log sections of a single
+    export response can be paged independently.
+    """
+
+    page_size = 50
+    page_query_param = 'consents_page'
+    page_size_query_param = 'consents_page_size'
+
+
+class ConsentExportAuditLogPagination(SaccoSpherePagination):
+    """Paginates the DataConsentLog section of the consent data-export endpoint.
+
+    See ConsentExportConsentsPagination - kept as a separate paginator with
+    its own query params for the same reason.
+    """
+
+    page_size = 50
+    page_query_param = 'logs_page'
+    page_size_query_param = 'logs_page_size'
