@@ -1,8 +1,12 @@
 """Shared utility functions."""
 
 import hashlib
+import logging
 import re
 from uuid import uuid4
+
+
+metrics_logger = logging.getLogger('saccosphere.metrics')
 
 
 class InvalidPhoneNumberError(ValueError):
@@ -63,6 +67,21 @@ def normalize_phone_number(raw: str, region: str = 'KE') -> str:
 
 def get_request_id(request):
     return request.headers.get('X-Correlation-ID') or str(uuid4())
+
+
+def emit_metric(event, **tags):
+    """
+    Emit a structured, greppable counter-increment log line.
+
+    No statsd/Prometheus client is a project dependency (confirmed absent
+    from requirements.txt) - this logs a consistently-prefixed structured
+    line instead of incrementing a real counter, so it can still be alerted
+    on via log-based metrics until real metrics infrastructure exists. When
+    that infra lands, replace this function's body with the real client
+    call; call sites do not need to change.
+    """
+    tag_str = ' '.join(f'{key}={value}' for key, value in tags.items())
+    metrics_logger.info('METRIC event=%s %s', event, tag_str)
 
 
 def sanitize_pii(value, max_length=8):
