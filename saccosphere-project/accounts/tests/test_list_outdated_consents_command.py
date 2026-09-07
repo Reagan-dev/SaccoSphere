@@ -122,3 +122,14 @@ class ListOutdatedConsentsCommandTestCase(TestCase):
         output = self._run_command()
 
         self.assertIn('Total outdated consent record(s) across reported type(s): 1', output)
+
+    def test_type_with_no_configured_policy_version_is_skipped(self):
+        """A consent_type absent from CONSENT_POLICY_VERSIONS is reported as skipped."""
+        from django.test import override_settings
+
+        with override_settings(CONSENT_POLICY_VERSIONS={}):
+            output = self._run_command('--consent-type=TERMS')
+
+        self.assertIn(
+            'TERMS: skipped - no current policy version configured', output,
+        )

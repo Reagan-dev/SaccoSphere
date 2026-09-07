@@ -130,3 +130,13 @@ class ListExpiringConsentsCommandTestCase(TestCase):
         output = self._run_command('--consent-type=TERMS', '--within-days=30')
 
         self.assertIn('TERMS: skipped - no expiry duration configured', output)
+
+    def test_non_positive_within_days_rejected(self):
+        """--within-days=0 (or negative) is rejected with a clear error, not a crash."""
+        out = StringIO()
+        err = StringIO()
+        call_command(
+            'list_expiring_consents', '--within-days=0', stdout=out, stderr=err,
+        )
+
+        self.assertIn('--within-days must be a positive integer', err.getvalue())
