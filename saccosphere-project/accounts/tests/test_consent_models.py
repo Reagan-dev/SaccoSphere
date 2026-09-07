@@ -150,6 +150,19 @@ class DataConsentLogModelTestCase(TestCase):
         self.assertIn(str(self.admin.id), log.accessed_by_reference)
         self.assertIn(self.admin.email, log.accessed_by_reference)
 
+    def test_str_representation(self):
+        """__str__ renders without error and names both parties."""
+        log = create_data_consent_log(
+            user=self.user,
+            accessed_by=self.admin,
+            data_type='MEMBER_PROFILE',
+            reason='Account review',
+        )
+
+        text = str(log)
+        self.assertIn(self.admin.email, text)
+        self.assertIn(self.user.email, text)
+
     def test_user_deletion_preserves_log_with_snapshot(self):
         """Deleting a user preserves the DataConsentLog with snapshot intact."""
         # Create a consent log

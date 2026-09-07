@@ -114,6 +114,27 @@ class ConsentGiveViewTestCase(TestCase):
         response = self.client.post('/api/v1/accounts/consents/', data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_whitespace_only_version_rejected(self):
+        """A whitespace-only version is rejected by the custom validator,
+        not just DRF's own blank-string check.
+
+        DRF's CharField already rejects a truly empty string
+        (allow_blank=False by default) before ConsentGiveSerializer.
+        validate_version ever runs - this specifically exercises the
+        custom "not value.strip()" branch, which is the part of that
+        validator DRF's field-level check does not already cover.
+        """
+        self.client.force_authenticate(user=self.user)
+
+        data = {
+            'consent_type': UserConsent.ConsentType.TERMS,
+            'version': '   ',
+            'consented': True,
+        }
+
+        response = self.client.post('/api/v1/accounts/consents/', data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_ip_captured_from_x_forwarded_for_behind_proxy(self):
         """Giving consent behind a reverse proxy records the real client IP,
         not a client-spoofed leading X-Forwarded-For entry.
@@ -209,6 +230,57 @@ class ConsentGiveViewTestCase(TestCase):
         )
         self.assertLessEqual(
             consent.expires_at, after + timedelta(days=30),
+        )
+
+
+class ConsentGiveThrottleTestCase(TestCase):
+    """Test that ConsentGiveUserThrottle actually fires, not just that it's
+    wired into throttle_classes. No prior test drove the request count
+    high enough to exercise throttle_failure() itself.
+
+    Deliberately clears the cache in both setUp and tearDown:
+    ConsentGiveIPThrottle is keyed by client IP, which is constant across
+    every test in this file (the Django test client always presents the
+    same address) - the 11 requests this test makes would otherwise leave
+    that shared IP counter elevated for every test that runs afterward in
+    the same process, causing spurious 429s in unrelated tests rather than
+    a failure localized to this one. (Found the hard way: this test
+    originally only cleared in setUp, and caused exactly that downstream
+    flakiness in the full suite.)
+    """
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='throttle-api@example.com',
+            phone_number='+254700000023',
+            password='testpass123',
+        )
+
+    def test_exceeding_give_rate_returns_429(self):
+        """The 11th give-consent request within the window is throttled."""
+        self.client.force_authenticate(user=self.user)
+        data = {
+            'consent_type': UserConsent.ConsentType.TERMS,
+            'version': 'v1.0',
+            'consented': True,
+        }
+
+        # CONSENT_GIVE_USER_RATE defaults to 10/hour (no override in
+        # settings for this test run).
+        for _ in range(10):
+            self.client.post('/api/v1/accounts/consents/', data, format='json')
+
+        response = self.client.post(
+            '/api/v1/accounts/consents/', data, format='json',
+        )
+
+        self.assertEqual(
+            response.status_code, status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
 
