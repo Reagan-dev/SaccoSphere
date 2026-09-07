@@ -1,8 +1,11 @@
+from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.core.signing import TimestampSigner
 from django.http import HttpRequest
 from django.urls import reverse
+
+from saccomanagement.admin import NoChangeAdminMixin
 
 from .kyc_document_access import generate_kyc_document_url
 from .models import (
@@ -392,8 +395,53 @@ class OTPTokenAdmin(admin.ModelAdmin):
         return obj.is_expired
 
 
-@admin.register(UserConsent)
-class UserConsentAdmin(admin.ModelAdmin):
+# -----------------------------------------------------------------------
+# UserConsent admin: read-only vs. audited-manual-edit policy
+#
+# UserConsent is a DPA/ODPC compliance record. Whether the Django admin
+# should allow it to be hand-edited at all is a real policy decision, not
+# an implementation detail - so it is made explicit here instead of being
+# decided implicitly by whoever next touches this file.
+#
+# OPTION A (ACTIVE, default) - read-only, no exceptions:
+#   Staff (including superusers) can view but never add, change, or delete
+#   UserConsent rows through /admin/. This matches the existing convention
+#   for this codebase's other audit-sensitive models - SystemAuditLogAdmin
+#   and DataConsentLogAdmin (saccomanagement/admin.py) both use the same
+#   NoChangeAdminMixin below with no superuser carve-out. Corrections must
+#   go through the application's own consent-give/withdraw API, which
+#   stamps ip_address/user_agent/timestamp correctly and creates a new,
+#   immutable row rather than mutating history in place.
+#
+# OPTION B (written, inactive) - audited manual edits:
+#   Staff can edit, but the change form requires a "reason", and
+#   save_model writes a DataConsentLog entry (who/what/when/why) before the
+#   save is allowed to complete. Deletion is still never allowed even under
+#   this option - deleting a compliance record leaves no trail at all, and
+#   there is no "reason" to attach to something that no longer exists.
+#   Choose this only if compliance/support has a genuine, recurring
+#   operational need to hand-correct bad consent data (e.g. a data-import
+#   error) that the consent API cannot already resolve.
+#
+# Trade-off: Option A makes "this record was never silently altered" a
+# guarantee enforced by the admin refusing edits outright - the strongest
+# form of evidence, but it means a genuinely bad row (e.g. a migration
+# typo) can only be fixed by direct database access outside the admin,
+# which is slower and, ironically, less auditable than a logged admin edit
+# would be. Option B keeps a documented, in-admin escape hatch for that
+# case, at the cost of making "immutable audit trail" a property enforced
+# by convention (the reason requirement + DataConsentLog write) rather than
+# by the admin refusing to allow the edit at all.
+#
+# To switch: change ACTIVE_CONSENT_ADMIN_POLICY below to 'B'. Nothing else
+# needs to change - both admin classes are already fully written.
+
+ACTIVE_CONSENT_ADMIN_POLICY = 'A'  # 'A' = read-only (default), 'B' = audited edits
+
+
+class UserConsentReadOnlyAdmin(NoChangeAdminMixin, admin.ModelAdmin):
+    """OPTION A: fully read-only, including for superusers."""
+
     list_display = (
         'user',
         'consent_type',
@@ -403,6 +451,89 @@ class UserConsentAdmin(admin.ModelAdmin):
     )
     list_filter = ('consent_type', 'consented', 'version')
     search_fields = ('user__email', 'version')
+
+
+class ConsentEditReasonForm(forms.ModelForm):
+    """OPTION B: change form requiring a reason for any manual edit."""
+
+    reason = forms.CharField(
+        required=True,
+        widget=forms.Textarea(attrs={'rows': 2}),
+        help_text=(
+            'Required: why is this consent record being edited by hand? '
+            'Recorded in the ODPC audit log before the save is allowed.'
+        ),
+    )
+
+    class Meta:
+        model = UserConsent
+        fields = '__all__'
+
+
+class UserConsentAuditedEditAdmin(admin.ModelAdmin):
+    """
+    OPTION B: manual edits allowed, but every change is written to
+    DataConsentLog (who, what, when, why) before the save completes.
+
+    Timestamp and IP-derived fields stay read-only even under this option -
+    those are evidence of when and where consent was actually given, and
+    must not be editable regardless of the reason supplied. consent_type,
+    version, consented, and withdrawn_at remain editable, since those are
+    exactly the fields a genuine data-correction would need to touch.
+    """
+
+    form = ConsentEditReasonForm
+    list_display = (
+        'user',
+        'consent_type',
+        'version',
+        'consented',
+        'timestamp',
+    )
+    list_filter = ('consent_type', 'consented', 'version')
+    search_fields = ('user__email', 'version')
+    readonly_fields = ('timestamp', 'ip_address', 'user_agent')
+
+    def has_delete_permission(self, request, obj=None):
+        # Deleting the record destroys the compliance evidence outright,
+        # with no audit trail possible - never allowed, under either option.
+        return False
+
+    def save_model(self, request, obj, form, change):
+        from saccomanagement.odpc_logging import create_data_consent_log
+
+        old_values = None
+        if change:
+            previous = UserConsent.objects.get(pk=obj.pk)
+            old_values = {
+                'consent_type': previous.consent_type,
+                'version': previous.version,
+                'consented': previous.consented,
+                'withdrawn_at': str(previous.withdrawn_at),
+            }
+
+        # Deliberately not caught: if the audit-log write fails, the edit
+        # must not silently succeed. A real deployment may want to catch
+        # ConsentLogWriteError here and surface it via self.message_user /
+        # forms.ValidationError instead of Django's default error page.
+        create_data_consent_log(
+            user=obj.user,
+            accessed_by=request.user,
+            data_type='USER_CONSENT_ADMIN_EDIT',
+            reason=(
+                f'{"Changed" if change else "Created"} via admin: '
+                f'{form.cleaned_data["reason"]}. '
+                f'Previous values: {old_values}.'
+            ),
+        )
+
+        super().save_model(request, obj, form, change)
+
+
+if ACTIVE_CONSENT_ADMIN_POLICY == 'B':
+    admin.site.register(UserConsent, UserConsentAuditedEditAdmin)
+else:
+    admin.site.register(UserConsent, UserConsentReadOnlyAdmin)
 
 
 @admin.register(DataErasureRequest)
