@@ -1609,10 +1609,21 @@ class UserConsent(models.Model):
     class Meta:
         ordering = ['-timestamp']
         constraints = [
+            # Scoped to withdrawn_at__isnull=True (i.e. active records only)
+            # rather than a blanket uniqueness rule: withdrawal must not
+            # delete or mutate a prior record (it's compliance evidence),
+            # so re-giving consent for the same (user, consent_type,
+            # version) after a withdrawal has to be able to insert a new
+            # row rather than being blocked by the old, now-withdrawn one.
+            # A duplicate *active* row for the same version is still
+            # rejected, which is the actual invariant this exists to
+            # protect: at most one active consent per (user, type,
+            # version) at a time - full history included.
             models.UniqueConstraint(
                 fields=['user', 'consent_type', 'version'],
-                name='unique_user_consent_per_version',
-                violation_error_message='A consent record for this user, consent type, and version already exists.',
+                condition=models.Q(withdrawn_at__isnull=True),
+                name='unique_active_user_consent_per_version',
+                violation_error_message='An active consent record for this user, consent type, and version already exists.',
             )
         ]
         indexes = [

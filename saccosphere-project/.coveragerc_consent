@@ -1,0 +1,21 @@
+[run]
+branch = True
+include =
+    */accounts/models.py
+    */accounts/serializers.py
+    */accounts/views.py
+    */accounts/urls.py
+    */accounts/throttles.py
+    */accounts/admin.py
+    */accounts/utils.py
+    */accounts/services/consent.py
+    */accounts/management/commands/list_outdated_consents.py
+    */accounts/management/commands/list_expiring_consents.py
+    */saccomanagement/models.py
+    */saccomanagement/odpc_logging.py
+    */config/pagination.py
+    */config/utils.py
+
+[report]
+show_missing = True
+skip_covered = False

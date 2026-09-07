@@ -1,9 +1,11 @@
 """API-level tests for consent management views."""
 
+from unittest.mock import patch
+
 from django.conf import settings
 from django.test import TestCase
 from rest_framework import status
-from rest_framework.test import APIClient
+from rest_framework.test import APIClient, APITransactionTestCase
 
 from accounts.models import User, UserConsent
 
@@ -112,6 +114,54 @@ class ConsentGiveViewTestCase(TestCase):
         response = self.client.post('/api/v1/accounts/consents/', data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_ip_captured_from_x_forwarded_for_behind_proxy(self):
+        """Giving consent behind a reverse proxy records the real client IP,
+        not a client-spoofed leading X-Forwarded-For entry.
+
+        This deployment sits behind exactly one reverse proxy hop, which
+        appends the true client IP as the last entry in the chain (see
+        accounts/utils.py::get_client_ip) - '198.51.100.1' here simulates
+        a value the client itself set, and '203.0.113.5' simulates what
+        the proxy actually appended.
+        """
+        self.client.force_authenticate(user=self.user)
+        data = {
+            'consent_type': UserConsent.ConsentType.TERMS,
+            'version': 'v1.0',
+            'consented': True,
+        }
+
+        response = self.client.post(
+            '/api/v1/accounts/consents/',
+            data,
+            format='json',
+            HTTP_X_FORWARDED_FOR='198.51.100.1, 203.0.113.5',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        consent = UserConsent.objects.get(id=response.data['id'])
+        self.assertEqual(consent.ip_address, '203.0.113.5')
+
+    def test_ip_captured_from_remote_addr_without_proxy(self):
+        """Without an X-Forwarded-For header, REMOTE_ADDR is used directly."""
+        self.client.force_authenticate(user=self.user)
+        data = {
+            'consent_type': UserConsent.ConsentType.PRIVACY,
+            'version': 'v1.0',
+            'consented': True,
+        }
+
+        response = self.client.post(
+            '/api/v1/accounts/consents/',
+            data,
+            format='json',
+            REMOTE_ADDR='192.0.2.9',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        consent = UserConsent.objects.get(id=response.data['id'])
+        self.assertEqual(consent.ip_address, '192.0.2.9')
+
     def test_no_duration_configured_leaves_expires_at_null(self):
         """With the real (empty) CONSENT_EXPIRY_DURATIONS, expires_at stays null."""
         self.assertEqual(settings.CONSENT_EXPIRY_DURATIONS, {})
@@ -159,6 +209,85 @@ class ConsentGiveViewTestCase(TestCase):
         )
         self.assertLessEqual(
             consent.expires_at, after + timedelta(days=30),
+        )
+
+
+class ConsentGiveRaceConditionTestCase(APITransactionTestCase):
+    """
+    Test the true database-level race path in ConsentGiveView.post - the
+    except IntegrityError: branch, not the idempotency pre-check.
+
+    Uses APITransactionTestCase (not TestCase) deliberately: this
+    production view has no @transaction.atomic wrapping and
+    settings.DATABASES has no ATOMIC_REQUESTS, so in real traffic each
+    .create() runs as its own autocommit statement - an IntegrityError
+    there does not poison anything else. Django's plain TestCase wraps
+    every test body in one atomic block for fast rollback-based isolation,
+    which does NOT match that: under TestCase, this same scenario raises
+    TransactionManagementError on the recovery query, because the IntegrityError
+    poisons the test's own wrapping transaction. That would be a test
+    artifact, not a real bug - APITransactionTestCase (no such wrapping,
+    real autocommit, slower table-truncation isolation) is what actually
+    reflects production behavior here.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='race-api@example.com',
+            phone_number='+254700000022',
+            password='testpass123',
+        )
+
+    def test_race_condition_at_database_level_recovers_without_500(self):
+        """A create() that collides with a just-committed row (simulating a
+        true race where this request's own idempotency pre-check missed,
+        because the other request committed in the gap right after) is
+        recovered via the IntegrityError handler, not surfaced as a 500.
+        """
+        consent_type = UserConsent.ConsentType.MARKETING
+        version = 'v1.0'
+
+        # The other, winning concurrent request: already committed.
+        winner = UserConsent.objects.create(
+            user=self.user,
+            consent_type=consent_type,
+            version=version,
+            consented=True,
+        )
+
+        self.client.force_authenticate(user=self.user)
+        data = {
+            'consent_type': consent_type,
+            'version': version,
+            'consented': True,
+        }
+
+        real_filter = UserConsent.objects.filter
+        calls = {'count': 0}
+
+        def flaky_filter(*args, **kwargs):
+            calls['count'] += 1
+            if calls['count'] == 1:
+                # The view's idempotency pre-check - force a miss, as if
+                # it ran just before "winner" was committed.
+                return UserConsent.objects.none()
+            return real_filter(*args, **kwargs)
+
+        with patch.object(
+            UserConsent.objects, 'filter', side_effect=flaky_filter,
+        ):
+            response = self.client.post(
+                '/api/v1/accounts/consents/', data, format='json',
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(response.data['id']), str(winner.id))
+        self.assertEqual(
+            UserConsent.objects.filter(
+                user=self.user, consent_type=consent_type, version=version,
+            ).count(),
+            1,
         )
 
 
@@ -244,6 +373,118 @@ class ConsentWithdrawViewTestCase(TestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class WithdrawThenGiveAgainTestCase(TestCase):
+    """
+    Test that re-giving consent for the same (consent_type, version) after
+    a withdrawal produces a new active record, not a silent no-op.
+
+    Found during final QA: the give-consent unique constraint used to
+    apply regardless of withdrawn_at, so re-giving the exact same version
+    after withdrawal hit the constraint on the withdrawn row and fell into
+    the IntegrityError recovery path, which (before this fix) re-fetched
+    the *withdrawn* row and returned it as if the request had succeeded -
+    the caller saw HTTP 200 with what looked like a normal consent object,
+    but get_consent_status still reported 'withdrawn'. The constraint is
+    now scoped to withdrawn_at__isnull=True (accounts/migrations/0022),
+    and the recovery path's re-fetch is scoped the same way.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='regive-api@example.com',
+            phone_number='+254700000021',
+            password='testpass123',
+        )
+
+    def test_give_after_withdraw_creates_new_active_record(self):
+        """Re-giving the same version after withdrawal succeeds and reactivates."""
+        self.client.force_authenticate(user=self.user)
+        data = {
+            'consent_type': UserConsent.ConsentType.MARKETING,
+            'version': 'v1.0',
+            'consented': True,
+        }
+
+        first_response = self.client.post(
+            '/api/v1/accounts/consents/', data, format='json',
+        )
+        self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
+        first_id = first_response.data['id']
+
+        withdraw_response = self.client.post(
+            f'/api/v1/accounts/consents/{UserConsent.ConsentType.MARKETING}/withdraw/',
+            format='json',
+        )
+        self.assertEqual(withdraw_response.status_code, status.HTTP_200_OK)
+
+        second_response = self.client.post(
+            '/api/v1/accounts/consents/', data, format='json',
+        )
+
+        # A genuinely new active record, not the withdrawn one echoed back.
+        self.assertEqual(second_response.status_code, status.HTTP_201_CREATED)
+        second_id = second_response.data['id']
+        self.assertNotEqual(first_id, second_id)
+        self.assertEqual(second_response.data['status'], 'active')
+
+        from accounts.services.consent import get_consent_status, has_active_consent
+
+        self.assertEqual(
+            get_consent_status(self.user, UserConsent.ConsentType.MARKETING),
+            'active',
+        )
+        self.assertTrue(
+            has_active_consent(self.user, UserConsent.ConsentType.MARKETING)
+        )
+
+    def test_history_preserves_both_the_withdrawal_and_the_regive(self):
+        """History shows both records - nothing is lost or overwritten.
+
+        Note: ConsentSerializer.status reports the consent_type's *current*
+        status (via get_status -> get_consent_status, which always looks up
+        the user's latest record for that type), not this specific row's
+        own state - so every entry in a history listing shows the same
+        status value. That's an existing, deliberate design from the
+        status-field prompt, not something this test changes. To prove
+        each row's own historical state is genuinely preserved (not
+        collapsed into one row), this checks withdrawn_at directly via the
+        ORM rather than the serialized 'status' field.
+        """
+        self.client.force_authenticate(user=self.user)
+        data = {
+            'consent_type': UserConsent.ConsentType.MARKETING,
+            'version': 'v1.0',
+            'consented': True,
+        }
+
+        first_id = self.client.post(
+            '/api/v1/accounts/consents/', data, format='json',
+        ).data['id']
+        self.client.post(
+            f'/api/v1/accounts/consents/{UserConsent.ConsentType.MARKETING}/withdraw/',
+            format='json',
+        )
+        second_id = self.client.post(
+            '/api/v1/accounts/consents/', data, format='json',
+        ).data['id']
+
+        history_response = self.client.get(
+            '/api/v1/accounts/consents/history/', format='json',
+        )
+
+        self.assertEqual(history_response.status_code, status.HTTP_200_OK)
+        record_ids = {item['id'] for item in history_response.data}
+        self.assertIn(first_id, record_ids)
+        self.assertIn(second_id, record_ids)
+        self.assertEqual(len(history_response.data), 2)
+
+        first_record = UserConsent.objects.get(id=first_id)
+        second_record = UserConsent.objects.get(id=second_id)
+        self.assertIsNotNone(first_record.withdrawn_at)
+        self.assertIsNone(second_record.withdrawn_at)
 
 
 class ConsentListViewTestCase(TestCase):
