@@ -3,6 +3,7 @@ import logging
 import time
 
 from config.utils import emit_metric, sanitize_pii
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.core.exceptions import FieldError, PermissionDenied
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
@@ -1798,6 +1799,13 @@ class ConsentGiveView(APIView):
         # Get user agent
         user_agent = request.META.get('HTTP_USER_AGENT', '')[:255]
 
+        # Only set expires_at if this consent_type has a configured expiry
+        # duration - most types have none, and stay null (never expires).
+        expiry_duration = settings.CONSENT_EXPIRY_DURATIONS.get(consent_type)
+        expires_at = (
+            timezone.now() + expiry_duration if expiry_duration else None
+        )
+
         try:
             consent = UserConsent.objects.create(
                 user=user,
@@ -1806,6 +1814,7 @@ class ConsentGiveView(APIView):
                 consented=consented,
                 ip_address=ip_address,
                 user_agent=user_agent,
+                expires_at=expires_at,
             )
             emit_metric(
                 'consent_given',

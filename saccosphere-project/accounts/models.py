@@ -1596,7 +1596,15 @@ class UserConsent(models.Model):
 
     )
 
-
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            'Date and time this consent expires, if this consent_type has a '
+            'configured expiry duration (see settings.CONSENT_EXPIRY_DURATIONS). '
+            'Null means this consent does not expire.'
+        ),
+    )
 
     class Meta:
         ordering = ['-timestamp']

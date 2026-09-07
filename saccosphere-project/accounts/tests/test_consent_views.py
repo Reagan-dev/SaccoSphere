@@ -112,6 +112,55 @@ class ConsentGiveViewTestCase(TestCase):
         response = self.client.post('/api/v1/accounts/consents/', data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_no_duration_configured_leaves_expires_at_null(self):
+        """With the real (empty) CONSENT_EXPIRY_DURATIONS, expires_at stays null."""
+        self.assertEqual(settings.CONSENT_EXPIRY_DURATIONS, {})
+        self.client.force_authenticate(user=self.user)
+
+        data = {
+            'consent_type': UserConsent.ConsentType.TERMS,
+            'version': 'v1.0',
+            'consented': True,
+        }
+        response = self.client.post('/api/v1/accounts/consents/', data, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        consent = UserConsent.objects.get(id=response.data['id'])
+        self.assertIsNone(consent.expires_at)
+
+    def test_configured_duration_sets_expires_at(self):
+        """When a duration is configured for the type, expires_at is populated."""
+        from datetime import timedelta
+
+        from django.test import override_settings
+        from django.utils import timezone
+
+        self.client.force_authenticate(user=self.user)
+        data = {
+            'consent_type': UserConsent.ConsentType.MARKETING,
+            'version': 'v1.0',
+            'consented': True,
+        }
+
+        before = timezone.now()
+        with override_settings(
+            CONSENT_EXPIRY_DURATIONS={'MARKETING': timedelta(days=30)},
+        ):
+            response = self.client.post(
+                '/api/v1/accounts/consents/', data, format='json',
+            )
+        after = timezone.now()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        consent = UserConsent.objects.get(id=response.data['id'])
+        self.assertIsNotNone(consent.expires_at)
+        self.assertGreaterEqual(
+            consent.expires_at, before + timedelta(days=30),
+        )
+        self.assertLessEqual(
+            consent.expires_at, after + timedelta(days=30),
+        )
+
 
 class ConsentWithdrawViewTestCase(TestCase):
     """Test ConsentWithdrawView API endpoint."""
