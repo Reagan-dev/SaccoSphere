@@ -25,9 +25,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from config.pagination import (
+    ConsentExportAuditLogPagination,
+    ConsentExportConsentsPagination,
+)
 from config.response import StandardResponseMixin
 from django.db import IntegrityError, transaction
 from saccomanagement.audit_logger import log_audit
+from saccomanagement.models import DataConsentLog
 from saccomanagement.odpc_logging import DataAccessMixin
 
 from .integrations.iprs_client import IPRSClient, IPRSError
@@ -62,6 +67,7 @@ from .serializers import (
     AdminKYCReviewSerializer,
     ConsentGiveSerializer,
     ConsentSerializer,
+    DataConsentLogSerializer,
     KYCStatusSerializer,
     KYCUploadSerializer,
     PasswordChangeSerializer,
@@ -73,6 +79,8 @@ from .serializers import (
     UserRegistrationSerializer,
 )
 from .throttles import (
+    ConsentExportIPThrottle,
+    ConsentExportUserThrottle,
     ConsentGiveIPThrottle,
     ConsentGiveUserThrottle,
     ConsentWithdrawIPThrottle,
@@ -1924,5 +1932,79 @@ class ConsentHistoryView(APIView):
 
         serializer = ConsentSerializer(consents, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ConsentExportView(APIView):
+    """
+    Export the authenticated user's own consent history and the ODPC audit
+    log entries recorded about them, as a downloadable JSON payload.
+
+    Strictly scoped to request.user: no path/query parameter identifies
+    whose data to export, so there is no parameter to manipulate to reach
+    another user's records. Both sections are paginated independently
+    (rather than run as a background task) since no async infra is needed
+    for a per-user history that is bounded in practice, and paginating
+    keeps a very active user's export from blocking the request.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [
+        ConsentExportUserThrottle,
+        ConsentExportIPThrottle,
+    ]
+
+    def get(self, request):
+        """Return the authenticated user's consents and audit log entries."""
+        user = request.user
+
+        consents_queryset = UserConsent.objects.filter(
+            user=user,
+        ).order_by('-timestamp')
+        consents_paginator = ConsentExportConsentsPagination()
+        consents_page = consents_paginator.paginate_queryset(
+            consents_queryset, request, view=self,
+        )
+        consents_data = ConsentSerializer(consents_page, many=True).data
+
+        # "About this user" means entries where this user is the data
+        # subject (DataConsentLog.user), not entries where they were the
+        # accessor (accessed_by) - a member exporting their own data wants
+        # to see who looked at their records, not what they themselves
+        # looked at as an admin.
+        audit_log_queryset = DataConsentLog.objects.filter(
+            user=user,
+        ).order_by('-timestamp')
+        audit_log_paginator = ConsentExportAuditLogPagination()
+        audit_log_page = audit_log_paginator.paginate_queryset(
+            audit_log_queryset, request, view=self,
+        )
+        audit_log_data = DataConsentLogSerializer(
+            audit_log_page, many=True,
+        ).data
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Success',
+                'data': {
+                    'exported_at': timezone.now(),
+                    'consents': {
+                        'count': consents_paginator.page.paginator.count,
+                        'next': consents_paginator.get_next_link(),
+                        'previous': consents_paginator.get_previous_link(),
+                        'results': consents_data,
+                    },
+                    'audit_logs': {
+                        'count': (
+                            audit_log_paginator.page.paginator.count
+                        ),
+                        'next': audit_log_paginator.get_next_link(),
+                        'previous': audit_log_paginator.get_previous_link(),
+                        'results': audit_log_data,
+                    },
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
 

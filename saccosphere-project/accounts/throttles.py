@@ -442,3 +442,109 @@ class ConsentWithdrawIPThrottle(AnonRateThrottle):
             detail='Too many consent withdrawal requests. Please try again later.',
         )
 
+
+class ConsentExportUserThrottle(UserRateThrottle):
+    """
+    Throttle consent data-export requests for authenticated users.
+
+    Export endpoints return a user's full consent/audit history in one
+    response, which makes them a common scraping target, so this is
+    deliberately stricter than the give/withdraw throttles. Uses a
+    configurable rate from Django settings. Default: 5 per hour.
+
+    Justification: A legitimate user exports their own data occasionally
+    (e.g. a subject-access request), not repeatedly. 5/hour allows for
+    legitimate re-downloads while preventing scripted scraping.
+    """
+
+    def __init__(self):
+        rate = getattr(settings, 'CONSENT_EXPORT_USER_RATE', '5/hour')
+        self.rate = rate if rate else '5/hour'
+        super().__init__()
+
+    def get_cache_key(self, request, view):
+        """
+        Use user ID for cache key.
+        """
+        if request.user and request.user.is_authenticated:
+            return f'consent_export_user_{request.user.id}'
+        return None
+
+    def allow_request(self, request, view):
+        """
+        Store request reference before checking throttle.
+        """
+        self.request = request
+        return super().allow_request(request, view)
+
+    def throttle_failure(self):
+        """
+        Raise Throttled exception with Retry-After header and log the event.
+        """
+        wait = self.wait()
+        logger.warning(
+            'Consent export throttled for user %s. Wait: %s seconds',
+            getattr(self.request.user, 'id', 'anonymous'),
+            wait,
+            extra={
+                'user_id': getattr(self.request.user, 'id', None),
+                'throttle_type': 'user',
+                'wait_seconds': wait,
+            },
+        )
+        raise Throttled(
+            wait=wait,
+            detail='Too many consent export requests. Please try again later.',
+        )
+
+
+class ConsentExportIPThrottle(AnonRateThrottle):
+    """
+    Throttle consent data-export requests by IP address.
+
+    Defense-in-depth measure to prevent bulk scraping of export data even if
+    authentication changes. Limits total export requests from a single IP
+    regardless of user. Uses a configurable rate from Django settings.
+    Default: 10 per hour.
+    """
+
+    def __init__(self):
+        rate = getattr(settings, 'CONSENT_EXPORT_IP_RATE', '10/hour')
+        self.rate = rate if rate else '10/hour'
+        super().__init__()
+
+    def get_cache_key(self, request, view):
+        """
+        Use client IP address for cache key.
+        """
+        ip = _get_client_ip(request)
+        return f'consent_export_ip_{ip}'
+
+    def allow_request(self, request, view):
+        """
+        Store request reference before checking throttle.
+        """
+        self.request = request
+        return super().allow_request(request, view)
+
+    def throttle_failure(self):
+        """
+        Raise Throttled exception with Retry-After header and log the event.
+        """
+        wait = self.wait()
+        ip = _get_client_ip(self.request)
+        logger.warning(
+            'Consent export throttled for IP %s. Wait: %s seconds',
+            ip,
+            wait,
+            extra={
+                'client_ip': ip,
+                'throttle_type': 'ip',
+                'wait_seconds': wait,
+            },
+        )
+        raise Throttled(
+            wait=wait,
+            detail='Too many consent export requests. Please try again later.',
+        )
+
