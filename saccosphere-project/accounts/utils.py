@@ -8,8 +8,14 @@ def get_client_ip(request):
     Extract the client IP address from the request.
 
     Checks X-Forwarded-For header (for proxy/load balancer setups) and falls
-    back to REMOTE_ADDR. Takes the leftmost IP from X-Forwarded-For as the
-    client IP, assuming the proxy is configured correctly.
+    back to REMOTE_ADDR. Takes the rightmost IP from X-Forwarded-For, not the
+    leftmost: this deployment sits behind exactly one reverse proxy (Render or
+    Railway), which appends the true client IP as the last entry in the chain.
+    Anything before that is client-supplied and can be spoofed by sending a
+    fabricated X-Forwarded-For header, so trusting the leftmost entry would
+    let a client forge its own IP for throttling and audit purposes. This
+    matches payments.integrations.mpesa.security._get_client_ip, which reasons
+    through the same single-hop trust boundary for M-Pesa callback security.
 
     Args:
         request: The Django request object.
@@ -19,10 +25,11 @@ def get_client_ip(request):
     """
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
     if x_forwarded_for:
-        # X-Forwarded-For can contain multiple IPs: client, proxy1, proxy2
-        # The leftmost is the original client
-        ip = x_forwarded_for.split(',')[0].strip()
-        return ip if ip else None
+        # X-Forwarded-For format here is [client-supplied, ..., real_client_ip]
+        # since our one reverse proxy hop appends the true IP last.
+        ips = [ip.strip() for ip in x_forwarded_for.split(',') if ip.strip()]
+        if ips:
+            return ips[-1]
 
     remote_addr = request.META.get('REMOTE_ADDR')
     return remote_addr

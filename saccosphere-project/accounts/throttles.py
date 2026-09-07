@@ -16,16 +16,22 @@ def _get_client_ip(request):
     """
     Get the client IP address from the request.
 
-    Checks for X-Forwarded-For header first (for reverse proxies),
-    then falls back to REMOTE_ADDR.
+    Checks for X-Forwarded-For header first (for reverse proxies), then
+    falls back to REMOTE_ADDR. Takes the rightmost entry, not the leftmost:
+    this deployment sits behind exactly one reverse proxy hop, which appends
+    the true client IP as the last entry, while anything earlier in the
+    chain is client-supplied and spoofable. Used as the cache-key source for
+    every IP-scoped throttle in this module (OTP send, KYC upload, consent
+    give/withdraw) — trusting the leftmost entry here would let a client
+    defeat all of them by rotating a forged first X-Forwarded-For value.
+    Matches payments.integrations.mpesa.security._get_client_ip.
     """
     x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
     if x_forwarded_for:
-        # X-Forwarded-For can contain multiple IPs, take the first one
-        ip = x_forwarded_for.split(',')[0].strip()
-    else:
-        ip = request.META.get('REMOTE_ADDR', 'unknown')
-    return ip
+        ips = [ip.strip() for ip in x_forwarded_for.split(',') if ip.strip()]
+        if ips:
+            return ips[-1]
+    return request.META.get('REMOTE_ADDR', 'unknown')
 
 
 class OTPSendThrottle(AnonRateThrottle):
