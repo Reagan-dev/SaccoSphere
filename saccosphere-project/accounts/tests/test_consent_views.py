@@ -1,5 +1,6 @@
 """API-level tests for consent management views."""
 
+from django.conf import settings
 from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -242,6 +243,40 @@ class ConsentListViewTestCase(TestCase):
         """Unauthenticated requests are rejected."""
         response = self.client.get('/api/v1/accounts/consents/list/', format='json')
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_stale_version_reports_outdated_not_active_and_blocks_enforcement(self):
+        """A consent recorded against an old policy version is 'outdated', not
+        'active', both via the API and via has_active_consent - so
+        require_consent-style enforcement correctly treats it as not consented."""
+        from accounts.services.consent import has_active_consent
+
+        current_version = settings.CONSENT_POLICY_VERSIONS[
+            UserConsent.ConsentType.TERMS
+        ]
+        self.assertNotEqual(current_version, 'v0.1')
+        UserConsent.objects.create(
+            user=self.user,
+            consent_type=UserConsent.ConsentType.TERMS,
+            version='v0.1',
+            consented=True,
+        )
+
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get('/api/v1/accounts/consents/list/', format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        terms_entry = next(
+            item for item in response.data
+            if item['consent_type'] == UserConsent.ConsentType.TERMS
+        )
+        self.assertEqual(terms_entry['status'], 'outdated')
+        self.assertNotEqual(terms_entry['status'], 'active')
+
+        # Same fixture, same consent_type: the enforcement-facing function
+        # must agree with what the API just reported.
+        self.assertFalse(
+            has_active_consent(self.user, UserConsent.ConsentType.TERMS)
+        )
 
 
 class ConsentHistoryViewTestCase(TestCase):
