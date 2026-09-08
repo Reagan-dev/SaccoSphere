@@ -1,16 +1,25 @@
 from django.apps import apps
 from django.db import transaction
-from rest_framework.generics import CreateAPIView, ListAPIView, RetrieveAPIView
+from rest_framework.generics import (
+    CreateAPIView,
+    ListAPIView,
+    ListCreateAPIView,
+    RetrieveAPIView,
+    RetrieveUpdateDestroyAPIView,
+)
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 
+from accounts.permissions import IsSaccoAdmin
 from config.response import StandardResponseMixin
+from saccomanagement.mixins import SaccoScopedMixin
 
 from .models import Membership, SaccoFieldDefinition
 from .serializers import (
     MembershipApplySerializer,
     MembershipDetailSerializer,
     MembershipListSerializer,
+    SaccoFieldDefinitionAdminSerializer,
     SaccoFieldDefinitionSerializer,
 )
 
@@ -141,3 +150,78 @@ class SaccoFieldsView(StandardResponseMixin, ListAPIView):
     def list(self, request, *args, **kwargs):
         serializer = self.get_serializer(self.get_queryset(), many=True)
         return self.ok(serializer.data)
+
+
+class SaccoFieldDefinitionAdminListCreateView(
+    SaccoScopedMixin, StandardResponseMixin, ListCreateAPIView,
+):
+    """
+    List or create custom field definitions for the current SACCO_ADMIN's
+    own SACCO.
+
+    GET/POST /api/v1/members/admin/field-definitions/
+    """
+
+    serializer_class = SaccoFieldDefinitionAdminSerializer
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    pagination_class = None
+
+    def get_queryset(self):
+        return SaccoFieldDefinition.objects.filter(
+            sacco=self.get_sacco_context(),
+        ).order_by('display_order')
+
+    def perform_create(self, serializer):
+        serializer.save(sacco=self.get_sacco_context())
+
+    def list(self, request, *args, **kwargs):
+        serializer = self.get_serializer(self.get_queryset(), many=True)
+        return self.ok(serializer.data)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return self.created(serializer.data)
+
+
+class SaccoFieldDefinitionAdminDetailView(
+    SaccoScopedMixin, StandardResponseMixin, RetrieveUpdateDestroyAPIView,
+):
+    """
+    Retrieve, update, or delete one custom field definition belonging to
+    the current SACCO_ADMIN's own SACCO.
+
+    GET/PATCH/DELETE /api/v1/members/admin/field-definitions/<id>/
+    """
+
+    serializer_class = SaccoFieldDefinitionAdminSerializer
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    lookup_field = 'id'
+
+    def get_queryset(self):
+        return SaccoFieldDefinition.objects.filter(
+            sacco=self.get_sacco_context(),
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        serializer = self.get_serializer(self.get_object())
+        return self.ok(serializer.data)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(
+            instance, data=request.data, partial=kwargs.pop('partial', False),
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return self.ok(serializer.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.delete()
+        return self.ok(None, 'Field definition deleted')

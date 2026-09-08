@@ -8,6 +8,8 @@ from .views import (
     MembershipDetailView,
     MembershipLeaveView,
     MembershipListView,
+    SaccoFieldDefinitionAdminDetailView,
+    SaccoFieldDefinitionAdminListCreateView,
     SaccoFieldsView,
 )
 
@@ -34,6 +36,16 @@ urlpatterns = [
         'saccos/<uuid:sacco_id>/fields/',
         SaccoFieldsView.as_view(),
         name='sacco-fields',
+    ),
+    path(
+        'admin/field-definitions/',
+        SaccoFieldDefinitionAdminListCreateView.as_view(),
+        name='field-definition-list-create',
+    ),
+    path(
+        'admin/field-definitions/<uuid:id>/',
+        SaccoFieldDefinitionAdminDetailView.as_view(),
+        name='field-definition-detail',
     ),
     path(
         'applications/<uuid:application_id>/documents/',
