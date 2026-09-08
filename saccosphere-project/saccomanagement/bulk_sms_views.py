@@ -1,10 +1,12 @@
 """SACCO admin bulk SMS campaign endpoints."""
 
+from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import SimpleRateThrottle
 from rest_framework.views import APIView
 
 from accounts.models import UserConsent
@@ -14,6 +16,36 @@ from saccomembership.models import Membership
 from services.models import SavingsType
 
 from .models import Role, SMSCampaign, SMSCampaignRecipient
+
+
+class BulkSMSSendSaccoThrottle(SimpleRateThrottle):
+    """
+    Limits how often /send/ can be hit per SACCO (not per admin user) - a
+    SACCO with several admins should still be limited as one tenant.
+
+    Distinct from the daily-message-volume check inside
+    notifications.tasks.send_bulk_sms_campaign_task, which caps total SMS
+    count for the day - this caps how often the send *endpoint* itself can
+    be called, regardless of campaign size.
+    """
+
+    scope = 'bulk_sms_send'
+
+    def get_rate(self):
+        # TODO(product): confirm a sensible send-request rate per SACCO.
+        # BULK_SMS_SEND_THROTTLE_RATE is a placeholder default, tunable via
+        # settings/env without a code change.
+        return getattr(settings, 'BULK_SMS_SEND_THROTTLE_RATE', '10/hour')
+
+    def get_cache_key(self, request, view):
+        sacco = view.get_sacco(request)
+        if sacco is None:
+            return None
+
+        return self.cache_format % {
+            'scope': self.scope,
+            'ident': sacco.id,
+        }
 
 
 class BulkSMSBaseView(APIView):
@@ -250,6 +282,8 @@ class BulkSMSCreateView(BulkSMSBaseView):
 class BulkSMSSendView(BulkSMSBaseView):
     """Queue a draft campaign for background sending."""
 
+    throttle_classes = [BulkSMSSendSaccoThrottle]
+
     def post(self, request, id):
         from notifications.tasks import send_bulk_sms_campaign_task
 
@@ -267,8 +301,10 @@ class BulkSMSSendView(BulkSMSBaseView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        campaign.status = SMSCampaign.Status.SENDING
-        campaign.save(update_fields=['status'])
+        # QUEUED means "accepted, not yet picked up by a worker" - the task
+        # itself flips this to SENDING once it actually starts processing.
+        campaign.status = SMSCampaign.Status.QUEUED
+        campaign.save(update_fields=['status', 'updated_at'])
         send_bulk_sms_campaign_task.delay(str(campaign.id))
 
         return Response(

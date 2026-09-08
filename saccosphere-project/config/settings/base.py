@@ -257,6 +257,13 @@ if OTP_HASH_KEY_USES_SECRET_KEY_FALLBACK:
 # from cryptography.fernet import Fernet; Fernet.generate_key()
 FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY', default='')
 
+# Bulk SMS send-endpoint throttle (per SACCO, not per user) - distinct from
+# the daily SMS volume cap in notifications.tasks.
+# TODO(product): confirm a sensible send-request rate per SACCO per hour.
+BULK_SMS_SEND_THROTTLE_RATE = config(
+    'BULK_SMS_SEND_THROTTLE_RATE', default='10/hour',
+)
+
 # Africa's Talking SMS Configuration
 AT_API_KEY = config('AT_API_KEY', default='')
 AT_USERNAME = config('AT_USERNAME', default='sandbox')

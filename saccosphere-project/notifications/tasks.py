@@ -179,6 +179,13 @@ def send_bulk_sms_campaign_task(self, campaign_id):
         logger.warning('SMS campaign_id=%s does not exist.', campaign_id)
         return None
 
+    # The view sets QUEUED when the send request is accepted; flip to
+    # SENDING now that a worker has actually picked this up. Idempotent on
+    # a Celery retry, which re-enters here with the campaign already in
+    # SENDING.
+    campaign.status = SMSCampaign.Status.SENDING
+    campaign.save(update_fields=['status', 'updated_at'])
+
     try:
         settings_obj, _created = SaccoSettings.objects.get_or_create(
             sacco=campaign.sacco,
@@ -195,12 +202,8 @@ def send_bulk_sms_campaign_task(self, campaign_id):
         if allowance <= 0:
             mark_daily_limit_failures(pending_recipients)
             update_campaign_counts(campaign, SMSCampaignRecipient)
-            campaign.status = SMSCampaign.Status.FAILED
-            campaign.save(update_fields=[
-                'status',
-                'sent_count',
-                'failed_count',
-            ])
+            campaign.status = determine_campaign_status(campaign)
+            campaign.save(update_fields=['status', 'updated_at'])
             return {
                 'sent': campaign.sent_count,
                 'failed': campaign.failed_count,
@@ -224,22 +227,26 @@ def send_bulk_sms_campaign_task(self, campaign_id):
             update_campaign_counts(campaign, SMSCampaignRecipient)
 
         update_campaign_counts(campaign, SMSCampaignRecipient)
-        campaign.status = (
-            SMSCampaign.Status.COMPLETED
-            if campaign.sent_count > 0
-            else SMSCampaign.Status.FAILED
-        )
-        campaign.save(update_fields=[
-            'status',
-            'sent_count',
-            'failed_count',
-        ])
+        campaign.status = determine_campaign_status(campaign)
+        campaign.save(update_fields=['status', 'updated_at'])
         return {
             'sent': campaign.sent_count,
             'failed': campaign.failed_count,
             'status': campaign.status,
         }
     except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            update_campaign_counts(campaign, SMSCampaignRecipient)
+            campaign.status = determine_campaign_status(campaign)
+            campaign.save(update_fields=['status', 'updated_at'])
+            logger.error(
+                'Bulk SMS campaign_id=%s exhausted retries; marked %s.',
+                campaign_id,
+                campaign.status,
+                exc_info=True,
+            )
+            raise
+
         countdown = 60 * 2 ** self.request.retries
         logger.warning(
             'Bulk SMS campaign_id=%s failed. Retrying in %s seconds.',
@@ -302,7 +309,24 @@ def update_campaign_counts(campaign, recipient_model):
     campaign.failed_count = campaign.recipients.filter(
         status=recipient_model.Status.FAILED,
     ).count()
-    campaign.save(update_fields=['sent_count', 'failed_count'])
+    campaign.save(
+        update_fields=['sent_count', 'failed_count', 'updated_at'],
+    )
+
+
+def determine_campaign_status(campaign):
+    """
+    COMPLETED only if every recipient succeeded, FAILED only if none did,
+    PARTIAL otherwise - a campaign is not COMPLETED just because at least
+    one message went out.
+    """
+    from saccomanagement.models import SMSCampaign
+
+    if campaign.sent_count == 0:
+        return SMSCampaign.Status.FAILED
+    if campaign.failed_count == 0:
+        return SMSCampaign.Status.COMPLETED
+    return SMSCampaign.Status.PARTIAL
 
 
 def chunked(items, size):
