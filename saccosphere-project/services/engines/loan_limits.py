@@ -95,6 +95,10 @@ def calculate_loan_limit(user, sacco):
     )['total'] or ZERO
     net_limit = max(gross_limit - existing_balance, ZERO)
 
+    sacco_settings = getattr(sacco, 'settings', None)
+    if sacco_settings is not None and sacco_settings.max_loan_amount is not None:
+        net_limit = min(net_limit, sacco_settings.max_loan_amount)
+
     has_default = Loan.objects.select_related(
         'membership',
         'membership__sacco',

@@ -805,8 +805,6 @@ class SaccoSettings(models.Model):
 
     loan_multiplier = models.PositiveSmallIntegerField(default=3)
 
-    requires_guarantor = models.BooleanField(default=True)
-
     guarantor_type_allowed = models.CharField(
 
         max_length=20,

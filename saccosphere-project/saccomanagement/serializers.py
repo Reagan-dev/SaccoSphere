@@ -211,7 +211,6 @@ class SaccoSettingsSerializer(serializers.ModelSerializer):
             'min_loan_amount',
             'max_loan_amount',
             'loan_multiplier',
-            'requires_guarantor',
             'guarantor_type_allowed',
             'registration_fee',
             'monthly_contribution_amount',
@@ -219,6 +218,48 @@ class SaccoSettingsSerializer(serializers.ModelSerializer):
             'updated_at',
         )
         read_only_fields = ('sacco_id', 'updated_at')
+
+    def validate(self, attrs):
+        instance = self.instance
+
+        def _current(field_name):
+            return attrs.get(
+                field_name,
+                getattr(instance, field_name, None),
+            )
+
+        min_loan_amount = _current('min_loan_amount')
+        max_loan_amount = _current('max_loan_amount')
+        if (
+            min_loan_amount is not None
+            and max_loan_amount is not None
+            and min_loan_amount > max_loan_amount
+        ):
+            raise serializers.ValidationError(
+                {
+                    'min_loan_amount': (
+                        'min_loan_amount cannot exceed max_loan_amount.'
+                    ),
+                },
+            )
+
+        registration_fee = _current('registration_fee')
+        if registration_fee is not None and registration_fee < 0:
+            raise serializers.ValidationError(
+                {'registration_fee': 'registration_fee cannot be negative.'},
+            )
+
+        loan_multiplier = _current('loan_multiplier')
+        if loan_multiplier is not None and loan_multiplier <= 0:
+            raise serializers.ValidationError(
+                {
+                    'loan_multiplier': (
+                        'loan_multiplier must be greater than zero.'
+                    ),
+                },
+            )
+
+        return attrs
 
 
 class SystemAuditLogSerializer(serializers.ModelSerializer):

@@ -2,14 +2,17 @@
 
 from decimal import Decimal
 
+from django.db import transaction
+from rest_framework.exceptions import ValidationError
 from rest_framework.generics import RetrieveUpdateAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.models import SaccoSettings
-from accounts.permissions import IsSaccoAdmin
+from accounts.models import Sacco, SaccoSettings
+from accounts.permissions import IsSaccoAdminOrSuperAdmin
 
 from .mixins import SaccoScopedMixin
+from .models import Role
 from .serializers import SaccoSettingsSerializer
 
 
@@ -18,10 +21,14 @@ class SaccoSettingsView(SaccoScopedMixin, RetrieveUpdateAPIView):
     Retrieve or update SACCO-specific configuration.
 
     GET/PATCH /api/v1/management/settings/
+    A platform admin (SUPER_ADMIN or staff) has no "current" SACCO, so they
+    must target one explicitly: ?sacco_id=<uuid>, mirroring the convention
+    already used for platform-admin access elsewhere (see
+    superadmin_views.AllMembersListView).
     """
 
     serializer_class = SaccoSettingsSerializer
-    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    permission_classes = [IsAuthenticated, IsSaccoAdminOrSuperAdmin]
     http_method_names = ['get', 'patch', 'head', 'options']
 
     def get(self, request, *args, **kwargs):
@@ -39,9 +46,7 @@ class SaccoSettingsView(SaccoScopedMixin, RetrieveUpdateAPIView):
     def get_object(self):
         sacco = self.get_sacco_context()
         if sacco is None:
-            from rest_framework.exceptions import ValidationError
-
-            raise ValidationError({'detail': 'SACCO context is required.'})
+            sacco = self._resolve_platform_admin_sacco()
 
         settings, _ = SaccoSettings.objects.get_or_create(
             sacco=sacco,
@@ -51,6 +56,39 @@ class SaccoSettingsView(SaccoScopedMixin, RetrieveUpdateAPIView):
             },
         )
         return settings
+
+    def _resolve_platform_admin_sacco(self):
+        """
+        get_sacco_context() returns None both for a genuine platform admin
+        (by SaccoScopedMixin design) and, in principle, for anyone else who
+        reaches here without a resolvable SACCO - so re-check platform
+        admin status explicitly rather than assuming None means one thing.
+        """
+        user = self.request.user
+        is_platform_admin = user.is_staff or Role.objects.filter(
+            user=user,
+            name=Role.SUPER_ADMIN,
+            is_active=True,
+        ).exists()
+
+        if not is_platform_admin:
+            raise ValidationError({'detail': 'SACCO context is required.'})
+
+        sacco_id = self.request.query_params.get('sacco_id')
+        if not sacco_id:
+            raise ValidationError(
+                {
+                    'sacco_id': (
+                        'sacco_id query parameter is required for '
+                        'platform admins.'
+                    ),
+                },
+            )
+
+        try:
+            return Sacco.objects.get(id=sacco_id)
+        except Sacco.DoesNotExist:
+            raise ValidationError({'sacco_id': 'Sacco not found.'})
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -79,9 +117,12 @@ class SaccoSettingsView(SaccoScopedMixin, RetrieveUpdateAPIView):
         if 'loan_multiplier' in serializer.validated_data:
             sync_fields['loan_multiplier'] = Decimal(instance.loan_multiplier)
         if sync_fields:
-            for field, value in sync_fields.items():
-                setattr(sacco, field, value)
-            sacco.save(update_fields=list(sync_fields.keys()) + ['updated_at'])
+            with transaction.atomic():
+                for field, value in sync_fields.items():
+                    setattr(sacco, field, value)
+                sacco.save(
+                    update_fields=list(sync_fields.keys()) + ['updated_at'],
+                )
 
         return Response(
             {
