@@ -1,4 +1,7 @@
+from decimal import Decimal, InvalidOperation
+
 from django.db import IntegrityError
+from django.utils.dateparse import parse_date
 from rest_framework import serializers
 
 from accounts.models import Sacco
@@ -58,6 +61,102 @@ class CustomFieldInputSerializer(serializers.Serializer):
         allow_blank=True,
         allow_null=True,
     )
+
+    # TODO(product): confirm a reasonable max length for free-text custom
+    # field answers - this is a placeholder, not a product decision.
+    TEXT_MAX_LENGTH = 1000
+    BOOLEAN_TRUE_VALUES = {'true', '1', 'yes'}
+    BOOLEAN_FALSE_VALUES = {'false', '0', 'no'}
+
+    def validate(self, attrs):
+        """
+        Type-check `value` against the referenced field definition's
+        FieldType. The field_id/sacco cross-check (does this field belong
+        to the sacco being applied to) happens afterwards in
+        MembershipApplySerializer.validate() - if field_id doesn't resolve
+        to a real SaccoFieldDefinition at all, skip type-checking here and
+        let that later check produce the "invalid field" error instead of
+        this method raising a confusing one of its own.
+        """
+        value = attrs.get('value')
+        if not value:
+            return attrs
+
+        try:
+            field = SaccoFieldDefinition.objects.get(id=attrs['field_id'])
+        except SaccoFieldDefinition.DoesNotExist:
+            return attrs
+
+        field_type = field.field_type
+        if field_type == SaccoFieldDefinition.FieldType.NUMBER:
+            try:
+                Decimal(value)
+            except InvalidOperation:
+                raise serializers.ValidationError(
+                    {'value': f'"{field.label}" must be a number.'},
+                )
+        elif field_type == SaccoFieldDefinition.FieldType.DATE:
+            if parse_date(value) is None:
+                raise serializers.ValidationError(
+                    {
+                        'value': (
+                            f'"{field.label}" must be a valid date in '
+                            'YYYY-MM-DD format.'
+                        ),
+                    },
+                )
+        elif field_type == SaccoFieldDefinition.FieldType.BOOLEAN:
+            normalized = value.strip().lower()
+            allowed = self.BOOLEAN_TRUE_VALUES | self.BOOLEAN_FALSE_VALUES
+            if normalized not in allowed:
+                raise serializers.ValidationError(
+                    {
+                        'value': (
+                            f'"{field.label}" must be one of: '
+                            'true/false, 1/0, yes/no.'
+                        ),
+                    },
+                )
+        elif field_type == SaccoFieldDefinition.FieldType.SELECT:
+            options = field.options or []
+            if value not in options:
+                raise serializers.ValidationError(
+                    {
+                        'value': (
+                            f'"{field.label}" must be one of: '
+                            f'{", ".join(str(o) for o in options)}.'
+                        ),
+                    },
+                )
+        elif field_type == SaccoFieldDefinition.FieldType.FILE:
+            # No file-upload path exists for custom fields anywhere in this
+            # codebase today (confirmed by search) - CustomFieldInputSerializer
+            # only ever carries a text `value`, so there is no way to submit
+            # a genuine file reference through this endpoint. Reject rather
+            # than silently store arbitrary text as if it were a file
+            # reference - that is a product gap (a real upload flow for
+            # custom FILE fields), not something to invent here.
+            raise serializers.ValidationError(
+                {
+                    'value': (
+                        f'"{field.label}" is a file field. File uploads '
+                        'for custom fields are not supported by this '
+                        'endpoint.'
+                    ),
+                },
+            )
+        elif field_type == SaccoFieldDefinition.FieldType.TEXT:
+            if len(value) > self.TEXT_MAX_LENGTH:
+                raise serializers.ValidationError(
+                    {
+                        'value': (
+                            f'"{field.label}" must be at most '
+                            f'{self.TEXT_MAX_LENGTH} characters.'
+                        ),
+                    },
+                )
+
+        return attrs
 
 
 class MembershipApplySerializer(serializers.Serializer):
@@ -198,6 +297,61 @@ class SaccoFieldDefinitionSerializer(serializers.ModelSerializer):
             'options',
             'display_order',
         )
+
+
+class SaccoFieldDefinitionAdminSerializer(serializers.ModelSerializer):
+    """
+    Write-enabled counterpart to SaccoFieldDefinitionSerializer, used only
+    by the SACCO_ADMIN-scoped CRUD view. `sacco` is deliberately excluded -
+    the view sets it from the admin's own SACCO context, not client input.
+    """
+
+    class Meta:
+        model = SaccoFieldDefinition
+        fields = (
+            'id',
+            'label',
+            'field_type',
+            'is_required',
+            'options',
+            'display_order',
+        )
+        read_only_fields = ('id',)
+
+    def validate_options(self, value):
+        field_type = self.initial_data.get(
+            'field_type', getattr(self.instance, 'field_type', None),
+        )
+        if field_type == SaccoFieldDefinition.FieldType.SELECT and (
+            not value
+            or not isinstance(value, list)
+            or not all(isinstance(item, str) for item in value)
+        ):
+            raise serializers.ValidationError(
+                'A SELECT field must declare a non-empty list of string '
+                'options.',
+            )
+        return value
+
+    def validate(self, attrs):
+        changing_field_type = (
+            self.instance is not None
+            and 'field_type' in attrs
+            and attrs['field_type'] != self.instance.field_type
+        )
+        if changing_field_type and MemberFieldData.objects.filter(
+            field=self.instance,
+        ).exists():
+            raise serializers.ValidationError(
+                {
+                    'field_type': (
+                        'This field already has submitted member data - '
+                        'its type cannot be changed. Create a new field '
+                        'instead.'
+                    ),
+                },
+            )
+        return attrs
 
 
 class FieldSummarySerializer(serializers.Serializer):
