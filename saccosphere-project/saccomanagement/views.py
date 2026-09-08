@@ -26,6 +26,7 @@ from saccomembership.membership_doc_serializers import (
 )
 from saccomembership.models import Membership, SaccoApplication
 from saccomembership.serializers import MembershipListSerializer
+from saccomembership.services import generate_member_number
 from services.models import Loan, Saving
 
 from .audit_logger import AuditMixin, log_audit
@@ -350,6 +351,22 @@ class ApplicationReviewView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
     def partial_update(self, request, *args, **kwargs):
         """Apply an admin review decision to an application."""
         application = self.get_object()
+
+        if application.status in (
+            SaccoApplication.Status.APPROVED,
+            SaccoApplication.Status.REJECTED,
+        ):
+            return Response(
+                {
+                    'detail': (
+                        'This application has already been '
+                        f'{application.get_status_display().lower()} and '
+                        'cannot be reviewed again.'
+                    ),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
         old_values = {
             'status': application.status,
             'review_notes': application.review_notes,
@@ -388,6 +405,20 @@ class ApplicationReviewView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
                     'status': Membership.Status.APPROVED,
                     'approved_date': timezone.now(),
                     'notes': review_notes,
+                },
+            )
+            if not membership.member_number:
+                membership.member_number = generate_member_number(
+                    membership.sacco,
+                )
+                membership.save(update_fields=['member_number'])
+        elif review_status == SaccoApplication.Status.REJECTED:
+            membership, _ = Membership.objects.update_or_create(
+                user=application.user,
+                sacco=application.sacco,
+                defaults={
+                    'status': Membership.Status.REJECTED,
+                    'rejection_reason': review_notes,
                 },
             )
 

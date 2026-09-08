@@ -81,7 +81,17 @@ class MembershipApplySerializer(serializers.Serializer):
     )
 
     def validate_sacco(self, sacco):
-        if sacco.membership_type == Sacco.MembershipType.CLOSED:
+        # STAFF_ONLY is treated the same as CLOSED here: this codebase has
+        # no staff-verification mechanism (no Employee/StaffMember model,
+        # invitation code, or allow-listed email domain - confirmed by
+        # repo-wide search) to distinguish a qualifying staff applicant
+        # from any other public applicant. Building member creation for
+        # STAFF_ONLY SACCOs is a product gap for a supported path (e.g.
+        # admin-driven import) to solve, not something to invent here.
+        if sacco.membership_type in (
+            Sacco.MembershipType.CLOSED,
+            Sacco.MembershipType.STAFF_ONLY,
+        ):
             raise serializers.ValidationError(
                 'This SACCO is not accepting public applications.'
             )

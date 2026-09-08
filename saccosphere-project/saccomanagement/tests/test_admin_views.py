@@ -8,8 +8,10 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, User
+from notifications.models import Notification
 from saccomanagement.models import Role
 from saccomembership.models import Membership, SaccoApplication
+from saccomembership.serializers import MembershipApplySerializer
 from payments.models import MpesaTransaction, Transaction
 from services.models import (
     Loan,
@@ -368,3 +370,154 @@ class SaccoAdminDashboardViewsTestCase(TestCase):
             balance_after=Decimal('0.00'),
             status=item_status,
         )
+
+
+class ApplicationReviewViewTestCase(TestCase):
+    """Test SaccoApplication review: rejection, idempotency, member
+    numbering, permissions, and STAFF_ONLY enforcement on the apply path."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.sacco = Sacco.objects.create(
+            name='Review SACCO',
+            registration_number='REVIEW001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+        )
+        self.admin = User.objects.create_user(
+            email='review-admin@example.com',
+            password='StrongPass123',
+            first_name='Review',
+            last_name='Admin',
+        )
+        Role.objects.create(
+            user=self.admin,
+            sacco=self.sacco,
+            name=Role.SACCO_ADMIN,
+        )
+        self.applicant = User.objects.create_user(
+            email='review-applicant@example.com',
+            password='StrongPass123',
+            first_name='App',
+            last_name='Licant',
+        )
+        self.application = SaccoApplication.objects.create(
+            user=self.applicant,
+            sacco=self.sacco,
+            status=SaccoApplication.Status.SUBMITTED,
+        )
+        Membership.objects.create(
+            user=self.applicant,
+            sacco=self.sacco,
+            status=Membership.Status.PENDING,
+        )
+        self.review_url = (
+            f'/api/v1/management/applications/{self.application.id}/review/'
+        )
+
+    def _review(self, review_status, notes='Reviewed.'):
+        return self.client.patch(
+            self.review_url,
+            {'status': review_status, 'review_notes': notes},
+            format='json',
+            HTTP_X_SACCO_ID=str(self.sacco.id),
+        )
+
+    def test_reject_application_updates_membership_to_rejected(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self._review(
+            SaccoApplication.Status.REJECTED, 'Incomplete documents.',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        membership = Membership.objects.get(
+            user=self.applicant, sacco=self.sacco,
+        )
+        self.assertEqual(membership.status, Membership.Status.REJECTED)
+        self.assertEqual(
+            membership.rejection_reason, 'Incomplete documents.',
+        )
+
+    def test_approve_application_assigns_member_number(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self._review(SaccoApplication.Status.APPROVED)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        membership = Membership.objects.get(
+            user=self.applicant, sacco=self.sacco,
+        )
+        self.assertEqual(membership.status, Membership.Status.APPROVED)
+        self.assertTrue(membership.member_number)
+
+    def test_rereview_already_approved_application_returns_409(self):
+        self.client.force_authenticate(user=self.admin)
+        self._review(SaccoApplication.Status.APPROVED)
+        membership = Membership.objects.get(
+            user=self.applicant, sacco=self.sacco,
+        )
+        member_number = membership.member_number
+        notification_count = Notification.objects.filter(
+            user=self.applicant,
+        ).count()
+
+        response = self._review(SaccoApplication.Status.APPROVED)
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        membership.refresh_from_db()
+        self.assertEqual(membership.member_number, member_number)
+        self.assertEqual(
+            Notification.objects.filter(user=self.applicant).count(),
+            notification_count,
+        )
+
+    def test_rereview_already_rejected_application_returns_409(self):
+        self.client.force_authenticate(user=self.admin)
+        self._review(SaccoApplication.Status.REJECTED)
+
+        response = self._review(SaccoApplication.Status.REJECTED)
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+
+    def test_non_admin_cannot_review_application(self):
+        non_admin = User.objects.create_user(
+            email='review-non-admin@example.com',
+            password='StrongPass123',
+            first_name='Not',
+            last_name='Admin',
+        )
+        self.client.force_authenticate(user=non_admin)
+
+        response = self._review(SaccoApplication.Status.APPROVED)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        membership = Membership.objects.get(
+            user=self.applicant, sacco=self.sacco,
+        )
+        self.assertEqual(membership.status, Membership.Status.PENDING)
+
+    def test_apply_to_staff_only_sacco_rejected(self):
+        """
+        No staff-verification mechanism exists anywhere in this codebase
+        (confirmed by repo-wide search before implementing this), so
+        STAFF_ONLY is treated the same as CLOSED for the public apply
+        endpoint - there is no "qualifying staff applicant" case to test
+        here, only rejection.
+        """
+        staff_only_sacco = Sacco.objects.create(
+            name='Staff Only SACCO',
+            registration_number='STAFFONLY001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.STAFF_ONLY,
+        )
+        serializer = MembershipApplySerializer(
+            data={'sacco': str(staff_only_sacco.id)},
+            context={
+                'request': type('_Req', (), {'user': self.applicant})(),
+            },
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('sacco', serializer.errors)
