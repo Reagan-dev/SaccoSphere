@@ -14,6 +14,12 @@ class AccountsConfig(AppConfig):
 
     def ready(self):
         """Run app-specific startup checks."""
+        from django.core.checks import register
+
+        from .checks import check_field_encryption_key
+
+        register(check_field_encryption_key)
+
         # Prevent OAUTH_MOCK=True in production
         if not settings.DEBUG and settings.OAUTH_MOCK:
             raise ImproperlyConfigured(
