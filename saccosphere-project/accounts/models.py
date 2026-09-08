@@ -713,6 +713,18 @@ class Sacco(models.Model):
 
     )
 
+    next_member_number_seq = models.PositiveIntegerField(
+
+        default=0,
+
+        help_text=(
+            'Internal counter for generating the next member_number for '
+            'this SACCO. Not user-editable; incremented atomically by '
+            'saccomembership.services.generate_member_number.'
+        ),
+
+    )
+
 
 
     class Meta:
