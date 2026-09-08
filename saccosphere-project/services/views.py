@@ -319,13 +319,16 @@ class LoanAdminAccessMixin:
         user = self.request.user
         return (
             user.is_staff
-            or user.roles.filter(name=Role.SUPER_ADMIN).exists()
+            or user.roles.filter(
+                name=Role.SUPER_ADMIN, is_active=True,
+            ).exists()
         )
 
     def admin_sacco_ids(self):
         return self.request.user.roles.filter(
             name=Role.SACCO_ADMIN,
             sacco__isnull=False,
+            is_active=True,
         ).values_list('sacco_id', flat=True)
 
     def filter_for_user_saccos(self, queryset):
@@ -955,6 +958,7 @@ class GuarantorRespondView(APIView):
         admin_role = Role.objects.filter(
             name='SACCO_ADMIN',
             sacco=loan.membership.sacco,
+            is_active=True,
         ).first()
 
         if admin_role:
@@ -1128,6 +1132,7 @@ class LiquidityStatusView(APIView):
         role = request.user.roles.filter(
             name=Role.SACCO_ADMIN,
             sacco__isnull=False,
+            is_active=True,
         ).select_related('sacco').first()
 
         if role:
@@ -1233,6 +1238,7 @@ class NPLDashboardView(APIView):
         role = request.user.roles.filter(
             name=Role.SACCO_ADMIN,
             sacco__isnull=False,
+            is_active=True,
         ).select_related('sacco').first()
 
         if role:
@@ -1368,6 +1374,7 @@ class CRBCheckView(APIView):
         if not request.user.roles.filter(
             name=Role.SACCO_ADMIN,
             sacco=loan.membership.sacco,
+            is_active=True,
         ).exists():
             return Response(
                 {'detail': 'You are not an admin for this SACCO.'},
@@ -1785,11 +1792,14 @@ class LoanDisbursementAuditView(APIView):
         return Response(serializer.data)
 
     def _check_access(self, request, loan):
-        if request.user.is_staff or request.user.roles.filter(name=Role.SUPER_ADMIN).exists():
+        if request.user.is_staff or request.user.roles.filter(
+            name=Role.SUPER_ADMIN, is_active=True,
+        ).exists():
             return
         admin_sacco_ids = request.user.roles.filter(
             name=Role.SACCO_ADMIN,
             sacco__isnull=False,
+            is_active=True,
         ).values_list('sacco_id', flat=True)
         if loan.membership.sacco_id not in admin_sacco_ids:
             from rest_framework.exceptions import PermissionDenied

@@ -264,6 +264,7 @@ def send_invoice_to_sacco(invoice):
     admin_emails = Role.objects.filter(
         sacco=invoice.sacco,
         name=Role.SACCO_ADMIN,
+        is_active=True,
     ).select_related('user').values_list('user__email', flat=True)
     recipients.update([email for email in admin_emails if email])
 

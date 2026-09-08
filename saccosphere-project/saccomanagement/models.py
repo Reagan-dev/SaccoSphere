@@ -220,15 +220,44 @@ class Role(models.Model):
         choices=ROLE_CHOICES,
         help_text='The role name (MEMBER, SACCO_ADMIN, SUPER_ADMIN).',
     )
+    is_active = models.BooleanField(
+        default=True,
+        help_text=(
+            'Whether this role grant is currently in effect. Revoking a '
+            'role sets this False rather than deleting the row, so revoked '
+            'grants remain visible as history.'
+        ),
+    )
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='revoked_roles',
+        help_text='The user who revoked this role grant, if any.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ['user', 'sacco', 'name']
+        constraints = [
+            # Scoped to is_active=True rather than a blanket uniqueness
+            # rule: revoking a role must not delete or block re-granting
+            # it - re-assigning the same (user, sacco, name) after a
+            # revoke has to insert a new active row rather than being
+            # blocked by the old, now-inactive one.
+            models.UniqueConstraint(
+                fields=['user', 'sacco', 'name'],
+                condition=models.Q(is_active=True),
+                name='unique_active_role_per_user_sacco_name',
+            ),
+        ]
         ordering = ['-created_at']
 
     def __str__(self):
         sacco_context = self.sacco.name if self.sacco else 'Platform'
-        return f'{self.user.email} — {self.name} — {sacco_context}'
+        status = '' if self.is_active else ' (revoked)'
+        return f'{self.user.email} — {self.name} — {sacco_context}{status}'
 
 
 class RolePermission(models.Model):

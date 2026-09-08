@@ -29,7 +29,9 @@ class SaccoScopedMixin:
         user = self.request.user
 
         # SUPER_ADMIN sees all data - no context needed
-        if user.is_staff or user.roles.filter(name=Role.SUPER_ADMIN).exists():
+        if user.is_staff or user.roles.filter(
+            name=Role.SUPER_ADMIN, is_active=True,
+        ).exists():
             self.request.current_sacco = None
             return
 
@@ -37,6 +39,7 @@ class SaccoScopedMixin:
         admin_roles = user.roles.filter(
             name=Role.SACCO_ADMIN,
             sacco__isnull=False,
+            is_active=True,
         ).select_related('sacco')
 
         if not admin_roles.exists():
@@ -94,12 +97,14 @@ class SaccoScopedMixin:
 
         # SUPER_ADMIN: return unchanged
         if user.is_staff or user.roles.filter(
-            name=Role.SUPER_ADMIN
+            name=Role.SUPER_ADMIN, is_active=True,
         ).exists():
             return queryset
 
         # SACCO_ADMIN: filter by current SACCO
-        if user.roles.filter(name=Role.SACCO_ADMIN).exists():
+        if user.roles.filter(
+            name=Role.SACCO_ADMIN, is_active=True,
+        ).exists():
             current_sacco = self.get_sacco_context()
             if not current_sacco:
                 raise PermissionDenied(

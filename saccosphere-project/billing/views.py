@@ -116,13 +116,16 @@ class InvoiceAccessMixin:
         user = self.request.user
         return (
             user.is_staff
-            or user.roles.filter(name=Role.SUPER_ADMIN).exists()
+            or user.roles.filter(
+                name=Role.SUPER_ADMIN, is_active=True,
+            ).exists()
         )
 
     def admin_sacco_ids(self):
         return self.request.user.roles.filter(
             name=Role.SACCO_ADMIN,
             sacco__isnull=False,
+            is_active=True,
         ).values_list('sacco_id', flat=True)
 
     def filter_for_user_saccos(self, queryset):

@@ -250,6 +250,7 @@ def _notify_sacco_admins(sacco, risk, alert):
     admin_roles = Role.objects.filter(
         name=Role.SACCO_ADMIN,
         sacco=sacco,
+        is_active=True,
     ).select_related('user').order_by('created_at')
     notified_user_ids = set()
 
@@ -394,6 +395,7 @@ def _notify_npl_admins(sacco, member_name, loan, flag, days_overdue):
     admin_roles = Role.objects.filter(
         name=Role.SACCO_ADMIN,
         sacco=sacco,
+        is_active=True,
     ).select_related('user')
     notified_user_ids = set()
     loan_id = str(loan.id)
@@ -837,6 +839,7 @@ def _notify_superadmins(title, message, related_loan_id=None):
     superadmin_roles = Role.objects.select_related('user').filter(
         name=Role.SUPER_ADMIN,
         sacco__isnull=True,
+        is_active=True,
     )
     for role in superadmin_roles:
         notify_user_task.delay(
@@ -854,6 +857,7 @@ def _notify_sacco_admins(sacco, title, message):
     admin_roles = Role.objects.select_related('user').filter(
         name=Role.SACCO_ADMIN,
         sacco=sacco,
+        is_active=True,
     )
     for role in admin_roles:
         notify_user_task.delay(

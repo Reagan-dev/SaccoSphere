@@ -52,6 +52,7 @@ def get_user_sacco_context(user):
     super_role = Role.objects.filter(
         user=user,
         name=Role.SUPER_ADMIN,
+        is_active=True,
     ).first()
     if super_role is not None:
         return {
@@ -66,6 +67,7 @@ def get_user_sacco_context(user):
             user=user,
             name=Role.SACCO_ADMIN,
             sacco__isnull=False,
+            is_active=True,
         )
         .select_related('sacco')
         .first()

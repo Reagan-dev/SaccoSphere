@@ -35,6 +35,7 @@ def get_admin_sacco(request):
         user=request.user,
         name=Role.SACCO_ADMIN,
         sacco__isnull=False,
+        is_active=True,
     ).select_related('sacco')
 
     if sacco_id:
@@ -142,10 +143,12 @@ class ExternalGuarantorListView(ListAPIView):
             user=user,
             sacco=loan.membership.sacco,
             name=Role.SACCO_ADMIN,
+            is_active=True,
         ).exists()
         is_super_admin = Role.objects.filter(
             user=user,
             name=Role.SUPER_ADMIN,
+            is_active=True,
         ).exists()
 
         if is_admin or is_super_admin:

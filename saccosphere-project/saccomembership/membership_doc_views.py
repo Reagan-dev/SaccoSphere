@@ -75,6 +75,7 @@ class MembershipDocumentListView(ListAPIView):
             user=self.request.user,
             sacco=application.sacco,
             name=Role.SACCO_ADMIN,
+            is_active=True,
         ).exists()
 
 
