@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from accounts.models import Sacco, User
+from accounts.models import Sacco, SaccoSettings, User
 from saccomembership.models import Membership
 from services.models import (
     Guarantor,
@@ -160,6 +160,36 @@ class GuarantorEndpointTestCase(TestCase):
 
         self.loan.refresh_from_db()
         self.assertEqual(self.loan.status, Loan.Status.GUARANTORS_PENDING)
+
+    def test_request_rejected_when_sacco_requires_external_only(self):
+        """guarantor_type_allowed=EXTERNAL_ONLY blocks a member guarantor request."""
+        SaccoSettings.objects.create(
+            sacco=self.sacco,
+            guarantor_type_allowed=(
+                SaccoSettings.GuarantorTypeAllowed.EXTERNAL_ONLY
+            ),
+        )
+        self.client.force_authenticate(user=self.applicant)
+        url = reverse(
+            'services:guarantor-request',
+            kwargs={'loan_id': self.loan.id},
+        )
+
+        response = self.client.post(
+            url,
+            {
+                'guarantor_user_id': str(self.guarantor_user.id),
+                'guarantee_amount': '10000.00',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(
+            Guarantor.objects.filter(
+                loan=self.loan, guarantor=self.guarantor_user,
+            ).exists(),
+        )
 
 
 class GuarantorWorkflowTestCase(TestCase):

@@ -4,6 +4,7 @@ from pathlib import Path
 from django.conf import settings
 from rest_framework import serializers
 
+from accounts.models import SaccoSettings
 from accounts.serializers import validate_kenyan_phone_number
 from services.models import Loan
 
@@ -80,6 +81,21 @@ class ExternalGuarantorCreateSerializer(serializers.ModelSerializer):
         request = self.context['request']
         loan = self._get_owned_loan(attrs['loan_id'], request.user)
         guarantee_amount = attrs['guarantee_amount']
+
+        sacco_settings = getattr(loan.membership.sacco, 'settings', None)
+        if (
+            sacco_settings is not None
+            and sacco_settings.guarantor_type_allowed
+            == SaccoSettings.GuarantorTypeAllowed.MEMBER_ONLY
+        ):
+            raise serializers.ValidationError(
+                {
+                    'loan_id': (
+                        'This SACCO only accepts member guarantors for '
+                        'this loan.'
+                    ),
+                }
+            )
 
         if guarantee_amount > loan.amount:
             raise serializers.ValidationError(

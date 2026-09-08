@@ -4,9 +4,12 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
+from rest_framework import status
+from rest_framework.test import APIClient
 
-from accounts.models import Sacco, User
+from accounts.models import Sacco, SaccoSettings, User
 from saccomembership.models import Membership
 from services.engines.loan_limits import calculate_loan_limit
 from services.models import Loan, LoanType, Saving, SavingsType
@@ -132,3 +135,129 @@ class LoanLimitEngineTestCase(TestCase):
         self.assertFalse(result['eligible'])
         self.assertEqual(result['reason'], 'HAS_DEFAULT')
         self.assertEqual(result['max_amount'], Decimal('0'))
+
+    def test_max_loan_amount_caps_savings_based_limit(self):
+        """SaccoSettings.max_loan_amount hard-caps an otherwise-higher limit."""
+        self.create_saving(Decimal('10000.00'))
+        SaccoSettings.objects.create(
+            sacco=self.sacco,
+            max_loan_amount=Decimal('12000.00'),
+        )
+
+        result = calculate_loan_limit(self.user, self.sacco)
+
+        self.assertTrue(result['eligible'])
+        # Savings-based limit would be 30000.00 (10000 x 3); the SACCO cap
+        # of 12000.00 must win.
+        self.assertEqual(result['max_amount'], Decimal('12000.00'))
+
+    def test_max_loan_amount_does_not_raise_a_lower_savings_based_limit(self):
+        """A cap higher than the savings-based limit changes nothing."""
+        self.create_saving(Decimal('10000.00'))
+        SaccoSettings.objects.create(
+            sacco=self.sacco,
+            max_loan_amount=Decimal('500000.00'),
+        )
+
+        result = calculate_loan_limit(self.user, self.sacco)
+
+        self.assertTrue(result['eligible'])
+        self.assertEqual(result['max_amount'], Decimal('30000.0000'))
+
+
+class LoanApplyMinAmountTestCase(TestCase):
+    """
+    min_loan_amount gates the requested amount at application time - it
+    must never raise the computed eligibility limit itself.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='min-amount-borrower@example.com',
+            first_name='Min',
+            last_name='Borrower',
+            password='testpass123',
+        )
+        self.sacco = Sacco.objects.create(
+            name='Min Amount SACCO',
+            registration_number='MA001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+            loan_multiplier=Decimal('3.00'),
+            min_loan_months=3,
+        )
+        SaccoSettings.objects.create(
+            sacco=self.sacco,
+            min_loan_amount=Decimal('5000.00'),
+        )
+        self.membership = Membership.objects.create(
+            user=self.user,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number='MA001-M001',
+            approved_date=timezone.now() - timedelta(days=120),
+        )
+        self.savings_type = SavingsType.objects.create(
+            sacco=self.sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('100.00'),
+        )
+        Saving.objects.create(
+            membership=self.membership,
+            savings_type=self.savings_type,
+            amount=Decimal('10000.00'),
+            status=Saving.Status.ACTIVE,
+        )
+        self.loan_type = LoanType.objects.create(
+            sacco=self.sacco,
+            name='Development Loan',
+            interest_rate=Decimal('12.00'),
+            max_term_months=36,
+            min_amount=Decimal('1000.00'),
+            requires_guarantors=False,
+        )
+
+    def test_request_below_min_loan_amount_rejected(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            reverse('services:loan-apply'),
+            {
+                'loan_type': str(self.loan_type.id),
+                'amount': '2000.00',
+                'term_months': 6,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(
+            Loan.objects.filter(membership=self.membership).exists(),
+        )
+
+    def test_min_loan_amount_does_not_affect_computed_eligibility_limit(self):
+        """
+        min_loan_amount must gate request size only - the underlying
+        eligibility computation (savings x multiplier) is untouched.
+        """
+        result = calculate_loan_limit(self.user, self.sacco)
+
+        self.assertTrue(result['eligible'])
+        self.assertEqual(result['max_amount'], Decimal('30000.0000'))
+
+    def test_request_at_or_above_min_loan_amount_allowed(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            reverse('services:loan-apply'),
+            {
+                'loan_type': str(self.loan_type.id),
+                'amount': '5000.00',
+                'term_months': 6,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)

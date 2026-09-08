@@ -154,6 +154,10 @@ class SaccoAdmin(admin.ModelAdmin):
     )
     list_filter = ('sector', 'county', 'is_verified', 'membership_type')
     search_fields = ('name', 'registration_number')
+    # Edits must go through SaccoSettingsView (which syncs both records
+    # together) - a direct /admin/ edit to either of these two fields would
+    # silently diverge from SaccoSettings' own copy of the same value.
+    readonly_fields = ('registration_fee', 'loan_multiplier')
 
     # Add this 👇
     def member_count(self, obj):
@@ -168,13 +172,11 @@ class SaccoSettingsAdmin(admin.ModelAdmin):
         'sacco',
         'min_loan_amount',
         'max_loan_amount',
-        'requires_guarantor',
         'guarantor_type_allowed',
         'updated_at',
     )
     list_filter = (
         'sacco',
-        'requires_guarantor',
         'guarantor_type_allowed',
     )
     search_fields = ('sacco__name', 'sacco__registration_number')
@@ -191,7 +193,6 @@ class SaccoSettingsAdmin(admin.ModelAdmin):
                     'min_loan_amount',
                     'max_loan_amount',
                     'loan_multiplier',
-                    'requires_guarantor',
                     'guarantor_type_allowed',
                 ),
             },

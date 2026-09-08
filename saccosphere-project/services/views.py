@@ -21,7 +21,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
-from accounts.models import Sacco, User
+from accounts.models import Sacco, SaccoSettings, User
 from accounts.permissions import (
     IsSaccoAdmin,
     IsSaccoAdminOrSuperAdmin,
@@ -178,6 +178,27 @@ class LoanEligibilityCreateMixin:
         if not eligibility['eligible']:
             return Response(
                 {'reason': eligibility['reason']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # TODO(product): confirm min_loan_amount should gate request size,
+        # not eligibility floor. It only rejects a request below this
+        # amount here - it must never raise the computed eligibility limit
+        # itself, which would let a member borrow more than their
+        # savings-based eligibility suggests.
+        sacco_settings = getattr(loan_type.sacco, 'settings', None)
+        if (
+            sacco_settings is not None
+            and amount < sacco_settings.min_loan_amount
+        ):
+            return Response(
+                {
+                    'detail': (
+                        'Requested amount is below the minimum loan '
+                        f'amount of KES {sacco_settings.min_loan_amount} '
+                        'for this SACCO.'
+                    ),
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -732,10 +753,28 @@ class GuarantorRequestView(APIView):
     def post(self, request, loan_id):
         """Create a pending guarantor request for a loan."""
         loan = get_object_or_404(
-            Loan.objects.select_related('membership', 'membership__user'),
+            Loan.objects.select_related(
+                'membership', 'membership__user', 'membership__sacco',
+            ),
             id=loan_id,
             membership__user=request.user,
         )
+
+        sacco_settings = getattr(loan.membership.sacco, 'settings', None)
+        if (
+            sacco_settings is not None
+            and sacco_settings.guarantor_type_allowed
+            == SaccoSettings.GuarantorTypeAllowed.EXTERNAL_ONLY
+        ):
+            return Response(
+                {
+                    'detail': (
+                        'This SACCO only accepts external guarantors for '
+                        'this loan.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if loan.status not in [
             Loan.Status.PENDING,
