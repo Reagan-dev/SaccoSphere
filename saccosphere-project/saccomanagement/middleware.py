@@ -42,7 +42,7 @@ class SaccoContextMiddleware(MiddlewareMixin):
 
         # SUPER_ADMIN (staff or SUPER_ADMIN role) sees all data
         if user.is_staff or user.roles.filter(
-            name=Role.SUPER_ADMIN
+            name=Role.SUPER_ADMIN, is_active=True,
         ).exists():
             logger.info(
                 f'SUPER_ADMIN access: {user.email} | '
@@ -54,6 +54,7 @@ class SaccoContextMiddleware(MiddlewareMixin):
         admin_roles = user.roles.filter(
             name=Role.SACCO_ADMIN,
             sacco__isnull=False,
+            is_active=True,
         ).select_related('sacco')
 
         if not admin_roles.exists():
@@ -151,6 +152,7 @@ class BillingSuspensionMiddleware:
             user=request.user,
             name=Role.SACCO_ADMIN,
             sacco__is_billing_suspended=True,
+            is_active=True,
         ).exists()
 
     def _is_exempt_path(self, path):

@@ -710,6 +710,7 @@ def _notify_sacco_admin_amount_mismatch(
     admin_roles = Role.objects.select_related('user').filter(
         sacco=sacco,
         name=Role.SACCO_ADMIN,
+        is_active=True,
     )
     for role in admin_roles:
         create_notification(
@@ -876,6 +877,8 @@ def _process_failed_b2c_callback(
 
     # Handle savings withdrawal failure - revert the balance
     elif mpesa_transaction.related_saving:
+        from services.models import Saving
+
         saving = mpesa_transaction.related_saving
         gross_amount = _get_authoritative_gross_amount(transaction)
         with db_transaction.atomic():

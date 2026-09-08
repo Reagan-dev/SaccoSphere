@@ -677,12 +677,15 @@ class AdminKYCQuerysetMixin:
         )
         user = self.request.user
 
-        if user.roles.filter(name='SUPER_ADMIN').exists():
+        if user.roles.filter(
+            name='SUPER_ADMIN', is_active=True,
+        ).exists():
             return queryset
 
         admin_sacco_ids = user.roles.filter(
             name='SACCO_ADMIN',
             sacco__isnull=False,
+            is_active=True,
         ).values_list('sacco_id', flat=True)
 
         return queryset.filter(

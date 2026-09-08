@@ -58,7 +58,9 @@ class IsSaccoAdmin(BasePermission):
         if not user or not user.is_authenticated:
             return False
 
-        return user.roles.filter(name=Role.SACCO_ADMIN).exists()
+        return user.roles.filter(
+            name=Role.SACCO_ADMIN, is_active=True,
+        ).exists()
 
     def has_object_permission(self, request, view, obj):
         """
@@ -81,6 +83,7 @@ class IsSaccoAdmin(BasePermission):
         return user.roles.filter(
             name=Role.SACCO_ADMIN,
             sacco=sacco,
+            is_active=True,
         ).exists()
 
 
@@ -102,7 +105,9 @@ class IsSuperAdmin(BasePermission):
 
         return (
             user.is_staff
-            or user.roles.filter(name=Role.SUPER_ADMIN).exists()
+            or user.roles.filter(
+                name=Role.SUPER_ADMIN, is_active=True,
+            ).exists()
         )
 
 
@@ -125,7 +130,8 @@ class IsSaccoAdminOrSuperAdmin(BasePermission):
             return False
 
         return user.roles.filter(
-            name__in=[Role.SACCO_ADMIN, Role.SUPER_ADMIN]
+            name__in=[Role.SACCO_ADMIN, Role.SUPER_ADMIN],
+            is_active=True,
         ).exists()
 
     def has_object_permission(self, request, view, obj):
@@ -141,7 +147,9 @@ class IsSaccoAdminOrSuperAdmin(BasePermission):
             return False
 
         # SUPER_ADMIN always passes at object level
-        if user.roles.filter(name=Role.SUPER_ADMIN).exists():
+        if user.roles.filter(
+            name=Role.SUPER_ADMIN, is_active=True,
+        ).exists():
             return True
 
         # SACCO_ADMIN must have role for the object's SACCO
@@ -149,6 +157,7 @@ class IsSaccoAdminOrSuperAdmin(BasePermission):
             return user.roles.filter(
                 name=Role.SACCO_ADMIN,
                 sacco=obj.sacco,
+                is_active=True,
             ).exists()
 
         if hasattr(obj, 'user'):
@@ -157,6 +166,7 @@ class IsSaccoAdminOrSuperAdmin(BasePermission):
             admin_sacco_ids = user.roles.filter(
                 name=Role.SACCO_ADMIN,
                 sacco__isnull=False,
+                is_active=True,
             ).values_list('sacco_id', flat=True)
 
             return Membership.objects.filter(
@@ -241,6 +251,7 @@ class IsOwnerOrSaccoAdmin(BasePermission):
             return user.roles.filter(
                 name=Role.SACCO_ADMIN,
                 sacco=obj.sacco,
+                is_active=True,
             ).exists()
 
         return False

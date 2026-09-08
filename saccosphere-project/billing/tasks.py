@@ -87,6 +87,7 @@ def send_invoice_email(invoice_id: str):
         Role.objects.filter(
             sacco=invoice.sacco,
             name=Role.SACCO_ADMIN,
+            is_active=True,
         )
         .exclude(user__email='')
         .values_list('user__email', flat=True)
@@ -271,6 +272,7 @@ def _get_sacco_admin_emails(sacco):
         Role.objects.filter(
             sacco=sacco,
             name=Role.SACCO_ADMIN,
+            is_active=True,
         )
         .exclude(user__email='')
         .values_list('user__email', flat=True)
