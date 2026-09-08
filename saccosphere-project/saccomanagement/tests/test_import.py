@@ -187,3 +187,144 @@ class ImportJobTest(APITestCase):
         self.assertEqual(status_response.status_code, status.HTTP_200_OK)
         self.assertEqual(status_response.data['status'], 'completed')
         self.assertEqual(status_response.data['errors_summary']['count'], 1)
+
+    def _run_import(self, csv_body):
+        """POST a CSV import and synchronously process the resulting job."""
+        with patch(
+            'saccomanagement.import_views.process_import_job.delay',
+        ) as delay_task:
+            delay_task.return_value.id = 'task-test'
+            response = self._post_csv(csv_body)
+            self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+            job = MemberImportJob.objects.get(id=response.data['job_id'])
+            _process_import_job(
+                job.id, rows=delay_task.call_args.kwargs['rows'],
+            )
+
+        job.refresh_from_db()
+        return job
+
+    def test_reimport_suspended_member_status_is_protected(self):
+        user = User.objects.create_user(
+            email='suspended.import@example.com',
+            password='StrongPass123',
+            first_name='Old',
+            last_name='Name',
+        )
+        membership = Membership.objects.create(
+            user=user,
+            sacco=self.sacco,
+            status=Membership.Status.SUSPENDED,
+        )
+
+        job = self._run_import(
+            'Old,Name,suspended.import@example.com,254700000099,'
+            'Employed,20000\n',
+        )
+
+        membership.refresh_from_db()
+        self.assertEqual(membership.status, Membership.Status.SUSPENDED)
+        self.assertEqual(job.status, MemberImportJob.Status.COMPLETED)
+        self.assertEqual(job.success_rows, 1)
+        self.assertEqual(job.protected_rows, 1)
+        self.assertEqual(job.protected_details[0]['row'], 1)
+        self.assertEqual(
+            job.protected_details[0]['email'],
+            'suspended.import@example.com',
+        )
+
+    def test_reimport_left_member_status_is_protected(self):
+        user = User.objects.create_user(
+            email='left.import@example.com',
+            password='StrongPass123',
+            first_name='Old',
+            last_name='Name',
+        )
+        membership = Membership.objects.create(
+            user=user,
+            sacco=self.sacco,
+            status=Membership.Status.LEFT,
+        )
+
+        job = self._run_import(
+            'Old,Name,left.import@example.com,254700000098,'
+            'Employed,20000\n',
+        )
+
+        membership.refresh_from_db()
+        self.assertEqual(membership.status, Membership.Status.LEFT)
+        self.assertEqual(job.protected_rows, 1)
+        self.assertEqual(job.success_rows, 1)
+
+    def test_reimport_pending_member_becomes_approved(self):
+        """Regression: import must still approve non-protected members."""
+        user = User.objects.create_user(
+            email='pending.import@example.com',
+            password='StrongPass123',
+            first_name='Old',
+            last_name='Name',
+        )
+        membership = Membership.objects.create(
+            user=user,
+            sacco=self.sacco,
+            status=Membership.Status.PENDING,
+        )
+
+        job = self._run_import(
+            'Old,Name,pending.import@example.com,254700000097,'
+            'Employed,20000\n',
+        )
+
+        membership.refresh_from_db()
+        self.assertEqual(membership.status, Membership.Status.APPROVED)
+        self.assertEqual(job.protected_rows, 0)
+        self.assertEqual(job.success_rows, 1)
+        self.assertTrue(membership.member_number)
+
+    def test_new_members_get_unique_member_numbers(self):
+        csv_body = ''.join(
+            f'First{i},Last{i},new{i}.import@example.com,25470000{i:04d},'
+            f'Employed,30000\n'
+            for i in range(50)
+        )
+
+        job = self._run_import(csv_body)
+
+        self.assertEqual(job.success_rows, 50)
+        member_numbers = list(
+            Membership.objects.filter(
+                sacco=self.sacco,
+                user__email__startswith='new',
+                user__email__endswith='.import@example.com',
+            ).values_list('member_number', flat=True),
+        )
+        self.assertEqual(len(member_numbers), 50)
+        self.assertTrue(all(member_numbers))
+        self.assertEqual(len(set(member_numbers)), 50)
+
+    def test_import_aborts_when_failure_rate_exceeds_threshold(self):
+        # 18 valid + 2 invalid = 20 rows, clearing IMPORT_ABORT_MIN_ROWS,
+        # at a 10% failure rate (> the 5% threshold).
+        valid_rows = ''.join(
+            f'Good{i},Member{i},good{i}.import@example.com,254711{i:04d},'
+            f'Employed,30000\n'
+            for i in range(18)
+        )
+        invalid_rows = (
+            'Bad,RowOne,,254722220001,Employed,30000\n'
+            'Bad,RowTwo,,254722220002,Employed,30000\n'
+        )
+
+        job = self._run_import(valid_rows + invalid_rows)
+
+        self.assertEqual(job.status, MemberImportJob.Status.FAILED)
+        self.assertEqual(job.processed_rows, 0)
+        self.assertEqual(job.success_rows, 0)
+        self.assertIn('aborted', job.errors[0]['error'])
+        self.assertEqual(
+            Membership.objects.filter(
+                sacco=self.sacco,
+                user__email__startswith='good',
+            ).count(),
+            0,
+        )

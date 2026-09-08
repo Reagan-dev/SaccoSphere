@@ -1,12 +1,18 @@
 """Tests for KYC document access logging and signed URL generation."""
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
 from django.core.signing import TimestampSigner
+from rest_framework import status
+from rest_framework.test import APITestCase
 from saccomanagement.models import SystemAuditLog
 from unittest.mock import MagicMock, patch
 
-from accounts.kyc_document_access import generate_kyc_document_url
+from accounts.kyc_document_access import (
+    _generate_local_signed_url,
+    generate_kyc_document_url,
+)
 from accounts.models import KYCVerification
 
 User = get_user_model()
@@ -222,3 +228,100 @@ class KYCDocumentAccessTestCase(TestCase):
         # Verify both have the same viewer
         for log in audit_logs:
             self.assertEqual(log.user, self.viewer)
+
+
+@override_settings(STORAGE_BACKEND='local')
+class KYCDocumentServeViewTestCase(APITestCase):
+    """
+    Test audit logging in KYCDocumentServeView, the API-facing endpoint that
+    actually serves KYC document bytes (as opposed to generate_kyc_document_url,
+    which only issues the signed URL for the admin console).
+    """
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            phone_number='+254700000010',
+            email='owner@example.com',
+        )
+        self.staff = User.objects.create_user(
+            phone_number='+254700000011',
+            email='staffviewer@example.com',
+            is_staff=True,
+        )
+        self.other_member = User.objects.create_user(
+            phone_number='+254700000012',
+            email='other@example.com',
+        )
+        self.kyc = KYCVerification.objects.create(
+            user=self.owner,
+            status=KYCVerification.Status.PENDING,
+            id_number='55555555',
+        )
+        self.kyc.id_front = SimpleUploadedFile(
+            'front.jpg',
+            b'fake image data',
+            content_type='image/jpeg',
+        )
+        self.kyc.save()
+        self.url = _generate_local_signed_url(
+            self.kyc, 'id_front', expiration_minutes=15,
+        )
+
+    def test_staff_viewing_another_members_document_logs_staff_access(self):
+        SystemAuditLog.objects.all().delete()
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        log = SystemAuditLog.objects.get(
+            action='KYC_DOCUMENT_ACCESS',
+            resource_type='KYCDocument',
+            resource_id=str(self.kyc.id),
+        )
+        self.assertEqual(log.user, self.staff)
+        self.assertEqual(log.new_values['access_type'], 'staff')
+        self.assertEqual(log.new_values['document_field'], 'id_front')
+        self.assertEqual(
+            log.new_values['document_owner_email'],
+            'owner@example.com',
+        )
+
+    def test_member_viewing_own_document_logs_self_access(self):
+        SystemAuditLog.objects.all().delete()
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        log = SystemAuditLog.objects.get(
+            action='KYC_DOCUMENT_ACCESS',
+            resource_type='KYCDocument',
+            resource_id=str(self.kyc.id),
+        )
+        self.assertEqual(log.user, self.owner)
+        self.assertEqual(log.new_values['access_type'], 'self')
+
+    def test_unauthorized_viewer_is_denied_and_logged(self):
+        SystemAuditLog.objects.all().delete()
+        self.client.force_authenticate(user=self.other_member)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        log = SystemAuditLog.objects.get(
+            action='KYC_DOCUMENT_ACCESS_DENIED',
+            resource_type='KYCDocument',
+            resource_id=str(self.kyc.id),
+        )
+        self.assertEqual(log.user, self.other_member)
+        self.assertEqual(
+            log.new_values['document_owner_email'],
+            'owner@example.com',
+        )
+        # A denied attempt must not also produce a successful-access record.
+        self.assertFalse(
+            SystemAuditLog.objects.filter(
+                action='KYC_DOCUMENT_ACCESS',
+            ).exists(),
+        )

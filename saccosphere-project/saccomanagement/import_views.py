@@ -23,6 +23,7 @@ class MemberImportJobSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
     progress_pct = serializers.SerializerMethodField()
     errors_summary = serializers.SerializerMethodField()
+    protected_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = MemberImportJob
@@ -35,9 +36,12 @@ class MemberImportJobSerializer(serializers.ModelSerializer):
             'processed_rows',
             'success_rows',
             'error_rows',
+            'protected_rows',
             'progress_pct',
             'errors',
             'errors_summary',
+            'protected_details',
+            'protected_summary',
             'started_at',
             'completed_at',
             'created_at',
@@ -60,6 +64,12 @@ class MemberImportJobSerializer(serializers.ModelSerializer):
         return {
             'count': len(obj.errors),
             'items': obj.errors[:20],
+        }
+
+    def get_protected_summary(self, obj):
+        return {
+            'count': len(obj.protected_details),
+            'items': obj.protected_details[:20],
         }
 
 

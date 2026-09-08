@@ -429,6 +429,7 @@ class MemberImportJobAdmin(NoChangeAdminMixin, admin.ModelAdmin):
         'progress_pct',
         'success_rows',
         'error_rows',
+        'protected_rows',
         'created_at',
     )
     list_filter = ('status', 'sacco', 'created_at')

@@ -1720,9 +1720,11 @@ class KYCDocumentServeView(APIView):
             signer = TimestampSigner()
             data = signer.unsign_object(token, max_age=15 * 60)  # 15 minutes
 
-            # Validate token matches request
+            # Validate token matches request. kyc_id arrives as a uuid.UUID
+            # (parsed by the <uuid:kyc_id> URL converter) while the signed
+            # payload stores it as a str, so it must be cast before compare.
             if (
-                data.get('kyc_id') != kyc_id
+                data.get('kyc_id') != str(kyc_id)
                 or data.get('document_field') != document_field
             ):
                 raise PermissionDenied('Invalid token')
@@ -1731,7 +1733,20 @@ class KYCDocumentServeView(APIView):
             kyc = KYCVerification.objects.get(id=kyc_id)
 
             # Check permissions - only staff or the user themselves can access
-            if not (request.user.is_staff or request.user == kyc.user):
+            is_self_access = request.user == kyc.user
+            if not (request.user.is_staff or is_self_access):
+                log_audit(
+                    user=request.user,
+                    action='KYC_DOCUMENT_ACCESS_DENIED',
+                    resource_type='KYCDocument',
+                    resource_id=str(kyc.id),
+                    new_values={
+                        'document_field': document_field,
+                        'viewer_email': request.user.email,
+                        'document_owner_email': kyc.user.email,
+                    },
+                    request=request,
+                )
                 raise PermissionDenied(
                     'You do not have permission to access this document'
                 )
@@ -1740,6 +1755,21 @@ class KYCDocumentServeView(APIView):
             document = getattr(kyc, document_field, None)
             if not document or not document.name:
                 raise Http404('Document not found')
+
+            log_audit(
+                user=request.user,
+                action='KYC_DOCUMENT_ACCESS',
+                resource_type='KYCDocument',
+                resource_id=str(kyc.id),
+                new_values={
+                    'document_field': document_field,
+                    'document_name': document.name,
+                    'viewer_email': request.user.email,
+                    'document_owner_email': kyc.user.email,
+                    'access_type': 'self' if is_self_access else 'staff',
+                },
+                request=request,
+            )
 
             # Serve the file
             return FileResponse(

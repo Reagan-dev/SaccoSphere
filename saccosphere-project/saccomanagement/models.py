@@ -358,7 +358,16 @@ class MemberImportJob(models.Model):
     processed_rows = models.PositiveIntegerField(default=0)
     success_rows = models.PositiveIntegerField(default=0)
     error_rows = models.PositiveIntegerField(default=0)
+    protected_rows = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            'Rows for an existing member whose current status (SUSPENDED, '
+            'LEFT, UNDER_REVIEW, REJECTED) was deliberately left unchanged '
+            'by this import, rather than being overwritten to APPROVED.'
+        ),
+    )
     errors = models.JSONField(default=list)
+    protected_details = models.JSONField(default=list)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
