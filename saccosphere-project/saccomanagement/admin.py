@@ -6,7 +6,6 @@ from .models import (
     ImportJob,
     MemberImportJob,
     Role,
-    RolePermission,
     SMSCampaign,
     SMSCampaignRecipient,
     SystemAuditLog,
@@ -289,64 +288,6 @@ class RoleAdmin(NoChangeAdminMixin, admin.ModelAdmin):
             {
                 'classes': ('collapse',),
                 'fields': ('id', 'created_at'),
-            },
-        ),
-    )
-
-
-@admin.register(RolePermission)
-class RolePermissionAdmin(NoChangeAdminMixin, admin.ModelAdmin):
-    # Permission edits are access-control changes and need dedicated review.
-    list_display = (
-        'role',
-        'resource',
-        'can_create',
-        'can_read',
-        'can_update',
-        'can_delete',
-    )
-    list_filter = (
-        'role__sacco',
-        'can_create',
-        'can_read',
-        'can_update',
-        'can_delete',
-    )
-    search_fields = (
-        'role__user__email',
-        'role__sacco__name',
-        'resource',
-    )
-    autocomplete_fields = ('role',)
-    readonly_fields = (
-        'id',
-        'role',
-        'resource',
-        'can_create',
-        'can_read',
-        'can_update',
-        'can_delete',
-    )
-    list_select_related = ('role',)
-    fieldsets = (
-        (
-            None,
-            {
-                'fields': (
-                    'role',
-                    'resource',
-                    'can_create',
-                    'can_read',
-                    'can_update',
-                    'can_delete',
-                ),
-            },
-        ),
-        (
-            'Audit',
-            {
-                'classes': ('collapse',),
-                'fields': ('id',),
             },
         ),
     )

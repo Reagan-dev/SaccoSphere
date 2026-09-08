@@ -259,49 +259,6 @@ class Role(models.Model):
         status = '' if self.is_active else ' (revoked)'
         return f'{self.user.email} — {self.name} — {sacco_context}{status}'
 
-
-class RolePermission(models.Model):
-    """
-    Granular permissions tied to a role.
-    
-    Controls CRUD operations on specific resources (e.g., 'loans', 'members').
-    """
-
-    id = models.UUIDField(
-        primary_key=True,
-        default=uuid4,
-        editable=False,
-    )
-    role = models.ForeignKey(
-        Role,
-        on_delete=models.CASCADE,
-        related_name='permissions',
-        help_text='The role this permission belongs to.',
-    )
-    resource = models.CharField(
-        max_length=50,
-        help_text='Resource name (e.g., loans, members, reports).',
-    )
-    can_create = models.BooleanField(
-        default=False,
-        help_text='Allow creation of this resource.',
-    )
-    can_read = models.BooleanField(
-        default=True,
-        help_text='Allow reading this resource.',
-    )
-    can_update = models.BooleanField(
-        default=False,
-        help_text='Allow updating this resource.',
-    )
-    can_delete = models.BooleanField(
-        default=False,
-        help_text='Allow deletion of this resource.',
-    )
-
-    class Meta:
-        unique_together = ['role', 'resource']
-
     def __str__(self):
         return f'{self.role} — {self.resource}'
 
