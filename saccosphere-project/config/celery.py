@@ -54,6 +54,10 @@ app.conf.beat_schedule = {
         'task': 'accounts.tasks.process_queued_erasure_requests',
         'schedule': crontab(minute='*/30'),  # Every 30 minutes
     },
+    'flag-stuck-sms-campaigns': {
+        'task': 'saccomanagement.tasks.flag_stuck_sms_campaigns',
+        'schedule': crontab(minute='*/15'),  # Every 15 minutes
+    },
 }
 app.conf.task_serializer = 'json'
 app.conf.result_expires = 3600

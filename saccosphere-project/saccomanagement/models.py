@@ -94,6 +94,7 @@ class SMSCampaign(models.Model):
         QUEUED = 'QUEUED', 'Queued'
         SENDING = 'SENDING', 'Sending'
         COMPLETED = 'COMPLETED', 'Completed'
+        PARTIAL = 'PARTIAL', 'Partial'
         FAILED = 'FAILED', 'Failed'
 
     id = models.UUIDField(
@@ -126,6 +127,10 @@ class SMSCampaign(models.Model):
     sent_count = models.PositiveIntegerField(default=0)
     failed_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+    # Bumped on every status/count change (see notifications.tasks and
+    # bulk_sms_views) so a stuck campaign can be detected by staleness, not
+    # just by how long ago it was originally drafted.
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-created_at']

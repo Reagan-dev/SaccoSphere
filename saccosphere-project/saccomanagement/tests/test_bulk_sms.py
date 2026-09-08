@@ -1,13 +1,16 @@
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
 from django.conf import settings
-from django.test import TestCase
+from django.core.cache import cache
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, SaccoSettings, User, UserConsent
 from saccomanagement.models import (
+    ComplianceFlag,
     Role,
     SMSCampaign,
     SMSCampaignRecipient,
@@ -234,8 +237,42 @@ class BulkSMSTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         campaign.refresh_from_db()
-        self.assertEqual(campaign.status, SMSCampaign.Status.SENDING)
+        self.assertEqual(campaign.status, SMSCampaign.Status.QUEUED)
         delay_mock.assert_called_once_with(str(campaign.id))
+
+    @patch('accounts.integrations.otp_service.ATSMSClient')
+    def test_task_transitions_queued_to_sending_when_started(
+        self, client_mock,
+    ):
+        from notifications.tasks import send_bulk_sms_campaign_task
+
+        campaign = self._campaign(status=SMSCampaign.Status.QUEUED)
+        member = self._membership(
+            email='queued-to-sending@example.com',
+            phone_number='254712345030',
+            member_number='SMS-Q001',
+        )
+        SMSCampaignRecipient.objects.create(
+            campaign=campaign,
+            membership=member,
+            phone_number=member.user.phone_number,
+        )
+        campaign.total_recipients = 1
+        campaign.save(update_fields=['total_recipients'])
+        status_during_send = []
+
+        def _record_status_and_send(*args, **kwargs):
+            campaign.refresh_from_db()
+            status_during_send.append(campaign.status)
+            return True
+
+        client_mock.return_value.send_sms.side_effect = (
+            _record_status_and_send
+        )
+
+        send_bulk_sms_campaign_task(str(campaign.id))
+
+        self.assertEqual(status_during_send, [SMSCampaign.Status.SENDING])
 
     @patch('accounts.integrations.otp_service.ATSMSClient')
     def test_bulk_sms_task_obeys_daily_limit(self, client_mock):
@@ -268,7 +305,8 @@ class BulkSMSTests(TestCase):
         campaign.refresh_from_db()
         self.assertEqual(result['sent'], 2)
         self.assertEqual(result['failed'], 1)
-        self.assertEqual(campaign.status, SMSCampaign.Status.COMPLETED)
+        # Mixed outcome (some sent, some failed) is PARTIAL, not COMPLETED.
+        self.assertEqual(campaign.status, SMSCampaign.Status.PARTIAL)
         self.assertEqual(campaign.sent_count, 2)
         self.assertEqual(campaign.failed_count, 1)
         self.assertEqual(
@@ -326,6 +364,114 @@ class BulkSMSTests(TestCase):
         self.assertEqual(campaign.status, SMSCampaign.Status.FAILED)
         client_mock.return_value.send_sms.assert_not_called()
 
+    @patch('accounts.integrations.otp_service.ATSMSClient')
+    def test_campaign_with_every_recipient_failing_marked_failed(
+        self, client_mock,
+    ):
+        """Every send attempt failing (not the daily limit) also ends FAILED."""
+        from accounts.integrations.otp_service import ATSMSError
+        from notifications.tasks import send_bulk_sms_campaign_task
+
+        campaign = self._campaign(status=SMSCampaign.Status.SENDING)
+        members = [
+            self._membership(
+                email=f'allfail-{index}@example.com',
+                phone_number=f'25471234504{index}',
+                member_number=f'SMS-AF{index}',
+            )
+            for index in range(2)
+        ]
+        for member in members:
+            SMSCampaignRecipient.objects.create(
+                campaign=campaign,
+                membership=member,
+                phone_number=member.user.phone_number,
+            )
+        campaign.total_recipients = 2
+        campaign.save(update_fields=['total_recipients'])
+        client_mock.return_value.send_sms.side_effect = ATSMSError('down')
+
+        result = send_bulk_sms_campaign_task(str(campaign.id))
+
+        campaign.refresh_from_db()
+        self.assertEqual(result['sent'], 0)
+        self.assertEqual(result['failed'], 2)
+        self.assertEqual(campaign.status, SMSCampaign.Status.FAILED)
+
+    @patch('accounts.integrations.otp_service.ATSMSClient')
+    def test_task_exhausting_retries_marks_campaign_out_of_sending(
+        self, client_mock,
+    ):
+        from notifications.tasks import send_bulk_sms_campaign_task
+
+        campaign = self._campaign(status=SMSCampaign.Status.SENDING)
+        member = self._membership(
+            email='retries-exhausted@example.com',
+            phone_number='254712345050',
+            member_number='SMS-RE001',
+        )
+        SMSCampaignRecipient.objects.create(
+            campaign=campaign,
+            membership=member,
+            phone_number=member.user.phone_number,
+        )
+        campaign.total_recipients = 1
+        campaign.save(update_fields=['total_recipients'])
+        client_mock.return_value.send_sms.side_effect = RuntimeError(
+            'unexpected worker error',
+        )
+
+        with patch.object(send_bulk_sms_campaign_task, 'max_retries', 0):
+            with self.assertRaises(RuntimeError):
+                send_bulk_sms_campaign_task(str(campaign.id))
+
+        campaign.refresh_from_db()
+        self.assertNotEqual(campaign.status, SMSCampaign.Status.SENDING)
+        self.assertEqual(campaign.status, SMSCampaign.Status.FAILED)
+
+    def test_stuck_campaign_sweep_flags_campaign_past_timeout(self):
+        from saccomanagement.tasks import flag_stuck_sms_campaigns
+
+        stuck_campaign = self._campaign(status=SMSCampaign.Status.SENDING)
+        SMSCampaign.objects.filter(id=stuck_campaign.id).update(
+            updated_at=timezone.now() - timedelta(hours=2),
+        )
+        fresh_campaign = self._campaign(status=SMSCampaign.Status.SENDING)
+
+        flagged_count = flag_stuck_sms_campaigns()
+
+        self.assertEqual(flagged_count, 1)
+        self.assertTrue(
+            ComplianceFlag.objects.filter(
+                sacco=self.sacco,
+                flag_type=ComplianceFlag.FlagType.PERFORMANCE,
+                metadata__campaign_id=str(stuck_campaign.id),
+            ).exists(),
+        )
+        self.assertFalse(
+            ComplianceFlag.objects.filter(
+                metadata__campaign_id=str(fresh_campaign.id),
+            ).exists(),
+        )
+
+    def test_stuck_campaign_sweep_does_not_duplicate_flags(self):
+        from saccomanagement.tasks import flag_stuck_sms_campaigns
+
+        stuck_campaign = self._campaign(status=SMSCampaign.Status.SENDING)
+        SMSCampaign.objects.filter(id=stuck_campaign.id).update(
+            updated_at=timezone.now() - timedelta(hours=2),
+        )
+
+        flag_stuck_sms_campaigns()
+        flag_stuck_sms_campaigns()
+
+        self.assertEqual(
+            ComplianceFlag.objects.filter(
+                metadata__campaign_id=str(stuck_campaign.id),
+            ).count(),
+            1,
+        )
+
     def _membership(
         self,
         email,
@@ -369,3 +515,85 @@ class BulkSMSTests(TestCase):
             audience_filter={'status': Membership.Status.APPROVED},
             status=status,
         )
+
+
+class BulkSMSSendThrottleTests(TestCase):
+    """
+    The send-endpoint throttle is scoped per SACCO, not per admin user -
+    distinct from and in addition to the daily-message-volume check inside
+    the Celery task.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.client = APIClient()
+        self.sacco = Sacco.objects.create(
+            name='Throttle SACCO',
+            registration_number='THR001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+        )
+        self.other_sacco = Sacco.objects.create(
+            name='Other Throttle SACCO',
+            registration_number='THR002',
+            sector=Sacco.Sector.FINANCE,
+            county='Kisumu',
+        )
+        self.admin = User.objects.create_user(
+            email='throttle-admin@example.com', password='secret',
+        )
+        Role.objects.create(
+            user=self.admin, sacco=self.sacco, name=Role.SACCO_ADMIN,
+        )
+        self.other_admin = User.objects.create_user(
+            email='throttle-other-admin@example.com', password='secret',
+        )
+        Role.objects.create(
+            user=self.other_admin,
+            sacco=self.other_sacco,
+            name=Role.SACCO_ADMIN,
+        )
+
+    def _draft_campaign(self, sacco):
+        return SMSCampaign.objects.create(
+            sacco=sacco,
+            message='Hi.',
+            status=SMSCampaign.Status.DRAFT,
+        )
+
+    def _send(self, sacco):
+        campaign = self._draft_campaign(sacco)
+        return self.client.post(
+            f'/api/v1/management/sms/campaigns/{campaign.id}/send/',
+            HTTP_X_SACCO_ID=str(sacco.id),
+        )
+
+    @override_settings(BULK_SMS_SEND_THROTTLE_RATE='2/hour')
+    @patch('notifications.tasks.send_bulk_sms_campaign_task.delay')
+    def test_throttle_rejects_burst_beyond_limit_for_one_sacco(
+        self, delay_mock,
+    ):
+        self.client.force_authenticate(user=self.admin)
+
+        responses = [self._send(self.sacco) for _ in range(3)]
+
+        self.assertEqual(
+            [response.status_code for response in responses[:2]],
+            [200, 200],
+        )
+        self.assertEqual(responses[2].status_code, 429)
+
+    @override_settings(BULK_SMS_SEND_THROTTLE_RATE='2/hour')
+    @patch('notifications.tasks.send_bulk_sms_campaign_task.delay')
+    def test_throttle_does_not_affect_a_different_sacco(self, delay_mock):
+        self.client.force_authenticate(user=self.admin)
+        self._send(self.sacco)
+        self._send(self.sacco)
+        exhausted_response = self._send(self.sacco)
+        self.assertEqual(exhausted_response.status_code, 429)
+
+        self.client.force_authenticate(user=self.other_admin)
+        other_response = self._send(self.other_sacco)
+
+        self.assertEqual(other_response.status_code, 200)
