@@ -762,6 +762,8 @@ def _process_failed_callback(
     transaction.status = Transaction.Status.FAILED
     transaction.save(update_fields=['status', 'updated_at'])
 
+    _check_repeated_payment_failures(transaction)
+
     _notify_payment_failure(
         mpesa_transaction,
         transaction,
@@ -772,6 +774,26 @@ def _process_failed_callback(
         mpesa_transaction.checkout_request_id,
         result_description,
     )
+
+
+def _check_repeated_payment_failures(transaction):
+    """
+    Compliance detection must never block payment processing - a bug here
+    is logged, not propagated, so it can't turn into a needless callback
+    retry (or worse, a failed payment callback ack).
+    """
+    from saccomanagement.compliance_detectors import (
+        RepeatedPaymentFailureDetector,
+    )
+
+    try:
+        RepeatedPaymentFailureDetector().check(transaction)
+    except Exception:
+        logger.exception(
+            'Repeated-payment-failure compliance check failed for '
+            'transaction_id=%s.',
+            transaction.id,
+        )
 
 
 def _process_successful_b2c_callback(

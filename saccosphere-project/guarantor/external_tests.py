@@ -7,7 +7,7 @@ from rest_framework.test import APITestCase
 
 from accounts.models import Sacco, User
 from guarantor.models import ExternalGuarantor
-from saccomanagement.models import Role
+from saccomanagement.models import Role, SystemAuditLog
 from saccomembership.models import Membership
 from services.models import Loan, LoanType
 
@@ -101,6 +101,14 @@ class ExternalGuarantorAdminReviewTest(APITestCase):
         )
         self.assertEqual(external_guarantor.reviewed_by, self.admin)
         self.assertIsNotNone(external_guarantor.reviewed_at)
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.admin,
+                action='GUARANTOR_REVIEW_DECISION',
+                resource_type='ExternalGuarantor',
+                resource_id=str(external_guarantor.id),
+            ).exists(),
+        )
 
     def test_admin_cannot_approve_pending_sms_guarantor(self):
         external_guarantor = self.create_external_guarantor(

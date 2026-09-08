@@ -7,7 +7,7 @@ from accounts.models import Sacco, User
 from accounts.permissions import IsSaccoAdmin
 from django.urls import reverse
 
-from saccomanagement.models import Role
+from saccomanagement.models import Role, SystemAuditLog
 
 
 class RoleAssignViewTestCase(APITestCase):
@@ -52,12 +52,18 @@ class RoleAssignViewTestCase(APITestCase):
         response = self._assign()
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        role = Role.objects.get(
+            user=self.target_user,
+            sacco=self.sacco,
+            name=Role.SACCO_ADMIN,
+            is_active=True,
+        )
         self.assertTrue(
-            Role.objects.filter(
-                user=self.target_user,
-                sacco=self.sacco,
-                name=Role.SACCO_ADMIN,
-                is_active=True,
+            SystemAuditLog.objects.filter(
+                user=self.super_admin,
+                action='ROLE_ASSIGN',
+                resource_type='Role',
+                resource_id=str(role.id),
             ).exists(),
         )
 
@@ -142,6 +148,14 @@ class RoleRevokeViewTestCase(APITestCase):
         self.assertIsNotNone(role_a.revoked_at)
         self.assertEqual(role_a.revoked_by, self.staff_actor)
         self.assertEqual(response.data['forced_last_admin_removal'], False)
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.staff_actor,
+                action='ROLE_REVOKE',
+                resource_type='Role',
+                resource_id=str(role_a.id),
+            ).exists(),
+        )
 
     def test_revoke_last_sacco_admin_rejected_without_force(self):
         only_admin = User.objects.create_user(
@@ -159,6 +173,14 @@ class RoleRevokeViewTestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
         role.refresh_from_db()
         self.assertTrue(role.is_active)
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.staff_actor,
+                action='ROLE_REVOKE_REJECTED',
+                resource_type='Role',
+                resource_id=str(role.id),
+            ).exists(),
+        )
 
     def test_revoke_last_super_admin_rejected_without_force(self):
         only_super_admin = User.objects.create_user(

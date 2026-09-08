@@ -14,6 +14,7 @@ from saccomanagement.models import (
     Role,
     SMSCampaign,
     SMSCampaignRecipient,
+    SystemAuditLog,
 )
 from saccomembership.models import Membership
 from services.models import Saving, SavingsType
@@ -99,6 +100,14 @@ class BulkSMSTests(TestCase):
         self.assertEqual(campaign.created_by, self.admin)
         self.assertTrue(
             campaign.recipients.filter(membership=first_member).exists()
+        )
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.admin,
+                action='SMS_CAMPAIGN_CREATED',
+                resource_type='SMSCampaign',
+                resource_id=str(campaign.id),
+            ).exists(),
         )
 
     def test_create_campaign_rejects_unsafe_filter_key(self):
@@ -239,6 +248,14 @@ class BulkSMSTests(TestCase):
         campaign.refresh_from_db()
         self.assertEqual(campaign.status, SMSCampaign.Status.QUEUED)
         delay_mock.assert_called_once_with(str(campaign.id))
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.admin,
+                action='SMS_CAMPAIGN_SEND_REQUESTED',
+                resource_type='SMSCampaign',
+                resource_id=str(campaign.id),
+            ).exists(),
+        )
 
     @patch('accounts.integrations.otp_service.ATSMSClient')
     def test_task_transitions_queued_to_sending_when_started(

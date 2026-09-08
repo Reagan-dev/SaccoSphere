@@ -13,6 +13,7 @@ from rest_framework.views import APIView
 from accounts.permissions import IsSaccoAdmin
 from notifications.models import Notification
 from notifications.utils import create_notification
+from saccomanagement.audit_logger import log_audit
 from saccomanagement.models import Role
 from services.models import Loan
 
@@ -334,6 +335,20 @@ class ExternalGuarantorAdminReviewView(APIView):
             self._approve(external_guarantor, admin_notes, request.user)
         else:
             self._reject(external_guarantor, admin_notes, request.user)
+
+        log_audit(
+            request.user,
+            'GUARANTOR_REVIEW_DECISION',
+            'ExternalGuarantor',
+            external_guarantor.id,
+            new_values={
+                'action': action,
+                'loan_id': str(external_guarantor.loan_id),
+                'sacco_id': str(external_guarantor.sacco_id),
+                'admin_notes': admin_notes,
+            },
+            request=request,
+        )
 
         external_guarantor.refresh_from_db()
         response_serializer = ExternalGuarantorDetailSerializer(

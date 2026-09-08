@@ -30,6 +30,7 @@ from accounts.permissions import (
 from billing.serializers import DisbursementAuditSerializer
 from notifications.utils import create_notification
 from saccomembership.models import Membership
+from saccomanagement.audit_logger import log_audit
 from saccomanagement.mixins import SaccoScopedMixin
 from saccomanagement.models import Role
 
@@ -1641,6 +1642,19 @@ class DividendCalculateView(SaccoScopedMixin, APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        log_audit(
+            request.user,
+            'DIVIDEND_CALCULATED',
+            'DividendDeclaration',
+            declaration.id,
+            new_values={
+                'sacco_id': str(declaration.sacco_id),
+                'total_dividend_amount': str(result['total_dividend_amount']),
+                'payout_count': result['payout_count'],
+            },
+            request=request,
+        )
+
         return Response(
             {
                 'total_dividend_amount': result['total_dividend_amount'],
@@ -1682,6 +1696,19 @@ class DividendApproveView(SaccoScopedMixin, APIView):
             declaration.status = DividendDeclaration.Status.APPROVED
             declaration.approved_by = request.user
             declaration.save(update_fields=['status', 'approved_by'])
+
+        log_audit(
+            request.user,
+            'DIVIDEND_APPROVED',
+            'DividendDeclaration',
+            declaration.id,
+            old_values={'status': DividendDeclaration.Status.CALCULATED},
+            new_values={
+                'status': declaration.status,
+                'sacco_id': str(declaration.sacco_id),
+            },
+            request=request,
+        )
 
         return Response(
             {
@@ -1766,6 +1793,20 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
 
             declaration.status = DividendDeclaration.Status.DISBURSED
             declaration.save(update_fields=['status'])
+
+        log_audit(
+            request.user,
+            'DIVIDEND_DISBURSED',
+            'DividendDeclaration',
+            declaration.id,
+            old_values={'status': DividendDeclaration.Status.APPROVED},
+            new_values={
+                'status': declaration.status,
+                'sacco_id': str(declaration.sacco_id),
+                'paid_count': paid_count,
+            },
+            request=request,
+        )
 
         return Response(
             {

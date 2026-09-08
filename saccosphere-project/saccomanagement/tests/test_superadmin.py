@@ -196,6 +196,47 @@ class TopSaccosTest(APITestCase):
             self.assertIn('platform_fee_this_month', sacco_data)
             self.assertIn('health_status', sacco_data)
 
+    def test_auto_created_flag_affects_health_status(self):
+        """
+        A ComplianceFlag created by a detector (not a manual admin entry)
+        must surface here exactly like a manually-created one - the
+        dashboard reads ComplianceFlag generically, it doesn't care who
+        wrote the row.
+        """
+        from decimal import Decimal
+
+        from payments.models import Transaction
+        from saccomanagement.compliance_detectors import (
+            PAYMENT_FAILURE_CONSECUTIVE_THRESHOLD,
+            RepeatedPaymentFailureDetector,
+        )
+
+        payer = User.objects.create_user(
+            email='top-saccos-payer@example.com', password='secret',
+        )
+        for index in range(PAYMENT_FAILURE_CONSECUTIVE_THRESHOLD):
+            transaction = Transaction.objects.create(
+                user=payer,
+                sacco=self.sacco1,
+                reference=f'TOP-SACCO-DET-{index}',
+                transaction_type=Transaction.TransactionType.DEPOSIT,
+                amount=Decimal('100.00'),
+                status=Transaction.Status.FAILED,
+            )
+        RepeatedPaymentFailureDetector().check(transaction)
+
+        self.client.force_authenticate(user=self.super_admin)
+        response = self.client.get(
+            '/api/v1/management/superadmin/top-saccos/',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        flagged = next(
+            row for row in response.data
+            if row['sacco_id'] == self.sacco1.id
+        )
+        self.assertEqual(flagged['health_status'], 'REVIEW')
+
 
 class PlatformAlertsTest(APITestCase):
     """Test PlatformAlertsView."""
@@ -259,6 +300,38 @@ class PlatformAlertsTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]['severity'], 'CRITICAL')
+
+    def test_auto_created_flag_appears_in_alerts(self):
+        """A detector-created flag surfaces here just like a manual one."""
+        from decimal import Decimal
+
+        from payments.models import Transaction
+        from saccomanagement.compliance_detectors import (
+            PAYMENT_FAILURE_CONSECUTIVE_THRESHOLD,
+            RepeatedPaymentFailureDetector,
+        )
+
+        payer = User.objects.create_user(
+            email='alerts-payer@example.com', password='secret',
+        )
+        for index in range(PAYMENT_FAILURE_CONSECUTIVE_THRESHOLD):
+            transaction = Transaction.objects.create(
+                user=payer,
+                sacco=self.sacco,
+                reference=f'ALERTS-DET-{index}',
+                transaction_type=Transaction.TransactionType.DEPOSIT,
+                amount=Decimal('100.00'),
+                status=Transaction.Status.FAILED,
+            )
+        RepeatedPaymentFailureDetector().check(transaction)
+
+        self.client.force_authenticate(user=self.super_admin)
+        response = self.client.get('/api/v1/management/superadmin/alerts/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['flag_type'], 'PAYMENT_FAILURE')
+        self.assertEqual(response.data[0]['sacco_name'], self.sacco.name)
 
 
 class LiveTransactionFeedTest(APITestCase):

@@ -423,9 +423,14 @@ class ApplicationReviewView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
             )
 
         self._notify_applicant(application)
+        audit_action = (
+            'APPLICATION_APPROVED'
+            if review_status == SaccoApplication.Status.APPROVED
+            else 'APPLICATION_REJECTED'
+        )
         log_audit(
             request.user,
-            'UPDATE',
+            audit_action,
             self.audit_resource_type,
             application.id,
             old_values=old_values,

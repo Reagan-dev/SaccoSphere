@@ -15,6 +15,7 @@ from accounts.services.consent import has_active_consent
 from saccomembership.models import Membership
 from services.models import SavingsType
 
+from .audit_logger import log_audit
 from .models import Role, SMSCampaign, SMSCampaignRecipient
 
 
@@ -181,6 +182,19 @@ class BulkSMSCreateView(BulkSMSBaseView):
                 for membership in recipients
             ])
 
+        log_audit(
+            request.user,
+            'SMS_CAMPAIGN_CREATED',
+            'SMSCampaign',
+            campaign.id,
+            new_values={
+                'sacco_id': str(sacco.id),
+                'recipient_count': len(recipients),
+                'audience_filter': audience_filter,
+            },
+            request=request,
+        )
+
         return Response(
             {
                 'success': True,
@@ -306,6 +320,21 @@ class BulkSMSSendView(BulkSMSBaseView):
         campaign.status = SMSCampaign.Status.QUEUED
         campaign.save(update_fields=['status', 'updated_at'])
         send_bulk_sms_campaign_task.delay(str(campaign.id))
+
+        # Logs the send *request* only - the task's eventual outcome
+        # (COMPLETED/PARTIAL/FAILED) is a separate concern and shouldn't
+        # duplicate this entry.
+        log_audit(
+            request.user,
+            'SMS_CAMPAIGN_SEND_REQUESTED',
+            'SMSCampaign',
+            campaign.id,
+            new_values={
+                'sacco_id': str(sacco.id),
+                'recipient_count': campaign.total_recipients,
+            },
+            request=request,
+        )
 
         return Response(
             {
