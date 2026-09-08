@@ -10,7 +10,7 @@ from rest_framework.test import APIClient
 from accounts.models import Sacco, SaccoSettings, User
 from ledger.models import LedgerEntry
 from ledger.utils import create_ledger_entry
-from saccomanagement.models import Role
+from saccomanagement.models import Role, SystemAuditLog
 from saccomembership.models import Membership
 from services.engines.dividend_calculator import (
     calculate_average_balance,
@@ -341,6 +341,14 @@ class DividendDeclarationAPITests(TestCase):
         declaration.refresh_from_db()
         self.assertEqual(declaration.status, DividendDeclaration.Status.CALCULATED)
         self.assertIsNotNone(declaration.calculated_at)
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.admin,
+                action='DIVIDEND_CALCULATED',
+                resource_type='DividendDeclaration',
+                resource_id=str(declaration.id),
+            ).exists()
+        )
 
     def test_approve_dividend_declaration(self):
         declaration = DividendDeclaration.objects.create(
@@ -362,6 +370,14 @@ class DividendDeclarationAPITests(TestCase):
         declaration.refresh_from_db()
         self.assertEqual(declaration.status, DividendDeclaration.Status.APPROVED)
         self.assertEqual(declaration.approved_by, self.admin)
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.admin,
+                action='DIVIDEND_APPROVED',
+                resource_type='DividendDeclaration',
+                resource_id=str(declaration.id),
+            ).exists()
+        )
 
     def test_approve_requires_calculated_status(self):
         declaration = DividendDeclaration.objects.create(
@@ -440,6 +456,14 @@ class DividendDeclarationAPITests(TestCase):
         self.assertEqual(
             saving.amount,
             initial_balance + payout.dividend_amount,
+        )
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.admin,
+                action='DIVIDEND_DISBURSED',
+                resource_type='DividendDeclaration',
+                resource_id=str(declaration.id),
+            ).exists()
         )
 
     def test_disburse_requires_approved_status(self):

@@ -13,6 +13,7 @@ from accounts.models import User
 from saccomembership.models import Membership
 from saccomembership.services import generate_member_number
 
+from .audit_logger import log_audit
 from .models import MemberImportJob
 
 
@@ -148,11 +149,17 @@ def _process_import_job(job_id, rows=None):
         ],
     )
 
+    created_count = 0
+    updated_count = 0
     for row_index, row in enumerate(rows, start=1):
         try:
             result = _import_member_row(row, job)
             job.success_rows += 1
-            if result == ROW_RESULT_STATUS_PROTECTED:
+            if result == ROW_RESULT_CREATED:
+                created_count += 1
+            elif result == ROW_RESULT_UPDATED:
+                updated_count += 1
+            elif result == ROW_RESULT_STATUS_PROTECTED:
                 job.protected_rows += 1
                 job.protected_details.append(
                     {
@@ -193,6 +200,21 @@ def _process_import_job(job_id, rows=None):
             'protected_details',
             'completed_at',
         ],
+    )
+    log_audit(
+        job.created_by,
+        'MEMBER_IMPORT_RUN',
+        'MemberImportJob',
+        job.id,
+        new_values={
+            'sacco_id': str(job.sacco_id),
+            'status': job.status,
+            'total_rows': job.total_rows,
+            'created': created_count,
+            'updated': updated_count,
+            'status_protected': job.protected_rows,
+            'failed': job.error_rows,
+        },
     )
     return job
 
@@ -245,6 +267,22 @@ def _abort_import_job(job, total_rows, failure_count):
             'protected_details',
             'completed_at',
         ],
+    )
+    log_audit(
+        job.created_by,
+        'MEMBER_IMPORT_RUN',
+        'MemberImportJob',
+        job.id,
+        new_values={
+            'sacco_id': str(job.sacco_id),
+            'status': job.status,
+            'total_rows': total_rows,
+            'created': 0,
+            'updated': 0,
+            'status_protected': 0,
+            'failed': failure_count,
+            'aborted': True,
+        },
     )
     return job
 

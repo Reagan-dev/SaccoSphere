@@ -8,7 +8,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, SaccoSettings, User
-from saccomanagement.models import Role
+from saccomanagement.models import Role, SystemAuditLog
 
 
 class SaccoSettingsViewAccessTestCase(TestCase):
@@ -172,3 +172,11 @@ class SaccoSettingsBoundsValidationTestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.settings.refresh_from_db()
         self.assertEqual(self.settings.loan_multiplier, 4)
+        audit_log = SystemAuditLog.objects.get(
+            user=self.admin,
+            action='SACCO_SETTINGS_UPDATED',
+            resource_type='SaccoSettings',
+            resource_id=str(self.settings.id),
+        )
+        self.assertEqual(audit_log.old_values, {'loan_multiplier': '3'})
+        self.assertEqual(audit_log.new_values, {'loan_multiplier': '4'})

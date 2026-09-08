@@ -12,6 +12,7 @@ from accounts.models import User, Sacco
 
 from saccomembership.models import Membership
 
+from .audit_logger import log_audit
 from .models import Role
 from .role_serializers import RoleSerializer
 
@@ -93,6 +94,19 @@ class RoleAssignView(APIView):
             name=role_name,
         )
 
+        log_audit(
+            request.user,
+            'ROLE_ASSIGN',
+            'Role',
+            role.id,
+            new_values={
+                'target_user_id': str(target_user.id),
+                'role_name': role_name,
+                'sacco_id': str(sacco.id) if sacco else None,
+            },
+            request=request,
+        )
+
         serializer = RoleSerializer(role)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -148,6 +162,20 @@ class RoleRevokeView(APIView):
                     'Only a SUPER_ADMIN may force-revoke the last '
                     'admin of a kind.'
                 )
+            log_audit(
+                request.user,
+                'ROLE_REVOKE_REJECTED',
+                'Role',
+                role.id,
+                new_values={
+                    'target_user_id': str(role.user.id),
+                    'role_name': role.name,
+                    'sacco_id': str(role.sacco.id) if role.sacco else None,
+                    'reason': 'last_admin_lockout',
+                    'force_attempted': force,
+                },
+                request=request,
+            )
             return Response(
                 {'detail': self._last_admin_message(role)},
                 status=status.HTTP_409_CONFLICT,
@@ -167,6 +195,21 @@ class RoleRevokeView(APIView):
         role.revoked_at = timezone.now()
         role.revoked_by = actor
         role.save(update_fields=['is_active', 'revoked_at', 'revoked_by'])
+
+        log_audit(
+            actor,
+            'ROLE_REVOKE',
+            'Role',
+            role.id,
+            old_values={'is_active': True},
+            new_values={
+                'target_user_id': str(target_user.id),
+                'role_name': target_role_name,
+                'sacco_id': str(target_sacco.id) if target_sacco else None,
+                'forced_last_admin_removal': forced_last_admin_removal,
+            },
+            request=request,
+        )
 
         return Response(
             {

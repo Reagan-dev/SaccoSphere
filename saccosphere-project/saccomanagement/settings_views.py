@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from accounts.models import Sacco, SaccoSettings
 from accounts.permissions import IsSaccoAdminOrSuperAdmin
 
+from .audit_logger import log_audit
 from .mixins import SaccoScopedMixin
 from .models import Role
 from .serializers import SaccoSettingsSerializer
@@ -108,7 +109,28 @@ class SaccoSettingsView(SaccoScopedMixin, RetrieveUpdateAPIView):
             partial=True,
         )
         serializer.is_valid(raise_exception=True)
+
+        # Capture before/after only for the fields actually submitted -
+        # "what changed" matters more than "settings were touched."
+        changed_fields = list(serializer.validated_data.keys())
+        old_values = {
+            field: str(getattr(instance, field)) for field in changed_fields
+        }
+
         serializer.save()
+
+        new_values = {
+            field: str(getattr(instance, field)) for field in changed_fields
+        }
+        log_audit(
+            request.user,
+            'SACCO_SETTINGS_UPDATED',
+            'SaccoSettings',
+            instance.id,
+            old_values=old_values,
+            new_values=new_values,
+            request=request,
+        )
 
         sacco = instance.sacco
         sync_fields = {}

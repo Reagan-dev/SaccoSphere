@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import Sacco, User
 from notifications.models import Notification
-from saccomanagement.models import Role
+from saccomanagement.models import Role, SystemAuditLog
 from saccomembership.models import Membership, SaccoApplication
 from saccomembership.serializers import MembershipApplySerializer
 from payments.models import MpesaTransaction, Transaction
@@ -438,6 +438,14 @@ class ApplicationReviewViewTestCase(TestCase):
         self.assertEqual(
             membership.rejection_reason, 'Incomplete documents.',
         )
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.admin,
+                action='APPLICATION_REJECTED',
+                resource_type='SaccoApplication',
+                resource_id=str(self.application.id),
+            ).exists(),
+        )
 
     def test_approve_application_assigns_member_number(self):
         self.client.force_authenticate(user=self.admin)
@@ -450,6 +458,14 @@ class ApplicationReviewViewTestCase(TestCase):
         )
         self.assertEqual(membership.status, Membership.Status.APPROVED)
         self.assertTrue(membership.member_number)
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.admin,
+                action='APPLICATION_APPROVED',
+                resource_type='SaccoApplication',
+                resource_id=str(self.application.id),
+            ).exists(),
+        )
 
     def test_rereview_already_approved_application_returns_409(self):
         self.client.force_authenticate(user=self.admin)

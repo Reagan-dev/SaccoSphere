@@ -12,7 +12,7 @@ from rest_framework.test import APITestCase
 
 from accounts.models import Sacco, User
 from saccomanagement.import_utils import _process_import_job, parse_import_file
-from saccomanagement.models import MemberImportJob, Role
+from saccomanagement.models import MemberImportJob, Role, SystemAuditLog
 from saccomembership.models import Membership
 
 
@@ -148,6 +148,14 @@ class ImportJobTest(APITestCase):
         job.refresh_from_db()
         self.assertEqual(job.status, MemberImportJob.Status.COMPLETED)
         self.assertEqual(job.success_rows, 2)
+        audit_log = SystemAuditLog.objects.get(
+            user=self.admin,
+            action='MEMBER_IMPORT_RUN',
+            resource_type='MemberImportJob',
+            resource_id=str(job.id),
+        )
+        self.assertEqual(audit_log.new_values['created'], 2)
+        self.assertEqual(audit_log.new_values['failed'], 0)
         self.assertEqual(
             Membership.objects.filter(
                 sacco=self.sacco,
