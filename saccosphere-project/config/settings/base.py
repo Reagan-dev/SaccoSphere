@@ -252,6 +252,11 @@ OTP_HASH_KEY_USES_SECRET_KEY_FALLBACK = not bool(OTP_HASH_KEY)
 if OTP_HASH_KEY_USES_SECRET_KEY_FALLBACK:
     OTP_HASH_KEY = f'otp-hash:{SECRET_KEY}'
 
+# Field-level encryption (accounts.models.EncryptedCharField, used for
+# SaccoPaymentConfig's M-Pesa/Daraja secrets). Generate a value with:
+# from cryptography.fernet import Fernet; Fernet.generate_key()
+FIELD_ENCRYPTION_KEY = config('FIELD_ENCRYPTION_KEY', default='')
+
 # Africa's Talking SMS Configuration
 AT_API_KEY = config('AT_API_KEY', default='')
 AT_USERNAME = config('AT_USERNAME', default='sandbox')

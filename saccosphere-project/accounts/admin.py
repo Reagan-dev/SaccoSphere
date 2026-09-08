@@ -217,10 +217,42 @@ class SaccoSettingsAdmin(admin.ModelAdmin):
     )
 
 
+PAYMENT_SECRET_FIELDS = (
+    'stk_passkey',
+    'daraja_consumer_secret',
+    'b2c_security_credential',
+)
+
+
+class PaymentSecretChangeForm(forms.ModelForm):
+    """
+    ModelForm for SaccoPaymentConfig whose secret fields never carry the
+    current decrypted value as form-rendering data - not just via widget
+    masking, but by clearing them from self.initial outright, so the
+    decrypted value can never appear in the rendered HTML or the request
+    context.
+
+    Leaving a secret field blank on submit is meaningful ("keep the current
+    value") rather than "clear it" - see SaccoPaymentConfigAdmin.save_model.
+    """
+
+    class Meta:
+        model = SaccoPaymentConfig
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field_name in PAYMENT_SECRET_FIELDS:
+            if field_name in self.initial:
+                self.initial[field_name] = ''
+
+
 @admin.register(SaccoPaymentConfig)
 class SaccoPaymentConfigAdmin(admin.ModelAdmin):
     """Admin interface for SACCO-specific M-Pesa payment configuration."""
-    
+
+    form = PaymentSecretChangeForm
+
     list_display = (
         'sacco',
         'shortcode',
@@ -237,10 +269,16 @@ class SaccoPaymentConfigAdmin(admin.ModelAdmin):
     )
     search_fields = ('sacco__name', 'sacco__registration_number', 'shortcode')
     autocomplete_fields = ('sacco',)
-    readonly_fields = ('created_at', 'updated_at')
+    readonly_fields = (
+        'created_at',
+        'updated_at',
+        'stk_passkey_status',
+        'daraja_consumer_secret_status',
+        'b2c_security_credential_status',
+    )
     list_select_related = ('sacco',)
     ordering = ('sacco__name',)
-    
+
     fieldsets = (
         (
             None,
@@ -258,6 +296,7 @@ class SaccoPaymentConfigAdmin(admin.ModelAdmin):
                     'shortcode_type',
                     'shortcode',
                     'stk_passkey',
+                    'stk_passkey_status',
                 ),
             },
         ),
@@ -267,11 +306,14 @@ class SaccoPaymentConfigAdmin(admin.ModelAdmin):
                 'fields': (
                     'daraja_consumer_key',
                     'daraja_consumer_secret',
+                    'daraja_consumer_secret_status',
                     'environment',
                 ),
                 'description': (
                     'Consumer key and secret are optional if using a platform '
-                    'aggregator credential. Leave blank to use global settings.'
+                    'aggregator credential. Leave blank to use global settings. '
+                    'Secret fields always render blank; leaving one blank on '
+                    'save keeps its current stored value unchanged.'
                 ),
             },
         ),
@@ -281,6 +323,7 @@ class SaccoPaymentConfigAdmin(admin.ModelAdmin):
                 'fields': (
                     'b2c_initiator_name',
                     'b2c_security_credential',
+                    'b2c_security_credential_status',
                 ),
                 'classes': ('collapse',),
                 'description': (
@@ -297,20 +340,68 @@ class SaccoPaymentConfigAdmin(admin.ModelAdmin):
             },
         ),
     )
-    
+
     @admin.display(boolean=True, description='B2C Configured')
     def has_b2c(self, obj):
         return obj.has_b2c_config()
-    
-    def get_readonly_fields(self, request, obj=None):
-        """Make sensitive fields read-only after creation to prevent accidental exposure."""
-        if obj:  # Editing an existing object
-            return self.readonly_fields + (
-                'daraja_consumer_secret',
-                'stk_passkey',
-                'b2c_security_credential',
+
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        if db_field.name in PAYMENT_SECRET_FIELDS:
+            kwargs['widget'] = forms.PasswordInput(render_value=False)
+            kwargs['required'] = False
+            kwargs['help_text'] = (
+                'Leave blank to keep the current value unchanged.'
             )
-        return self.readonly_fields
+        return super().formfield_for_dbfield(db_field, request, **kwargs)
+
+    def save_model(self, request, obj, form, change):
+        """
+        A blank secret field means "keep the current value", not "clear it".
+
+        By the time save_model runs, Django's ModelForm machinery has
+        already copied the (blank) submitted value onto obj for every
+        secret field the admin didn't retype - so the original stored value
+        must be re-fetched from the database, not read off obj.
+        """
+        if change:
+            original = SaccoPaymentConfig.objects.get(pk=obj.pk)
+            for field_name in PAYMENT_SECRET_FIELDS:
+                if not form.cleaned_data.get(field_name):
+                    setattr(obj, field_name, getattr(original, field_name))
+        super().save_model(request, obj, form, change)
+
+    def _secret_status(self, obj, field_name):
+        if obj is None or not getattr(obj, field_name, None):
+            return 'Not configured'
+        # updated_at reflects this row's last save as a whole, not
+        # specifically this field's last change - SaccoPaymentConfig has no
+        # per-field change timestamp. Good enough as a coarse signal.
+        last_changed = (
+            obj.updated_at.strftime('%Y-%m-%d') if obj.updated_at else 'unknown'
+        )
+        return f'Configured (last changed {last_changed})'
+
+    @admin.display(description='STK passkey status')
+    def stk_passkey_status(self, obj):
+        return self._secret_status(obj, 'stk_passkey')
+
+    @admin.display(description='Daraja consumer secret status')
+    def daraja_consumer_secret_status(self, obj):
+        return self._secret_status(obj, 'daraja_consumer_secret')
+
+    @admin.display(description='B2C security credential status')
+    def b2c_security_credential_status(self, obj):
+        return self._secret_status(obj, 'b2c_security_credential')
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_superuser or request.user.has_perm(
+            'accounts.manage_payment_secrets',
+        )
+
+    def has_change_permission(self, request, obj=None):
+        return request.user.is_superuser or request.user.has_perm(
+            'accounts.manage_payment_secrets',
+        )
 
 
 @admin.register(KYCVerification)

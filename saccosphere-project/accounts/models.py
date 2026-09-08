@@ -962,6 +962,12 @@ class SaccoPaymentConfig(models.Model):
         verbose_name = 'SACCO Payment Configuration'
         verbose_name_plural = 'SACCO Payment Configurations'
         ordering = ['sacco__name']
+        permissions = [
+            (
+                'manage_payment_secrets',
+                'Can view and change M-Pesa/Daraja payment secrets',
+            ),
+        ]
 
     def __str__(self):
         return f'Payment Config — {self.sacco.name} ({self.shortcode})'
