@@ -1158,6 +1158,8 @@ class B2CDisbursementView(APIView):
             phone_number=data['phone_number'],
             amount=data['amount'],
             remarks=remarks,
+            admin_user=request.user,
+            request=request,
         )
 
         return Response(payload, status=http_status)

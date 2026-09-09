@@ -664,6 +664,12 @@ def send_disbursement_confirmation_request(loan_id: str):
         'FRONTEND_BASE_URL',
         'http://localhost:3000',
     ).rstrip('/')
+    # These point at the frontend confirm/dispute pages, which read the
+    # token from the query string and then POST it to
+    # ConfirmDisbursementView / DisputeDisbursementView. The API endpoints
+    # are POST-only, so simply fetching one of these links (a link-preview
+    # bot, for example) cannot change disbursement state - the member has
+    # to open the page and act on it.
     confirm_url = (
         f'{frontend_base_url}/confirm-disbursement/?token={token}'
     )
@@ -674,10 +680,10 @@ def send_disbursement_confirmation_request(loan_id: str):
     member = loan.membership.user
     sacco = loan.membership.sacco
     sms_message = (
-        f'SaccoSphere: KES {tx.amount:,.0f} has been disbursed to your '
-        f'M-Pesa from {sacco.name}. Did you receive it? Reply YES: '
-        f'{confirm_url} or NO: {dispute_url} '
-        f'(Link expires in 24 hours)'
+        f'SaccoSphere: KES {tx.amount:,.0f} was sent to your M-Pesa from '
+        f'{sacco.name}. Open this link to confirm you received it: '
+        f'{confirm_url} - or to report a problem: {dispute_url} '
+        f'(Links expire in 24 hours)'
     )
     send_sms_task.delay(member.phone_number, sms_message)
 

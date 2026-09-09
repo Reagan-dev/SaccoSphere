@@ -422,12 +422,20 @@ class LoanDisbursementDisputeListView(APIView):
 
 
 class ConfirmDisbursementView(APIView):
-    """Confirm that a member received a disbursed loan."""
+    """Confirm that a member received a disbursed loan.
+
+    POST only: this mutates disbursement state, so it must not be
+    reachable by a plain GET that link-prefetch bots (mail scanners,
+    chat unfurlers, antivirus) fire automatically. Authenticity comes
+    from the signed ``token`` in the request body, same as the
+    password-reset confirm flow; with no SessionAuthentication there is
+    no CSRF token to supply.
+    """
 
     authentication_classes = []
     permission_classes = [AllowAny]
 
-    def get(self, request):
+    def post(self, request):
         loan = self._get_loan_from_token(request)
         if isinstance(loan, Response):
             return loan
@@ -487,10 +495,10 @@ class ConfirmDisbursementView(APIView):
         )
 
     def _get_loan_from_token(self, request):
-        token = request.query_params.get('token')
+        token = request.data.get('token')
         if not token:
             return Response(
-                {'detail': 'token query parameter is required.'},
+                {'detail': 'token is required in the request body.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -518,14 +526,17 @@ class ConfirmDisbursementView(APIView):
 
 
 class DisputeDisbursementView(ConfirmDisbursementView):
-    """Record that a member did not receive a disbursed loan."""
+    """Record that a member did not receive a disbursed loan.
 
-    def get(self, request):
+    POST only, for the same reason as ConfirmDisbursementView.
+    """
+
+    def post(self, request):
         loan = self._get_loan_from_token(request)
         if isinstance(loan, Response):
             return loan
 
-        reason = request.query_params.get('reason', '')
+        reason = request.data.get('reason', '')
 
         with transaction.atomic():
             loan = (

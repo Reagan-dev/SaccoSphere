@@ -1,8 +1,11 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
-from django.test import TestCase, override_settings
+from django.db import connection
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from kombu.exceptions import OperationalError as KombuOperationalError
@@ -10,13 +13,14 @@ from requests.exceptions import Timeout as RequestsTimeout
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from accounts.models import Sacco, User
+from accounts.models import Sacco, SaccoPaymentConfig, User
 from billing.models import InvoiceLineItem
 from ledger.models import LedgerEntry
 from notifications.models import Notification
 from payments.disbursements import initiate_b2c_loan_disbursement
 from payments.models import (
     Callback,
+    MpesaIdempotencyRecord,
     MpesaTransaction,
     PaymentProvider,
     Transaction,
@@ -26,14 +30,22 @@ from payments.tasks import (
     _apply_saving_deposit,
     _create_callback_ledger_entry,
     _process_successful_callback,
+    _reconcile_stale_b2c_disbursements,
     _record_platform_fee_for_sacco,
     process_b2c_callback_task,
     process_stk_callback_task,
 )
 from saccomanagement.models import Role
 from saccomembership.models import Membership
-from services.models import Guarantor, Loan, LoanType, RepaymentSchedule, Saving
-from services.models import SavingsType
+from services.models import (
+    DisbursementAuditLog,
+    Guarantor,
+    Loan,
+    LoanType,
+    RepaymentSchedule,
+    Saving,
+    SavingsType,
+)
 
 from payments.integrations.mpesa.daraja import DarajaClient, DarajaError
 
@@ -949,16 +961,19 @@ class PaymentTaskHardeningTests(TestCase):
             },
         }
 
-        process_stk_callback_task(
-            mpesa_transaction.checkout_request_id,
-            0,
-            callback_body,
+        first_callback = Callback.objects.create(
+            transaction=transaction,
+            provider=self.provider,
+            raw_payload=callback_body,
         )
-        process_stk_callback_task(
-            mpesa_transaction.checkout_request_id,
-            0,
-            callback_body,
+        second_callback = Callback.objects.create(
+            transaction=transaction,
+            provider=self.provider,
+            raw_payload=callback_body,
         )
+
+        process_stk_callback_task(str(first_callback.id))
+        process_stk_callback_task(str(second_callback.id))
 
         self.saving.refresh_from_db()
         transaction.refresh_from_db()
@@ -1094,6 +1109,18 @@ class B2CDisbursementHardeningTests(TestCase):
             provider_type=PaymentProvider.ProviderType.MPESA,
             is_active=True,
         )
+        self.payment_config = SaccoPaymentConfig.objects.create(
+            sacco=self.sacco,
+            shortcode_type=SaccoPaymentConfig.ShortcodeType.PAYBILL,
+            shortcode='600999',
+            stk_passkey='hardening_passkey',
+            daraja_consumer_key='hardening_consumer_key',
+            daraja_consumer_secret='hardening_consumer_secret',
+            environment=SaccoPaymentConfig.Environment.SANDBOX,
+            b2c_initiator_name='hardening_initiator',
+            b2c_security_credential='hardening_security_credential',
+            is_active=True,
+        )
 
     @patch('payments.disbursements.DarajaClient')
     def test_b2c_api_failure_leaves_failed_local_attempt(
@@ -1109,7 +1136,7 @@ class B2CDisbursementHardeningTests(TestCase):
 
         success, payload, http_status = initiate_b2c_loan_disbursement(
             loan=self.loan,
-            phone_number='254712200001',
+            phone_number='+254712200001',
             amount=Decimal('500.00'),
             remarks='Loan Disbursement',
         )
@@ -1218,16 +1245,19 @@ class B2CDisbursementHardeningTests(TestCase):
             },
         }
 
-        process_b2c_callback_task(
-            mpesa_transaction.conversation_id,
-            0,
-            callback_body,
+        first_callback = Callback.objects.create(
+            transaction=transaction,
+            provider=self.provider,
+            raw_payload=callback_body,
         )
-        process_b2c_callback_task(
-            mpesa_transaction.conversation_id,
-            0,
-            callback_body,
+        second_callback = Callback.objects.create(
+            transaction=transaction,
+            provider=self.provider,
+            raw_payload=callback_body,
         )
+
+        process_b2c_callback_task(str(first_callback.id))
+        process_b2c_callback_task(str(second_callback.id))
 
         self.loan.refresh_from_db()
         transaction.refresh_from_db()
@@ -1240,4 +1270,569 @@ class B2CDisbursementHardeningTests(TestCase):
         self.assertEqual(
             LedgerEntry.objects.filter(transaction=transaction).count(),
             1,
+        )
+
+
+class B2CCallbackConcurrencyRegressionTests(TransactionTestCase):
+    """Cross-connection race test for the 'no double-disbursement' guarantee.
+
+    ``B2CDisbursementHardeningTests`` extends ``django.test.TestCase`` and its
+    ``test_b2c_callback_duplicate_delivery_does_not_double_disburse`` invokes
+    ``process_b2c_callback_task`` twice *sequentially* on a single connection
+    inside the test's outer transaction. That proves sequential idempotency but
+    can never exercise the actual failure mode this safety net exists for: two
+    Safaricom B2C result callbacks for the same ``ConversationID`` being
+    processed at the same instant on two different DB connections/workers.
+
+    This class exercises that race directly - two threads, each with its own
+    connection, released together on a barrier - and asserts the loan is
+    disbursed exactly once.
+
+    Requires PostgreSQL, which is the production backend on Railway. On SQLite
+    ``select_for_update()`` is a silent no-op (so the row lock in
+    ``process_b2c_callback_task`` provides nothing) and concurrent writers just
+    raise ``database is locked``, so the race cannot be represented faithfully.
+    The test skips there, matching
+    ``accounts.tests.test_otp_security.OTPRaceConditionTestCase``.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='b2c-race-member@example.com',
+            phone_number='254712260001',
+            password='StrongPass1',
+        )
+        self.sacco = Sacco.objects.create(
+            name='B2C Race SACCO',
+            registration_number='B2C-RACE-001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+            payment_ready=True,
+        )
+        self.membership = Membership.objects.create(
+            user=self.user,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number='B2C-RACE-M-001',
+        )
+        loan_type = LoanType.objects.create(
+            sacco=self.sacco,
+            name='B2C Race Loan',
+            interest_rate=Decimal('12.00'),
+            max_term_months=12,
+            min_amount=Decimal('100.00'),
+        )
+        self.loan = Loan.objects.create(
+            membership=self.membership,
+            loan_type=loan_type,
+            amount=Decimal('500.00'),
+            interest_rate=Decimal('12.00'),
+            term_months=6,
+            outstanding_balance=Decimal('0.00'),
+            status=Loan.Status.DISBURSEMENT_PENDING,
+            disbursement_status=Loan.DisbursementStatus.INITIATED,
+        )
+        self.provider = PaymentProvider.objects.create(
+            name='M-Pesa',
+            provider_type=PaymentProvider.ProviderType.MPESA,
+            is_active=True,
+        )
+
+    def test_concurrent_b2c_callbacks_disburse_loan_exactly_once(self):
+        if connection.vendor == 'sqlite':
+            self.skipTest(
+                'SQLite has no real row-level locking (select_for_update is a '
+                'no-op) and serialises writers with "database is locked"; run '
+                'against PostgreSQL to exercise this race.'
+            )
+
+        transaction = Transaction.objects.create(
+            provider=self.provider,
+            user=self.user,
+            reference='B2C-RACE-IDEMPOTENT-001',
+            transaction_type=Transaction.TransactionType.LOAN_DISBURSEMENT,
+            amount=Decimal('500.00'),
+            status=Transaction.Status.SENT,
+            description='B2C concurrency regression test',
+        )
+        mpesa_transaction = MpesaTransaction.objects.create(
+            transaction=transaction,
+            phone_number='254712260001',
+            conversation_id='B2C-CONVERSATION-RACE-001',
+            transaction_type=MpesaTransaction.TransactionType.B2C,
+            related_loan=self.loan,
+        )
+        callback_body = {
+            'Result': {
+                'ConversationID': mpesa_transaction.conversation_id,
+                'ResultCode': 0,
+                'ResultDesc': 'Success',
+                'ResultParameters': {
+                    'ResultParameter': [
+                        {'Key': 'TransactionReceipt', 'Value': 'B2CRACE001'},
+                    ],
+                },
+            },
+        }
+        callback_ids = [
+            str(
+                Callback.objects.create(
+                    transaction=transaction,
+                    provider=self.provider,
+                    raw_payload=callback_body,
+                ).id
+            )
+            for _ in range(2)
+        ]
+
+        barrier = threading.Barrier(len(callback_ids))
+        errors = []
+
+        def deliver(callback_id):
+            barrier.wait()
+            try:
+                process_b2c_callback_task(callback_id)
+            except Exception as exc:  # noqa: BLE001 - recorded and asserted on
+                errors.append(exc)
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=len(callback_ids)) as executor:
+            list(executor.map(deliver, callback_ids))
+
+        # A losing thread may raise (retry/IntegrityError) - that is the guard
+        # doing its job, not a failure - but it must never be that both threads
+        # applied the disbursement.
+        self.assertLessEqual(
+            len(errors), 1, f'Both callbacks errored: {errors}',
+        )
+
+        self.loan.refresh_from_db()
+        transaction.refresh_from_db()
+        mpesa_transaction.refresh_from_db()
+
+        self.assertEqual(transaction.status, Transaction.Status.COMPLETED)
+        self.assertTrue(mpesa_transaction.callback_received)
+        self.assertEqual(self.loan.status, Loan.Status.ACTIVE)
+        self.assertEqual(self.loan.disbursed_amount, Decimal('500.00'))
+        self.assertEqual(self.loan.outstanding_balance, Decimal('500.00'))
+        self.assertEqual(
+            LedgerEntry.objects.filter(transaction=transaction).count(),
+            1,
+            'Loan disbursement credited more than once under concurrent '
+            'callback delivery.',
+        )
+        self.assertEqual(
+            MpesaIdempotencyRecord.objects.filter(
+                checkout_request_id=mpesa_transaction.conversation_id,
+            ).count(),
+            1,
+        )
+
+
+def _make_b2c_ready_sacco(registration_number, member_email, phone_number):
+    """Build a payment-ready SACCO + approved member + PENDING loan."""
+    sacco = Sacco.objects.create(
+        name=f'B2C Init {registration_number}',
+        registration_number=registration_number,
+        sector=Sacco.Sector.FINANCE,
+        county='Nairobi',
+        membership_type=Sacco.MembershipType.OPEN,
+        payment_ready=True,
+    )
+    SaccoPaymentConfig.objects.create(
+        sacco=sacco,
+        shortcode_type=SaccoPaymentConfig.ShortcodeType.PAYBILL,
+        shortcode='600111',
+        stk_passkey='init_passkey',
+        daraja_consumer_key='init_consumer_key',
+        daraja_consumer_secret='init_consumer_secret',
+        environment=SaccoPaymentConfig.Environment.SANDBOX,
+        b2c_initiator_name='init_initiator',
+        b2c_security_credential='init_security_credential',
+        is_active=True,
+    )
+    user = User.objects.create_user(
+        email=member_email,
+        phone_number=phone_number,
+        password='StrongPass1',
+    )
+    membership = Membership.objects.create(
+        user=user,
+        sacco=sacco,
+        status=Membership.Status.APPROVED,
+        member_number=f'{registration_number}-M-001',
+    )
+    loan_type = LoanType.objects.create(
+        sacco=sacco,
+        name=f'B2C Init Loan {registration_number}',
+        interest_rate=Decimal('12.00'),
+        max_term_months=12,
+        min_amount=Decimal('100.00'),
+    )
+    loan = Loan.objects.create(
+        membership=membership,
+        loan_type=loan_type,
+        amount=Decimal('500.00'),
+        interest_rate=Decimal('12.00'),
+        term_months=6,
+        outstanding_balance=Decimal('0.00'),
+        status=Loan.Status.APPROVED,
+        disbursement_status=Loan.DisbursementStatus.PENDING,
+    )
+    return sacco, user, loan
+
+
+class B2CDisbursementIdempotencyTests(TestCase):
+    """Deterministic guards for initiate_b2c_loan_disbursement.
+
+    Backend-agnostic: exercises the compare-and-swap claim, the duplicate
+    rejection, and the timeout-vs-hard-failure split without threads.
+    """
+
+    def setUp(self):
+        self.sacco, self.member, self.loan = _make_b2c_ready_sacco(
+            'IDEMP01',
+            'b2c-idemp-member@example.com',
+            '254712230001',
+        )
+
+    def _call(self):
+        from payments.disbursements import initiate_b2c_loan_disbursement
+
+        return initiate_b2c_loan_disbursement(
+            loan=self.loan,
+            phone_number='+254712230001',
+            amount=Decimal('500.00'),
+            remarks='Loan Disbursement',
+        )
+
+    @patch('payments.disbursements.DarajaClient')
+    def test_duplicate_request_is_rejected_without_second_daraja_call(
+        self,
+        client_mock,
+    ):
+        client = client_mock.return_value
+        client._build_callback_url.return_value = 'https://cb.test/b2c'
+        client.initiate_b2c.return_value = {
+            'ConversationID': 'CONV-IDEMP-1',
+            'OriginatorConversationID': 'ORIG-IDEMP-1',
+        }
+
+        ok, payload, http_status = self._call()
+        self.assertTrue(ok)
+        self.assertEqual(http_status, 201)
+        self.loan.refresh_from_db()
+        self.assertEqual(
+            self.loan.disbursement_status,
+            Loan.DisbursementStatus.INITIATED,
+        )
+        self.assertIsNotNone(self.loan.disbursement_idempotency_key)
+        first_key = payload['idempotency_key']
+
+        dup_ok, dup_payload, dup_status = self._call()
+
+        self.assertFalse(dup_ok)
+        self.assertEqual(dup_status, 409)
+        self.assertEqual(client.initiate_b2c.call_count, 1)
+        self.assertEqual(
+            Transaction.objects.filter(
+                transaction_type=(
+                    Transaction.TransactionType.LOAN_DISBURSEMENT
+                ),
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            DisbursementAuditLog.objects.filter(
+                loan=self.loan,
+                event='B2C_INITIATED',
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            dup_payload['idempotency_key'],
+            first_key,
+        )
+
+    @patch('payments.disbursements.DarajaClient')
+    def test_timeout_is_pending_confirmation_not_failed(self, client_mock):
+        from payments.integrations.mpesa.daraja import DarajaError
+
+        client = client_mock.return_value
+        client._build_callback_url.return_value = 'https://cb.test/b2c'
+        client.initiate_b2c.side_effect = DarajaError(
+            'M-Pesa request timed out. Please try again.',
+            is_timeout=True,
+        )
+
+        ok, payload, http_status = self._call()
+
+        self.assertFalse(ok)
+        self.assertEqual(http_status, 202)
+        self.loan.refresh_from_db()
+        self.assertEqual(
+            self.loan.disbursement_status,
+            Loan.DisbursementStatus.PENDING_CONFIRMATION,
+        )
+        payment = Transaction.objects.get(
+            transaction_type=Transaction.TransactionType.LOAN_DISBURSEMENT,
+        )
+        self.assertEqual(
+            payment.status,
+            Transaction.Status.INITIATION_FAILED,
+        )
+        failed_rows = DisbursementAuditLog.objects.filter(
+            loan=self.loan,
+            event='DISBURSEMENT_FAILED',
+        )
+        self.assertEqual(failed_rows.count(), 1)
+        self.assertEqual(
+            failed_rows.get().details['outcome'],
+            'timeout_ambiguous',
+        )
+
+    @patch('payments.disbursements.DarajaClient')
+    def test_hard_daraja_error_is_failed_and_502(self, client_mock):
+        from payments.integrations.mpesa.daraja import DarajaError
+
+        client = client_mock.return_value
+        client._build_callback_url.return_value = 'https://cb.test/b2c'
+        client.initiate_b2c.side_effect = DarajaError(
+            'Daraja unavailable',
+            '500.001',
+        )
+
+        ok, payload, http_status = self._call()
+
+        self.assertFalse(ok)
+        self.assertEqual(http_status, 502)
+        self.loan.refresh_from_db()
+        self.assertEqual(
+            self.loan.disbursement_status,
+            Loan.DisbursementStatus.FAILED,
+        )
+        payment = Transaction.objects.get(
+            transaction_type=Transaction.TransactionType.LOAN_DISBURSEMENT,
+        )
+        self.assertEqual(payment.status, Transaction.Status.FAILED)
+
+
+class B2CInitiationConcurrencyRegressionTests(TransactionTestCase):
+    """Two near-simultaneous B2C disbursement requests for one loan.
+
+    The safety net this feature exists for: a duplicate/retried request
+    or two racing admin clicks must never fire two real Safaricom
+    payouts. Uses real threads and connections under TransactionTestCase
+    because plain TestCase wraps the test in one transaction that hides
+    the cross-connection race.
+
+    Requires PostgreSQL (Railway's production backend). On SQLite
+    select_for_update() is a no-op and concurrent writers raise
+    'database is locked', so the race cannot be represented faithfully -
+    skipped there, matching
+    accounts.tests.test_otp_security.OTPRaceConditionTestCase. The
+    deterministic guard is covered by B2CDisbursementIdempotencyTests on
+    every backend.
+    """
+
+    def setUp(self):
+        self.sacco, self.member, self.loan = _make_b2c_ready_sacco(
+            'RACE01',
+            'b2c-race-init-member@example.com',
+            '254712240001',
+        )
+
+    def test_concurrent_requests_fire_exactly_one_daraja_call(self):
+        if connection.vendor == 'sqlite':
+            self.skipTest(
+                'SQLite has no real row-level locking (select_for_update '
+                'is a no-op) and serialises writers with "database is '
+                'locked"; run against PostgreSQL to exercise this race.'
+            )
+
+        with patch('payments.disbursements.DarajaClient') as client_mock:
+            client = client_mock.return_value
+            client._build_callback_url.return_value = 'https://cb.test/b2c'
+            client.initiate_b2c.return_value = {
+                'ConversationID': 'CONV-RACE-1',
+                'OriginatorConversationID': 'ORIG-RACE-1',
+            }
+
+            from payments.disbursements import (
+                initiate_b2c_loan_disbursement,
+            )
+
+            barrier = threading.Barrier(2)
+            results = []
+            errors = []
+
+            def fire():
+                barrier.wait()
+                try:
+                    results.append(
+                        initiate_b2c_loan_disbursement(
+                            loan=self.loan,
+                            phone_number='+254712240001',
+                            amount=Decimal('500.00'),
+                            remarks='Loan Disbursement',
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001 - asserted below
+                    errors.append(exc)
+                finally:
+                    connection.close()
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                list(executor.map(lambda _: fire(), range(2)))
+
+            self.assertEqual(errors, [])
+            self.assertEqual(client.initiate_b2c.call_count, 1)
+
+        statuses = sorted(http_status for _ok, _p, http_status in results)
+        self.assertEqual(statuses, [201, 409])
+
+        self.assertEqual(
+            Transaction.objects.filter(
+                transaction_type=(
+                    Transaction.TransactionType.LOAN_DISBURSEMENT
+                ),
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            MpesaTransaction.objects.filter(
+                transaction_type=MpesaTransaction.TransactionType.B2C,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            DisbursementAuditLog.objects.filter(loan=self.loan).count(),
+            1,
+        )
+        self.assertEqual(
+            DisbursementAuditLog.objects.get(loan=self.loan).event,
+            'B2C_INITIATED',
+        )
+        self.loan.refresh_from_db()
+        self.assertEqual(
+            self.loan.disbursement_status,
+            Loan.DisbursementStatus.INITIATED,
+        )
+        self.assertIsNotNone(self.loan.disbursement_idempotency_key)
+
+
+class B2CReconciliationTests(TestCase):
+    """Stale B2C disbursements (timeout) are escalated, never auto-retried."""
+
+    def setUp(self):
+        self.sacco, self.member, self.loan = _make_b2c_ready_sacco(
+            'RECON01',
+            'b2c-recon-member@example.com',
+            '254712250001',
+        )
+        self.loan.disbursement_status = (
+            Loan.DisbursementStatus.PENDING_CONFIRMATION
+        )
+        self.loan.disbursement_idempotency_key = (
+            'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+        )
+        self.loan.save(
+            update_fields=[
+                'disbursement_status',
+                'disbursement_idempotency_key',
+                'updated_at',
+            ],
+        )
+        self.provider = PaymentProvider.objects.create(
+            name='M-Pesa',
+            provider_type=PaymentProvider.ProviderType.MPESA,
+            is_active=True,
+        )
+        self.transaction = Transaction.objects.create(
+            provider=self.provider,
+            user=self.member,
+            reference='SS-DSB-RECON01',
+            transaction_type=Transaction.TransactionType.LOAN_DISBURSEMENT,
+            amount=Decimal('500.00'),
+            status=Transaction.Status.INITIATION_FAILED,
+            description='B2C recon test',
+        )
+        self.mpesa = MpesaTransaction.objects.create(
+            transaction=self.transaction,
+            phone_number='254712250001',
+            conversation_id='CONV-RECON-01',
+            transaction_type=MpesaTransaction.TransactionType.B2C,
+            related_loan=self.loan,
+        )
+
+    def _future_cutoff(self):
+        return timezone.now() + timedelta(minutes=1)
+
+    def test_escalates_to_under_review_after_max_attempts(self):
+        escalated = _reconcile_stale_b2c_disbursements(
+            self._future_cutoff(),
+            max_attempts=1,
+        )
+
+        self.assertEqual(escalated, 1)
+        self.loan.refresh_from_db()
+        self.assertEqual(
+            self.loan.disbursement_status,
+            Loan.DisbursementStatus.UNDER_REVIEW,
+        )
+        rows = DisbursementAuditLog.objects.filter(
+            loan=self.loan,
+            event='ESCALATED_TO_SUPERADMIN',
+        )
+        self.assertEqual(rows.count(), 1)
+        self.assertEqual(
+            rows.get().details['reason'],
+            'b2c_initiation_timeout_unconfirmed',
+        )
+
+    def test_below_max_attempts_only_counts_does_not_escalate(self):
+        escalated = _reconcile_stale_b2c_disbursements(
+            self._future_cutoff(),
+            max_attempts=3,
+        )
+
+        self.assertEqual(escalated, 0)
+        self.loan.refresh_from_db()
+        self.assertEqual(
+            self.loan.disbursement_status,
+            Loan.DisbursementStatus.PENDING_CONFIRMATION,
+        )
+        self.transaction.refresh_from_db()
+        self.assertEqual(
+            self.transaction.metadata['reconciliation_attempts'],
+            1,
+        )
+
+    def test_recent_attempt_is_not_touched(self):
+        escalated = _reconcile_stale_b2c_disbursements(
+            timezone.now() - timedelta(minutes=5),
+            max_attempts=1,
+        )
+
+        self.assertEqual(escalated, 0)
+        self.loan.refresh_from_db()
+        self.assertEqual(
+            self.loan.disbursement_status,
+            Loan.DisbursementStatus.PENDING_CONFIRMATION,
+        )
+
+    def test_resolved_by_late_callback_is_skipped(self):
+        self.loan.disbursement_status = Loan.DisbursementStatus.DISBURSED
+        self.loan.save(update_fields=['disbursement_status', 'updated_at'])
+
+        escalated = _reconcile_stale_b2c_disbursements(
+            self._future_cutoff(),
+            max_attempts=1,
+        )
+
+        self.assertEqual(escalated, 0)
+        self.assertFalse(
+            DisbursementAuditLog.objects.filter(loan=self.loan).exists()
         )
