@@ -224,7 +224,6 @@ class AdminSaccoStatsView(SaccoScopedMixin, APIView):
                 Loan.Status.GUARANTORS_PENDING,
                 Loan.Status.PENDING_APPROVAL,
                 Loan.Status.UNDER_REVIEW,
-                Loan.Status.BOARD_REVIEW,
             ],
         )
 

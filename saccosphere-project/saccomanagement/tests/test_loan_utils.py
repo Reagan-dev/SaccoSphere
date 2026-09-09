@@ -51,7 +51,7 @@ class BuildGuarantorsSummaryQueryCountTest(TestCase):
             interest_rate=Decimal('12.00'),
             term_months=12,
             outstanding_balance=Decimal('40000.00'),
-            status=Loan.Status.BOARD_REVIEW,
+            status=Loan.Status.UNDER_REVIEW,
         )
         internal_user = User.objects.create_user(
             email=f'summary-guar-{idx}@example.com',
@@ -87,7 +87,7 @@ class BuildGuarantorsSummaryQueryCountTest(TestCase):
         # zero, so the total stays 3 no matter how many loans there are.
         with self.assertNumQueries(3):
             loans = list(
-                Loan.objects.filter(status=Loan.Status.BOARD_REVIEW)
+                Loan.objects.filter(status=Loan.Status.UNDER_REVIEW)
                 .prefetch_related('guarantors', 'external_guarantors')
             )
             summaries = [build_guarantors_summary(loan) for loan in loans]

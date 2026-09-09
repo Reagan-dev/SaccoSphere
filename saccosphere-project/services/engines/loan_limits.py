@@ -22,7 +22,6 @@ OUTSTANDING_LOAN_STATUSES = (
     Loan.Status.GUARANTORS_PENDING,
     Loan.Status.PENDING_APPROVAL,
     Loan.Status.UNDER_REVIEW,
-    Loan.Status.BOARD_REVIEW,
     Loan.Status.APPROVED,
     Loan.Status.DISBURSED,
     Loan.Status.DISBURSEMENT_PENDING,

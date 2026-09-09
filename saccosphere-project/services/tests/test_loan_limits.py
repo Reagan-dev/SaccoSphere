@@ -134,7 +134,6 @@ class LoanLimitEngineTestCase(TestCase):
             Loan.Status.GUARANTORS_PENDING,
             Loan.Status.PENDING_APPROVAL,
             Loan.Status.UNDER_REVIEW,
-            Loan.Status.BOARD_REVIEW,
             Loan.Status.APPROVED,
             Loan.Status.DISBURSEMENT_PENDING,
             Loan.Status.DISBURSED,
