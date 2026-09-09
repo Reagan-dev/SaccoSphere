@@ -215,6 +215,9 @@ class SaccoSettingsSerializer(serializers.ModelSerializer):
             'registration_fee',
             'monthly_contribution_amount',
             'sms_daily_limit',
+            'penalty_type',
+            'penalty_rate',
+            'penalty_grace_days',
             'updated_at',
         )
         read_only_fields = ('sacco_id', 'updated_at')
@@ -255,6 +258,30 @@ class SaccoSettingsSerializer(serializers.ModelSerializer):
                 {
                     'loan_multiplier': (
                         'loan_multiplier must be greater than zero.'
+                    ),
+                },
+            )
+
+        penalty_rate = _current('penalty_rate')
+        if penalty_rate is not None and penalty_rate < 0:
+            raise serializers.ValidationError(
+                {'penalty_rate': 'penalty_rate cannot be negative.'},
+            )
+        penalty_type = _current('penalty_type')
+        percent_rules = {
+            SaccoSettings.PenaltyType.PERCENT_ONCE,
+            SaccoSettings.PenaltyType.PERCENT_PER_DAY,
+        }
+        if (
+            penalty_type in percent_rules
+            and penalty_rate is not None
+            and penalty_rate > 1
+        ):
+            raise serializers.ValidationError(
+                {
+                    'penalty_rate': (
+                        'For a PERCENT rule, penalty_rate is a fraction '
+                        '(0.05 = 5%); it cannot exceed 1.'
                     ),
                 },
             )

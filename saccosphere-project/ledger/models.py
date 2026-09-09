@@ -48,6 +48,28 @@ class LedgerEntry(models.Model):
             models.Index(fields=['membership', 'created_at']),
         ]
 
+    def save(self, *args, **kwargs):
+        """Append-only: a posted entry is immutable.
+
+        Mirrors services.models.DisbursementAuditLog. A correction is
+        modelled as a new offsetting entry (category ADJUSTMENT), never an
+        edit of the original. Bulk paths (QuerySet.update) still bypass
+        this, so those must not be used on LedgerEntry either.
+        """
+        if not self._state.adding:
+            raise PermissionError(
+                'LedgerEntry is append-only: a posted entry is immutable. '
+                'Model a correction as a new offsetting entry, never an '
+                'edit.'
+            )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise PermissionError(
+            'LedgerEntry is append-only: a posted entry cannot be '
+            'deleted. Reverse it with a new offsetting entry instead.'
+        )
+
     def __str__(self):
         return (
             f'{self.entry_type} {self.amount} — '

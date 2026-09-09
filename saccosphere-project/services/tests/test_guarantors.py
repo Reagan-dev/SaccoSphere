@@ -109,6 +109,27 @@ class GuarantorEndpointTestCase(TestCase):
         self.assertEqual(response.data['savings_total'], '50000.00')
         self.assertTrue(response.data['can_guarantee'])
 
+    def test_search_writes_consent_log(self):
+        """Disclosing a guarantor's savings records a DataConsentLog."""
+        from saccomanagement.models import DataConsentLog
+
+        self.client.force_authenticate(user=self.applicant)
+        response = self.client.get(
+            reverse(
+                'services:guarantor-search',
+                kwargs={'loan_id': self.loan.id},
+            ),
+            {'phone': '254722222222'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        log = DataConsentLog.objects.get(
+            data_type='GUARANTOR_SAVINGS_DISCLOSURE',
+        )
+        self.assertEqual(log.user, self.guarantor_user)
+        self.assertEqual(log.accessed_by, self.applicant)
+        self.assertIn(str(self.loan.id), log.reason)
+
     def test_search_rejects_partial_phone_match(self):
         """Test that guarantor search does not allow partial phone matching."""
         self.client.force_authenticate(user=self.applicant)

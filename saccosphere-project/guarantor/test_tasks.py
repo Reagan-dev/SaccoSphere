@@ -213,3 +213,29 @@ class ExternalGuarantorExpirySweepTest(ExternalGuarantorGroundTestCase):
 
         unblocked, _ = check_loan_guarantors_complete(self.loan)
         self.assertTrue(unblocked)
+
+
+@patch('guarantor.external_views.send_external_guarantor_sms_task.delay')
+class ExternalGuarantorConsentLogTest(ExternalGuarantorGroundTestCase):
+    def test_collecting_external_guarantor_pii_writes_consent_log(
+        self, _delay_mock,
+    ):
+        from saccomanagement.models import DataConsentLog
+
+        self.client.force_authenticate(user=self.borrower)
+        response = self.client.post(
+            reverse(
+                'services:external-guarantor-collection',
+                kwargs={'loan_id': self.loan.id},
+            ),
+            self._post_payload(),
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        external = ExternalGuarantor.objects.get(loan=self.loan)
+        log = DataConsentLog.objects.get(data_type='EXTERNAL_GUARANTOR_PII')
+        self.assertIsNone(log.user)
+        self.assertEqual(log.accessed_by, self.borrower)
+        self.assertIn(str(self.loan.id), log.reason)
+        self.assertIn(str(external.id), log.reason)

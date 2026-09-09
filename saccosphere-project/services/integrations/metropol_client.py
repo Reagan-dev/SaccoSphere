@@ -28,7 +28,11 @@ class MetropolClient:
     def __init__(self):
         self.api_key = settings.METROPOL_API_KEY
         self.api_url = settings.METROPOL_API_URL
-        self.mock = settings.DEBUG or settings.METROPOL_MOCK
+        # settings._resolve_metropol_mock already folds DEBUG in and, when
+        # DEBUG is False, refuses to let the app boot unless METROPOL_MOCK
+        # was explicitly set to False. So this value is trustworthy: mock
+        # is never silently on in production.
+        self.mock = settings.METROPOL_MOCK
 
     def check_credit(self, id_number, phone_number=None):
         """

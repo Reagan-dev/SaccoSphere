@@ -20,6 +20,7 @@ from .engines.npl_monitor import (
     get_arrears_bucket,
     resolve_cleared_npl_flags,
 )
+from .engines.penalties import compute_penalty
 from .models import (
     DisbursementAuditLog,
     Guarantor,
@@ -875,3 +876,120 @@ def _notify_sacco_admins(sacco, title, message):
         )
 
 
+
+
+@shared_task(name='services.tasks.purge_expired_crb_raw_response')
+def purge_expired_crb_raw_response():
+    """Clear CRB raw responses past their retention period.
+
+    Thin wrapper around the purge_expired_crb_raw_response management
+    command, mirroring accounts.tasks.cleanup_expired_kyc.
+    """
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    output = StringIO()
+    try:
+        call_command('purge_expired_crb_raw_response', stdout=output)
+        result = output.getvalue()
+        logger.info('CRB raw-response purge completed: %s', result)
+        return result
+    except Exception as exc:
+        logger.error('CRB raw-response purge failed: %s', exc)
+        raise
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='services.tasks.mark_overdue_instalments',
+)
+def mark_overdue_instalments(self):
+    """Flip past-due unpaid instalments to OVERDUE and (re)accrue penalties.
+
+    Nothing else in the codebase sets RepaymentSchedule.status = OVERDUE,
+    so send_repayment_reminders' overdue-alert branch (which filters on
+    status=OVERDUE, due_date=yesterday) never fires without this. Run it
+    daily, before send_repayment_reminders.
+
+    Only PENDING instalments are flipped - a PARTIAL instalment has a
+    payment in progress and RepaymentSchedule.is_overdue already excludes
+    it. penalty_amount is written here from the SACCO's own rule
+    (services.engines.penalties.compute_penalty) so the overdue reminder
+    can read a correct figure. PERCENT_PER_DAY rows already in OVERDUE are
+    re-accrued on each run.
+    """
+    from accounts.models import SaccoSettings
+
+    today = timezone.localdate()
+    flipped = 0
+    reaccrued = 0
+
+    newly_overdue = RepaymentSchedule.objects.filter(
+        status=RepaymentSchedule.Status.PENDING,
+        due_date__lt=today,
+    ).select_related('loan__membership__sacco')
+
+    for item in newly_overdue.iterator():
+        settings_obj = getattr(
+            item.loan.membership.sacco, 'settings', None,
+        )
+        penalty = compute_penalty(item, settings_obj, as_of=today)
+        RepaymentSchedule.objects.filter(pk=item.pk).update(
+            status=RepaymentSchedule.Status.OVERDUE,
+            penalty_amount=penalty,
+        )
+        flipped += 1
+
+    already_overdue = RepaymentSchedule.objects.filter(
+        status=RepaymentSchedule.Status.OVERDUE,
+        due_date__lt=today,
+    ).select_related('loan__membership__sacco')
+
+    for item in already_overdue.iterator():
+        settings_obj = getattr(
+            item.loan.membership.sacco, 'settings', None,
+        )
+        per_day = SaccoSettings.PenaltyType.PERCENT_PER_DAY
+        if settings_obj is None or settings_obj.penalty_type != per_day:
+            continue
+        penalty = compute_penalty(item, settings_obj, as_of=today)
+        if penalty != item.penalty_amount:
+            RepaymentSchedule.objects.filter(pk=item.pk).update(
+                penalty_amount=penalty,
+            )
+            reaccrued += 1
+
+    logger.info(
+        'Overdue sweep complete: flipped=%s, penalties re-accrued=%s.',
+        flipped,
+        reaccrued,
+    )
+    return {'flipped': flipped, 'penalties_reaccrued': reaccrued}
+
+
+@shared_task(name='services.tasks.send_repayment_reminders')
+def send_repayment_reminders(days=3):
+    """Run the repayment-reminder + overdue-alert workflow.
+
+    Thin wrapper around the send_repayment_reminders management command,
+    mirroring accounts.tasks.cleanup_expired_kyc. Wired into Celery beat
+    (config/celery.py) because the command was never scheduled anywhere.
+    """
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    output = StringIO()
+    try:
+        call_command(
+            'send_repayment_reminders', days=days, stdout=output,
+        )
+        result = output.getvalue()
+        logger.info('Repayment reminders run completed: %s', result)
+        return result
+    except Exception as exc:
+        logger.error('Repayment reminders run failed: %s', exc)
+        raise
