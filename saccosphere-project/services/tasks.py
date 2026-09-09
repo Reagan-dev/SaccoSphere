@@ -309,10 +309,14 @@ def _resolve_open_liquidity_alerts(sacco):
     name='services.tasks.flag_npl_arrears',
 )
 def flag_npl_arrears(self):
-    """Create staged NPL flags for active loans in arrears."""
+    """Stage NPL flags and drive the ACTIVE<->DEFAULTED transition.
+
+    DEFAULTED loans stay in the queryset so the loan can auto-recover
+    once its arrears clear.
+    """
     try:
         loans = Loan.objects.filter(
-            status=Loan.Status.ACTIVE,
+            status__in=[Loan.Status.ACTIVE, Loan.Status.DEFAULTED],
         ).select_related(
             'membership__user',
             'membership__sacco',
@@ -320,11 +324,19 @@ def flag_npl_arrears(self):
         checked_count = 0
         flags_created = 0
         flags_resolved = 0
+        loans_defaulted = 0
+        loans_recovered = 0
 
         for loan in loans:
             checked_count += 1
             flags_resolved += resolve_cleared_npl_flags(loan)
             bucket = get_arrears_bucket(loan)
+
+            transition = _apply_default_status_transition(loan, bucket)
+            if transition == 'defaulted':
+                loans_defaulted += 1
+            elif transition == 'recovered':
+                loans_recovered += 1
 
             if bucket is None:
                 continue
@@ -340,19 +352,58 @@ def flag_npl_arrears(self):
             _notify_npl_flag(loan, flag)
 
         logger.info(
-            'NPL arrears check complete. checked=%s flags=%s resolved=%s.',
+            'NPL arrears check complete. checked=%s flags=%s resolved=%s '
+            'defaulted=%s recovered=%s.',
             checked_count,
             flags_created,
             flags_resolved,
+            loans_defaulted,
+            loans_recovered,
         )
         return {
             'checked': checked_count,
             'flags_created': flags_created,
             'flags_resolved': flags_resolved,
+            'loans_defaulted': loans_defaulted,
+            'loans_recovered': loans_recovered,
         }
     except Exception as exc:
         logger.exception('NPL arrears check failed.')
         raise self.retry(exc=exc)
+
+
+def _apply_default_status_transition(loan, bucket):
+    """Flip a loan between ACTIVE and DEFAULTED off the 90-day bucket.
+
+    90 days past due on the earliest unpaid instalment is the SASRA
+    non-performing line and is exactly ``NPLFlag.ThresholdDays.NINETY`` /
+    the top bucket of ``get_arrears_bucket`` - no separate knob. Recovery
+    is automatic: once the worst arrears fall back below the 30-day
+    early-warning line (``bucket is None``) a DEFAULTED loan returns to
+    ACTIVE. DEFAULTED stays inside OUTSTANDING_LOAN_STATUSES, so guarantor
+    capacity is NOT released while a loan is in default.
+
+    Returns ``'defaulted'``, ``'recovered'`` or ``None``.
+    """
+    if loan.status == Loan.Status.ACTIVE and bucket == 90:
+        loan.status = Loan.Status.DEFAULTED
+        loan.save(update_fields=['status', 'updated_at'])
+        logger.info(
+            'Loan %s reached 90-day arrears: ACTIVE -> DEFAULTED.',
+            loan.id,
+        )
+        return 'defaulted'
+
+    if loan.status == Loan.Status.DEFAULTED and bucket is None:
+        loan.status = Loan.Status.ACTIVE
+        loan.save(update_fields=['status', 'updated_at'])
+        logger.info(
+            'Loan %s arrears cleared: DEFAULTED -> ACTIVE.',
+            loan.id,
+        )
+        return 'recovered'
+
+    return None
 
 
 def _notify_npl_flag(loan, flag):

@@ -29,7 +29,6 @@ from .mixins import SaccoScopedMixin
 APPROVAL_QUEUE_STATUSES = [
     Loan.Status.PENDING_APPROVAL,
     Loan.Status.UNDER_REVIEW,
-    Loan.Status.BOARD_REVIEW,
 ]
 
 
@@ -307,7 +306,6 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
         if new_status == Loan.Status.UNDER_REVIEW:
             allowed_from = {
                 Loan.Status.PENDING_APPROVAL,
-                Loan.Status.BOARD_REVIEW,
             }
             if current_status not in allowed_from:
                 raise ValidationError(

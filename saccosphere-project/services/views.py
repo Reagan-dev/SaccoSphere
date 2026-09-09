@@ -37,6 +37,7 @@ from saccomanagement.odpc_logging import (
     ConsentLogWriteError,
     create_data_consent_log,
 )
+from guarantor.utils import check_loan_guarantors_complete
 
 from .engines.guarantor_logic import (
     calculate_guarantee_capacity,
@@ -361,58 +362,6 @@ class LoanDetailView(RetrieveAPIView):
             'membership__sacco',
             'loan_type',
         )
-
-
-class LoanAdminAccessMixin:
-    """Filter loan querysets to SACCOs administered by the current user."""
-
-    def is_super_admin(self):
-        user = self.request.user
-        return (
-            user.is_staff
-            or user.roles.filter(
-                name=Role.SUPER_ADMIN, is_active=True,
-            ).exists()
-        )
-
-    def admin_sacco_ids(self):
-        return self.request.user.roles.filter(
-            name=Role.SACCO_ADMIN,
-            sacco__isnull=False,
-            is_active=True,
-        ).values_list('sacco_id', flat=True)
-
-    def filter_for_user_saccos(self, queryset):
-        if self.is_super_admin():
-            return queryset
-        return queryset.filter(membership__sacco_id__in=self.admin_sacco_ids())
-
-
-class LoanDisbursementAuditView(LoanAdminAccessMixin, APIView):
-    """Return the full disbursement audit trail for one loan."""
-
-    permission_classes = [IsAuthenticated, IsSaccoAdminOrSuperAdmin]
-
-    def get(self, request, loan_id):
-        loan = get_object_or_404(
-            self.filter_for_user_saccos(
-                Loan.objects.select_related(
-                    'membership__sacco',
-                    'membership__user',
-                ).prefetch_related('disbursement_audit_logs'),
-            ),
-            id=loan_id,
-        )
-        serializer = DisbursementAuditSerializer(
-            {
-                'loan_id': loan.id,
-                'current_status': loan.disbursement_status,
-                'mpesa_conversation_id': loan.mpesa_conversation_id,
-                'mpesa_transaction_id': loan.mpesa_transaction_id,
-                'audit_log': loan.disbursement_audit_logs.all(),
-            }
-        )
-        return Response(serializer.data)
 
 
 class LoanDisbursementDisputeListView(APIView):
@@ -921,9 +870,10 @@ class GuarantorRespondView(APIView):
         """
         Record guarantor approval or decline.
 
-        APPROVE: Validate capacity, update status, check if all approved,
-        transition loan to BOARD_REVIEW if yes, otherwise remain
-        GUARANTORS_PENDING.
+        APPROVE: Validate capacity, update status, then re-check the
+        shared guarantor-readiness gate (check_loan_guarantors_complete
+        - both count AND coverage). If it passes, move the loan to
+        PENDING_APPROVAL; otherwise leave it GUARANTORS_PENDING.
 
         DECLINE: Update status to DECLINED, reset loan to PENDING,
         notify applicant.
@@ -1002,23 +952,19 @@ class GuarantorRespondView(APIView):
                 # Recalculate and update guarantor's capacity.
                 update_guarantee_capacity(request.user)
 
-                # Check if all required guarantors are now APPROVED.
-                total_required = (
-                    loan.loan_type.min_guarantors
-                    if loan.loan_type
-                    else 0
-                )
-                approved_count = loan.guarantors.filter(
-                    status=Guarantor.Status.APPROVED,
-                ).count()
-
-                # If all required guarantors approved, move to approval.
-                if approved_count >= total_required and total_required > 0:
+                # Re-check the SAME gate the final approval step uses -
+                # count AND coverage - so the loan only advances when it
+                # is genuinely review-ready, never merely "enough heads".
+                is_ready, _reason = check_loan_guarantors_complete(loan)
+                if (
+                    is_ready
+                    and loan.status != Loan.Status.PENDING_APPROVAL
+                ):
                     loan.status = Loan.Status.PENDING_APPROVAL
                     loan.save(update_fields=['status', 'updated_at'])
 
                     # Notify SACCO admin that loan is ready for review.
-                    self._notify_sacco_admin_board_review(loan)
+                    self._notify_sacco_admin_review_ready(loan)
 
             elif action == 'DECLINE':
                 # Update guarantor status and timestamp.
@@ -1041,35 +987,33 @@ class GuarantorRespondView(APIView):
         serializer = GuarantorSerializer(guarantor)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    def _notify_sacco_admin_board_review(self, loan):
-        """Notify SACCO admin that loan is ready for board review."""
-        # Get all SACCO_ADMIN users for this loan's SACCO.
+    def _notify_sacco_admin_review_ready(self, loan):
+        """Notify each SACCO admin that the loan is ready for review."""
         from saccomanagement.models import Role
 
-        admin_role = Role.objects.filter(
-            name='SACCO_ADMIN',
+        admin_roles = Role.objects.filter(
+            name=Role.SACCO_ADMIN,
             sacco=loan.membership.sacco,
             is_active=True,
-        ).first()
+        ).select_related('user')
 
-        if admin_role:
-            for user in admin_role.users.all():
-                applicant_name = (
-                    f'{loan.membership.user.first_name} '
-                    f'{loan.membership.user.last_name}'
-                )
-                create_notification(
-                    user=user,
-                    title='Loan Ready for Board Review',
-                    message=(
-                        f'Loan of KES {loan.amount:.2f} from {applicant_name} '
-                        f'has all guarantor approvals and is ready for board '
-                        f'review.'
-                    ),
-                    category='LOAN',
-                    action_url=f'/loans/{loan.id}/',
-                    dispatch_async=False,
-                )
+        applicant_name = (
+            f'{loan.membership.user.first_name} '
+            f'{loan.membership.user.last_name}'
+        )
+        for role in admin_roles:
+            create_notification(
+                user=role.user,
+                title='Loan Ready for Review',
+                message=(
+                    f'Loan of KES {loan.amount:.2f} from {applicant_name} '
+                    f'has full guarantor cover and is ready for approval '
+                    f'review.'
+                ),
+                category='LOAN',
+                action_url=f'/loans/{loan.id}/',
+                dispatch_async=False,
+            )
 
     def _notify_applicant_guarantor_declined(self, loan, guarantor):
         """Notify loan applicant that a guarantor declined."""

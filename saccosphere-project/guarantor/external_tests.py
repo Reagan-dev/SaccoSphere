@@ -9,7 +9,7 @@ from accounts.models import Sacco, User
 from guarantor.models import ExternalGuarantor
 from saccomanagement.models import Role, SystemAuditLog
 from saccomembership.models import Membership
-from services.models import Loan, LoanType
+from services.models import CRBCheck, Loan, LoanType
 
 
 class ExternalGuarantorAdminReviewTest(APITestCase):
@@ -196,8 +196,9 @@ class LoanGuarantorGateTest(APITestCase):
             outstanding_balance=Decimal('50000.00'),
             interest_rate=Decimal('12.00'),
             term_months=12,
-            status=Loan.Status.BOARD_REVIEW,
+            status=Loan.Status.UNDER_REVIEW,
         )
+        CRBCheck.objects.create(loan=self.loan, listed_negative=False)
 
     def create_external_guarantor(self, status_value):
         return ExternalGuarantor.objects.create(
@@ -225,7 +226,7 @@ class LoanGuarantorGateTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.loan.refresh_from_db()
-        self.assertEqual(self.loan.status, Loan.Status.BOARD_REVIEW)
+        self.assertEqual(self.loan.status, Loan.Status.UNDER_REVIEW)
 
     def test_loan_approval_proceeds_when_all_guarantors_approved(self):
         self.create_external_guarantor(

@@ -408,8 +408,6 @@ class Loan(models.Model):
 
         UNDER_REVIEW = 'UNDER_REVIEW', 'Under review'
 
-        BOARD_REVIEW = 'BOARD_REVIEW', 'Board review'
-
         APPROVED = 'APPROVED', 'Approved'
 
         DISBURSED = 'DISBURSED', 'Disbursed'

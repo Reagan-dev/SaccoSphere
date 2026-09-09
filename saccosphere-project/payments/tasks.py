@@ -1140,6 +1140,8 @@ def _apply_loan_repayment(mpesa_transaction, transaction, amount):
                 transaction=transaction,
             )
 
+            _complete_loan_if_fully_repaid(loan, RepaymentSchedule)
+
         if unapplied_amount > Decimal('0.00'):
             _record_repayment_overpayment(
                 loan,
@@ -1147,6 +1149,41 @@ def _apply_loan_repayment(mpesa_transaction, transaction, amount):
                 transaction,
                 unapplied_amount,
             )
+
+
+def _complete_loan_if_fully_repaid(loan, repayment_schedule_model):
+    """Close a loan once its last instalment is settled.
+
+    The repayment-completion event is "no unpaid rows left on the
+    schedule" - not ``outstanding_balance == 0``, which the interest
+    portions of the instalments drive to zero a little early. When the
+    schedule is fully PAID the loan moves ACTIVE -> COMPLETED; the
+    post_save signal ``refresh_capacity_on_loan_completion`` then releases
+    every APPROVED guarantor's committed capacity on this loan (the
+    guarantee engine already excludes COMPLETED loans - this just
+    refreshes the cached GuaranteeCapacity row).
+    """
+    if loan.status != loan.Status.ACTIVE:
+        return
+
+    unpaid_statuses = [
+        repayment_schedule_model.Status.PENDING,
+        repayment_schedule_model.Status.OVERDUE,
+        repayment_schedule_model.Status.PARTIAL,
+    ]
+    schedule = repayment_schedule_model.objects.filter(loan=loan)
+    if not schedule.exists():
+        return
+    if schedule.filter(status__in=unpaid_statuses).exists():
+        return
+
+    loan.status = loan.Status.COMPLETED
+    loan.outstanding_balance = Decimal('0.00')
+    loan.save(update_fields=['status', 'outstanding_balance', 'updated_at'])
+    logger.info(
+        'Loan %s fully repaid: schedule settled, moved to COMPLETED.',
+        loan.id,
+    )
 
 
 def _record_repayment_overpayment(

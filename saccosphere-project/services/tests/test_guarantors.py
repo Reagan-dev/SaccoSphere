@@ -413,12 +413,13 @@ class GuarantorWorkflowTestCase(TestCase):
             available_capacity=Decimal('40000.00'),
         )
 
-    def test_approve_all_guarantors_moves_to_board_review(self):
+    def test_approve_all_guarantors_moves_to_pending_approval(self):
         """
-        Test that approving all required guarantors moves loan to BOARD_REVIEW.
+        Approving enough guarantors moves the loan to PENDING_APPROVAL.
 
-        When the minimum number of guarantors (loan_type.min_guarantors) approve,
-        the loan should transition from GUARANTORS_PENDING to BOARD_REVIEW.
+        Once the shared readiness gate passes (>= min_guarantors AND full
+        coverage), the loan transitions from GUARANTORS_PENDING to
+        PENDING_APPROVAL.
         """
         self.client.force_authenticate(user=self.guarantor_1)
         url = reverse(
@@ -465,7 +466,8 @@ class GuarantorWorkflowTestCase(TestCase):
         self.guarantor_req_2.refresh_from_db()
         self.assertEqual(self.guarantor_req_2.status, Guarantor.Status.APPROVED)
 
-        # Now loan should be BOARD_REVIEW (all 2 required approved)
+        # Now loan should be PENDING_APPROVAL (all 2 required approved,
+        # coverage met)
         self.loan.refresh_from_db()
         self.assertEqual(self.loan.status, Loan.Status.PENDING_APPROVAL)
 
@@ -588,10 +590,10 @@ class GuarantorWorkflowTestCase(TestCase):
 # workflow in the context of loan applications that require guarantors.
 #
 # Key test scenarios:
-# 1. test_approve_all_guarantors_moves_to_board_review:
+# 1. test_approve_all_guarantors_moves_to_pending_approval:
 #    - Creates loan with min_guarantors=2 and two PENDING guarantor requests.
 #    - Approves first guarantor: loan stays GUARANTORS_PENDING (1 of 2).
-#    - Approves second guarantor: loan transitions to BOARD_REVIEW (all approved).
+#    - Approves second guarantor: loan transitions to PENDING_APPROVAL (all approved, covered).
 #    - Validates: Guarantor.status, responded_at timestamps, Loan.status.
 #
 # 2. test_decline_resets_loan_to_pending:
@@ -625,7 +627,7 @@ class GuarantorWorkflowTestCase(TestCase):
 # 4. POST /api/v1/services/loans/{loan_id}/guarantors/{bob_id}/respond/ as Bob
 #    with {\"action\": \"APPROVE\"} → Loan still GUARANTORS_PENDING.
 # 5. POST /api/v1/services/loans/{loan_id}/guarantors/{carol_id}/respond/ as Carol
-#    with {\"action\": \"APPROVE\"} → Loan transitions to BOARD_REVIEW.
+#    with {\"action\": \"APPROVE\"} → Loan transitions to PENDING_APPROVAL.
 # 6. Check notifications in DB: SACCO_ADMIN should have \"Loan Ready for Board Review\".
 #
 # Design decisions:

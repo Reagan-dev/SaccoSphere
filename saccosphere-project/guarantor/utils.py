@@ -42,6 +42,19 @@ def build_guarantor_sms_message(external_guarantor):
 
 
 def check_loan_guarantors_complete(loan):
+    """Single guarantor-readiness gate: BOTH count AND coverage.
+
+    Applied identically at the two decision points a loan passes through -
+    GuarantorRespondView (entry into PENDING_APPROVAL) and the SACCO
+    admin's final APPROVED gate - so a loan can never waste a review
+    cycle by advancing under-guaranteed, nor be disbursed under-covered.
+
+    Returns ``(is_complete, reason)``. A loan is complete when:
+      1. no external guarantor is still mid-flow (pending admin review);
+      2. at least ``loan_type.min_guarantors`` guarantors are APPROVED
+         (internal APPROVED + external APPROVED_BY_ADMIN); and
+      3. the APPROVED guarantee amounts cover the full loan principal.
+    """
     pending_external_statuses = [
         loan.external_guarantors.model.Status.PENDING_SMS,
         loan.external_guarantors.model.Status.SMS_SENT,
@@ -65,12 +78,31 @@ def check_loan_guarantors_complete(loan):
 
     from services.models import Guarantor
 
-    internal_guaranteed = loan.guarantors.filter(
+    internal_approved = loan.guarantors.filter(
         status=Guarantor.Status.APPROVED,
-    ).aggregate(total=Sum('guarantee_amount'))['total'] or 0
-    external_guaranteed = loan.external_guarantors.filter(
+    )
+    external_approved = loan.external_guarantors.filter(
         status=loan.external_guarantors.model.Status.APPROVED_BY_ADMIN,
-    ).aggregate(total=Sum('guarantee_amount'))['total'] or 0
+    )
+
+    min_guarantors = getattr(loan.loan_type, 'min_guarantors', 0) or 0
+    approved_count = internal_approved.count() + external_approved.count()
+    if approved_count < min_guarantors:
+        shortfall = min_guarantors - approved_count
+        return (
+            False,
+            (
+                f'Needs {shortfall} more approved guarantor(s) '
+                f'({approved_count}/{min_guarantors}).'
+            ),
+        )
+
+    internal_guaranteed = internal_approved.aggregate(
+        total=Sum('guarantee_amount'),
+    )['total'] or 0
+    external_guaranteed = external_approved.aggregate(
+        total=Sum('guarantee_amount'),
+    )['total'] or 0
     total_guaranteed = internal_guaranteed + external_guaranteed
 
     if total_guaranteed < loan.amount:
