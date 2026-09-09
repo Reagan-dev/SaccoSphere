@@ -74,7 +74,7 @@ python-dateutil==2.9.0.post0
 python-decouple==3.8
 python-engineio==4.13.3
 python-json-logger==2.0.7
-python-socketio==5.16.31
+python-socketio==5.16.4
 pytz==2026.2
 PyYAML==6.0.3
 pyzmq==27.1.0
