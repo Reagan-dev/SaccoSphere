@@ -11,6 +11,25 @@ from services.models import Loan, Saving
 
 ZERO = Decimal('0')
 
+# Loan statuses where the member still owes, or is committed to owe, money.
+# Everything except COMPLETED (repaid) and REJECTED (never advanced). A
+# loan anywhere in the approval pipeline already reserves its requested
+# amount (LoanApplySerializer.create sets outstanding_balance=amount), so
+# two concurrent applications can't each be sized against a limit that
+# ignores the other.
+OUTSTANDING_LOAN_STATUSES = (
+    Loan.Status.PENDING,
+    Loan.Status.GUARANTORS_PENDING,
+    Loan.Status.PENDING_APPROVAL,
+    Loan.Status.UNDER_REVIEW,
+    Loan.Status.BOARD_REVIEW,
+    Loan.Status.APPROVED,
+    Loan.Status.DISBURSED,
+    Loan.Status.DISBURSEMENT_PENDING,
+    Loan.Status.ACTIVE,
+    Loan.Status.DEFAULTED,
+)
+
 
 def _get_loan_multiplier(sacco):
     """Return loan multiplier from SaccoSettings or the SACCO default."""
@@ -18,6 +37,34 @@ def _get_loan_multiplier(sacco):
     if settings is not None:
         return Decimal(settings.loan_multiplier)
     return Decimal(sacco.loan_multiplier)
+
+
+def lock_member_loan_capacity_rows(membership):
+    """Lock the savings + outstanding-loan rows calculate_loan_limit reads.
+
+    Must be called inside a transaction, immediately before
+    calculate_loan_limit, so two concurrent loan applications from the
+    same member serialise: the second request blocks here until the first
+    commits its new loan row, then re-reads a limit that already accounts
+    for it instead of a stale snapshot.
+
+    Lock order is savings first, then loans, each ordered by pk. Any code
+    that locks both row types for a member must use this same order to
+    avoid deadlocks.
+    """
+    list(
+        Saving.objects.select_for_update()
+        .filter(membership=membership, status=Saving.Status.ACTIVE)
+        .order_by('pk')
+    )
+    list(
+        Loan.objects.select_for_update()
+        .filter(
+            membership=membership,
+            status__in=OUTSTANDING_LOAN_STATUSES,
+        )
+        .order_by('pk')
+    )
 
 
 def calculate_loan_limit(user, sacco):
@@ -82,15 +129,15 @@ def calculate_loan_limit(user, sacco):
 
     gross_limit = total_savings * _get_loan_multiplier(sacco)
 
-    active_loans = Loan.objects.select_related(
+    outstanding_loans = Loan.objects.select_related(
         'membership',
         'membership__sacco',
         'loan_type',
     ).filter(
         membership=membership,
-        status=Loan.Status.ACTIVE,
+        status__in=OUTSTANDING_LOAN_STATUSES,
     )
-    existing_balance = active_loans.aggregate(
+    existing_balance = outstanding_loans.aggregate(
         total=Sum('outstanding_balance'),
     )['total'] or ZERO
     net_limit = max(gross_limit - existing_balance, ZERO)
