@@ -1,7 +1,13 @@
+import logging
 from datetime import timedelta
 
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from amqp.exceptions import ConnectionError as AmqpConnectionError
+from kombu.exceptions import OperationalError as KombuOperationalError
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from rest_framework import serializers
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
@@ -23,7 +29,20 @@ from .external_serializers import (
     ExternalGuarantorResponseSerializer,
 )
 from .models import ExternalGuarantor
-from .utils import generate_response_token, send_guarantor_sms
+from .tasks import send_external_guarantor_sms_task
+from .utils import generate_response_token
+
+
+logger = logging.getLogger('saccosphere.guarantor')
+
+# Same set services/payments use to tell "broker briefly unavailable"
+# from a real error.
+BROKER_CONNECTION_ERRORS = (
+    AmqpConnectionError,
+    KombuOperationalError,
+    RedisConnectionError,
+    RedisTimeoutError,
+)
 
 
 def get_admin_sacco(request):
@@ -76,18 +95,44 @@ class ExternalGuarantorCreateView(CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        external_guarantor = serializer.save(
-            response_token=generate_response_token(),
-            response_token_expires_at=timezone.now() + timedelta(hours=48),
-            status=ExternalGuarantor.Status.PENDING_SMS,
-        )
+        try:
+            # Nested savepoint so a partial-unique-constraint violation
+            # surfaces as a clean 400 instead of poisoning the request.
+            with transaction.atomic():
+                external_guarantor = serializer.save(
+                    response_token=generate_response_token(),
+                    response_token_expires_at=(
+                        timezone.now() + timedelta(hours=48)
+                    ),
+                    status=ExternalGuarantor.Status.PENDING_SMS,
+                )
+        except IntegrityError:
+            # Partial unique constraint on (loan, id_number) for
+            # in-play statuses: this person is already a live guarantor
+            # candidate for this loan.
+            return Response(
+                {
+                    'id_number': (
+                        'This person is already a guarantor on this loan.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        sms_sent = send_guarantor_sms(external_guarantor)
-        if sms_sent:
-            external_guarantor.status = ExternalGuarantor.Status.SMS_SENT
-            external_guarantor.save(update_fields=['status', 'updated_at'])
-            self._notify_applicant_sms_sent(external_guarantor)
-            external_guarantor.refresh_from_db()
+        # Delivery is async with retry (guarantor.tasks); the request
+        # returns with the row still PENDING_SMS and the task flips it to
+        # SMS_SENT once the gateway accepts it. A broker hiccup must not
+        # fail the request - the periodic expiry sweep is the backstop.
+        try:
+            send_external_guarantor_sms_task.delay(
+                str(external_guarantor.id),
+            )
+        except BROKER_CONNECTION_ERRORS:
+            logger.exception(
+                'Failed to enqueue external guarantor SMS for '
+                'external_guarantor_id=%s.',
+                external_guarantor.id,
+            )
 
         response_serializer = ExternalGuarantorDetailSerializer(
             external_guarantor,
@@ -96,20 +141,6 @@ class ExternalGuarantorCreateView(CreateAPIView):
         return Response(
             response_serializer.data,
             status=status.HTTP_201_CREATED,
-        )
-
-    def _notify_applicant_sms_sent(self, external_guarantor):
-        create_notification(
-            user=external_guarantor.requested_by,
-            title='Guarantor SMS Sent',
-            message=(
-                f'{external_guarantor.full_name} has been sent an SMS to '
-                'approve your guarantee request.'
-            ),
-            category=Notification.Category.GUARANTOR,
-            related_object_type='ExternalGuarantor',
-            related_object_id=str(external_guarantor.id),
-            dispatch_async=False,
         )
 
 

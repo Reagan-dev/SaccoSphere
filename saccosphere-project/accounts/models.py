@@ -805,6 +805,14 @@ class SaccoSettings(models.Model):
 
     loan_multiplier = models.PositiveSmallIntegerField(default=3)
 
+    # Intentionally SACCO-wide, not per-LoanType. Whether a SACCO accepts
+    # external (non-member) guarantors is a governance / risk-appetite
+    # decision the SACCO makes once - it flows from bylaws and the CRB
+    # relationship, not from the individual loan product. No product
+    # requirement for a per-product override has surfaced; if one does,
+    # add a nullable LoanType.guarantor_type_allowed that falls back to
+    # this value and have guarantor/external_serializers.py +
+    # services/views.py consult the LoanType first.
     guarantor_type_allowed = models.CharField(
 
         max_length=20,
