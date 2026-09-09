@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 from accounts.models import Sacco, User
 from saccomanagement.models import DataConsentLog, Role, SystemAuditLog
 from saccomembership.models import Membership
-from services.models import Loan, LoanType
+from services.models import CRBCheck, Loan, LoanType
 
 
 class AuditLoggingTestCase(TestCase):
@@ -60,7 +60,7 @@ class AuditLoggingTestCase(TestCase):
         self.client.force_authenticate(user=self.admin)
 
     def test_loan_approval_creates_audit_log(self):
-        """Approving a loan should create an UPDATE audit log."""
+        """Approving a loan should create a LOAN_APPROVED audit log."""
         loan = Loan.objects.create(
             membership=self.membership,
             loan_type=self.loan_type,
@@ -69,6 +69,15 @@ class AuditLoggingTestCase(TestCase):
             term_months=12,
             outstanding_balance=Decimal('0.00'),
             status=Loan.Status.UNDER_REVIEW,
+        )
+        CRBCheck.objects.create(
+            loan=loan,
+            score=700,
+            band=CRBCheck.CreditBand.GOOD,
+            listed_negative=False,
+            provider='metropol',
+            reference='AUD-CRB-REF001',
+            checked_by=self.admin,
         )
 
         response = self.client.patch(

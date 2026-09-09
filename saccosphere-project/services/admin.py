@@ -1,4 +1,6 @@
-from django.contrib import admin
+from django import forms
+from django.contrib import admin, messages
+from django.db import transaction
 
 from .models import (
     CRBCheck,
@@ -113,6 +115,19 @@ class LoanTypeAdmin(admin.ModelAdmin):
     search_fields = ('name', 'sacco__name')
 
 
+class DisbursementRetryActionForm(admin.helpers.ActionForm):
+    reason = forms.CharField(
+        required=False,
+        max_length=500,
+        widget=forms.TextInput(
+            attrs={
+                'placeholder': 'Reason (required to retry a disbursement)',
+                'size': 60,
+            },
+        ),
+    )
+
+
 @admin.register(Loan)
 class LoanAdmin(admin.ModelAdmin):
     list_display = (
@@ -123,14 +138,132 @@ class LoanAdmin(admin.ModelAdmin):
         'interest_rate',
         'term_months',
         'status',
+        'disbursement_status',
         'created_at',
     )
-    list_filter = ('status', 'loan_type', 'created_at')
+    list_filter = ('status', 'disbursement_status', 'loan_type', 'created_at')
     search_fields = (
         'membership__user__email',
         'membership__member_number',
         'membership__sacco__name',
     )
+    action_form = DisbursementRetryActionForm
+    actions = ['retry_failed_disbursement']
+
+    # Disbursement is fraud-aware, money-movement state: it must only ever
+    # change through the locked, idempotency-checked code path in
+    # payments.disbursements or the audited retry_failed_disbursement
+    # action below - never by a direct field edit in this form, which
+    # previously let a false-FAILED timeout be hand-reset and silently
+    # re-trigger a real M-Pesa payout with no audit trail.
+    readonly_fields = (
+        'disbursement_status',
+        'disbursement_idempotency_key',
+        'disbursement_transaction',
+        'mpesa_transaction_record',
+        'mpesa_conversation_id',
+        'mpesa_transaction_id',
+        'disbursed_amount',
+        'disbursement_date',
+        'disbursement_initiated_at',
+        'disbursement_confirmed_at',
+        'member_confirmation_sent_at',
+        'member_confirmed_at',
+        'member_disputed_at',
+        'dispute_reason',
+    )
+
+    # Note: a richer retry workflow (reason taxonomy, a required second
+    # approver) may be worth adding once this has real-world use; the
+    # current free-text reason plus the append-only audit row is the
+    # agreed minimum for the compliance record.
+    @admin.action(
+        description=(
+            'Unlock selected loans for a disbursement retry (reason required)'
+        ),
+    )
+    def retry_failed_disbursement(self, request, queryset):
+        from services.models import DisbursementAuditLog
+
+        if not request.user.is_superuser:
+            self.message_user(
+                request,
+                'Only a super admin can unlock a disbursement for retry.',
+                level=messages.ERROR,
+            )
+            return
+
+        reason = (request.POST.get('reason') or '').strip()
+        if len(reason) < 10:
+            self.message_user(
+                request,
+                'A reason of at least 10 characters is required to '
+                'retry a disbursement.',
+                level=messages.ERROR,
+            )
+            return
+
+        # Only FAILED / PENDING_CONFIRMATION may be unlocked. This is the
+        # idempotency check re-run: a still-live attempt (INITIATING /
+        # INITIATED / DISBURSED / ...) is never stomped, and clearing the
+        # key + resetting to PENDING re-opens exactly one fresh
+        # compare-and-swap slot in initiate_b2c_loan_disbursement.
+        recoverable_statuses = {
+            Loan.DisbursementStatus.FAILED,
+            Loan.DisbursementStatus.PENDING_CONFIRMATION,
+        }
+        retried = 0
+        skipped = 0
+        for loan in queryset:
+            with transaction.atomic():
+                locked_loan = Loan.objects.select_for_update(
+                    of=('self',),
+                ).get(id=loan.id)
+                if (
+                    locked_loan.disbursement_status
+                    not in recoverable_statuses
+                ):
+                    skipped += 1
+                    continue
+
+                previous_status = locked_loan.disbursement_status
+                locked_loan.disbursement_status = (
+                    Loan.DisbursementStatus.PENDING
+                )
+                locked_loan.disbursement_idempotency_key = None
+                locked_loan.save(
+                    update_fields=[
+                        'disbursement_status',
+                        'disbursement_idempotency_key',
+                        'updated_at',
+                    ],
+                )
+                DisbursementAuditLog.objects.create(
+                    loan=locked_loan,
+                    event='RESOLVED_BY_ADMIN',
+                    actor=request.user,
+                    actor_role='super_admin',
+                    details={
+                        'action': 'disbursement_retry_unlocked',
+                        'reason': reason,
+                        'previous_disbursement_status': previous_status,
+                    },
+                )
+                retried += 1
+
+        if retried:
+            self.message_user(
+                request,
+                f'{retried} loan(s) unlocked for a disbursement retry.',
+                level=messages.SUCCESS,
+            )
+        if skipped:
+            self.message_user(
+                request,
+                f'{skipped} loan(s) skipped - not in a recoverable '
+                'disbursement state (FAILED or PENDING_CONFIRMATION).',
+                level=messages.WARNING,
+            )
 
 
 @admin.register(DisbursementAuditLog)

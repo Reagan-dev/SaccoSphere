@@ -312,7 +312,11 @@ def reconcile_stale_mpesa_transactions():
     
     cutoff = timezone.now() - timezone.timedelta(minutes=threshold_minutes)
     
-    # Find STK transactions in non-terminal states older than threshold
+    # Find STK transactions in non-terminal states older than threshold.
+    # B2C disbursements are handled separately, below, by
+    # _reconcile_stale_b2c_disbursements: Daraja has no synchronous B2C
+    # status query, so the STK query_stk_status path here cannot resolve
+    # them.
     stale_stk_transactions = MpesaTransaction.objects.filter(
         transaction_type=MpesaTransaction.TransactionType.STK_PUSH,
         transaction__status__in={
@@ -455,13 +459,137 @@ def reconcile_stale_mpesa_transactions():
             )
             failed_count += 1
     
+    b2c_escalated = _reconcile_stale_b2c_disbursements(cutoff, max_attempts)
+
     logger.info(
-        'M-Pesa reconciliation completed: %d reconciled, %d failed.',
+        'M-Pesa reconciliation completed: %d reconciled, %d failed, '
+        '%d B2C disbursements escalated for manual confirmation.',
         reconciled_count,
         failed_count,
+        b2c_escalated,
     )
-    
-    return {'reconciled': reconciled_count, 'failed': failed_count}
+
+    return {
+        'reconciled': reconciled_count,
+        'failed': failed_count,
+        'b2c_escalated': b2c_escalated,
+    }
+
+
+def _reconcile_stale_b2c_disbursements(cutoff, max_attempts):
+    """Surface B2C disbursements stuck in PENDING_CONFIRMATION.
+
+    A B2C initiate that timed out is ambiguous: Safaricom may or may not
+    have paid the member. Daraja exposes no synchronous transaction-status
+    query we can call here (its Transaction Status API replies only via a
+    separate async result callback, which is not wired up), so this
+    function cannot auto-resolve the outcome.
+
+    What it does: after `max_attempts` reconciliation passes with no
+    result callback arriving, it moves the loan from PENDING_CONFIRMATION
+    to UNDER_REVIEW, writes an append-only DisbursementAuditLog entry and
+    logs at ERROR so the attempt stops looking "safe to retry" and enters
+    the super-admin queue. Final resolution is manual - see
+    docs/runbooks/b2c-disbursement-timeout.md.
+
+    Returns the number of disbursements escalated this run.
+    """
+    from services.models import DisbursementAuditLog, Loan
+
+    stale_b2c = MpesaTransaction.objects.filter(
+        transaction_type=MpesaTransaction.TransactionType.B2C,
+        related_loan__disbursement_status=(
+            Loan.DisbursementStatus.PENDING_CONFIRMATION
+        ),
+        created_at__lt=cutoff,
+    ).select_related('transaction', 'related_loan')
+
+    escalated_count = 0
+
+    for mpesa_transaction in stale_b2c:
+        transaction = mpesa_transaction.transaction
+        loan_id = mpesa_transaction.related_loan_id
+
+        try:
+            with db_transaction.atomic():
+                loan = Loan.objects.select_for_update(of=('self',)).get(
+                    id=loan_id,
+                )
+
+                # A late result callback may have resolved it already.
+                if loan.disbursement_status != (
+                    Loan.DisbursementStatus.PENDING_CONFIRMATION
+                ):
+                    continue
+
+                attempts = transaction.metadata.get(
+                    'reconciliation_attempts',
+                    0,
+                ) + 1
+                transaction.metadata = {
+                    **transaction.metadata,
+                    'reconciliation_attempts': attempts,
+                    'last_reconciled_at': timezone.now().isoformat(),
+                }
+                transaction.save(update_fields=['metadata', 'updated_at'])
+
+                if attempts < max_attempts:
+                    logger.warning(
+                        'B2C disbursement for loan %s still awaiting an '
+                        'M-Pesa result callback (reconciliation attempt '
+                        '%d/%d, conversation_id=%s).',
+                        loan_id,
+                        attempts,
+                        max_attempts,
+                        mpesa_transaction.conversation_id,
+                    )
+                    continue
+
+                loan.disbursement_status = (
+                    Loan.DisbursementStatus.UNDER_REVIEW
+                )
+                loan.save(
+                    update_fields=['disbursement_status', 'updated_at'],
+                )
+                DisbursementAuditLog.objects.create(
+                    loan=loan,
+                    event='ESCALATED_TO_SUPERADMIN',
+                    actor=None,
+                    actor_role='system',
+                    mpesa_ref=mpesa_transaction.conversation_id or '',
+                    details={
+                        'phase': 'reconciliation',
+                        'reason': 'b2c_initiation_timeout_unconfirmed',
+                        'reconciliation_attempts': attempts,
+                        'idempotency_key': (
+                            str(loan.disbursement_idempotency_key)
+                            if loan.disbursement_idempotency_key
+                            else None
+                        ),
+                        'runbook': (
+                            'docs/runbooks/b2c-disbursement-timeout.md'
+                        ),
+                    },
+                )
+                escalated_count += 1
+
+            logger.error(
+                'B2C disbursement for loan %s timed out at initiation and '
+                'has not been confirmed after %d reconciliation attempts. '
+                'Moved to UNDER_REVIEW. Manual confirmation required - see '
+                'docs/runbooks/b2c-disbursement-timeout.md '
+                '(conversation_id=%s).',
+                loan_id,
+                attempts,
+                mpesa_transaction.conversation_id,
+            )
+        except Exception:
+            logger.exception(
+                'Failed to reconcile stale B2C disbursement for loan %s.',
+                loan_id,
+            )
+
+    return escalated_count
 
 
 def _callback_already_processed(mpesa_transaction, transaction):

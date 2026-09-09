@@ -174,15 +174,25 @@ class AmortizationEngineTestCase(TestCase):
         self.assertEqual(schedule[0]['due_date'], date(2024, 1, 31))
 
     def test_due_date_adjustment(self):
-        """Test due date adjustment when due_day exceeds month length."""
+        """Test due date adjustment when due_day exceeds month length.
+
+        Intended rule (compute_due_date, services/engines/amortization.py):
+        start_date.day >= due_day rolls the first instalment into the next
+        month; due_day is then clamped to that month's last day if it
+        doesn't fit. start_date=Jan 31 with due_day=31 rolls to February,
+        which only has 29 days in this leap year, so the clamp must fire.
+        This is distinct from test_month_end_handling, which uses a
+        start_date.day < due_day so the instalment stays in the *current*
+        month instead of rolling over.
+        """
         schedule = generate_repayment_schedule(
             loan_amount=Decimal('10000.00'),
             annual_interest_rate=Decimal('12.0'),
             term_months=1,
-            start_date=date(2024, 1, 30),  # Before due_day
-            due_day=31  # February doesn't have 31 days
+            start_date=date(2024, 1, 31),  # On/after due_day -> rolls over
+            due_day=31,  # February doesn't have 31 days
         )
-        
+
         # Should adjust to last day of February (29 in leap year 2024)
         self.assertEqual(schedule[0]['due_date'], date(2024, 2, 29))
 

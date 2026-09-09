@@ -10,10 +10,15 @@ logger = logging.getLogger('saccosphere.payments')
 
 
 class DarajaError(Exception):
-    def __init__(self, message, response_code=None):
+    def __init__(self, message, response_code=None, is_timeout=False):
         super().__init__(message)
         self.message = message
         self.response_code = response_code
+        # True only when the outbound request timed out before Safaricom
+        # returned a response. The request may still have been accepted and
+        # processed, so callers must treat this as "outcome unknown", never
+        # as a clean failure that is safe to retry.
+        self.is_timeout = is_timeout
 
 
 def format_phone_for_daraja(e164_number: str) -> str:
@@ -339,6 +344,7 @@ class DarajaClient:
             )
             raise DarajaError(
                 'M-Pesa request timed out. Please try again.',
+                is_timeout=True,
             ) from exc
         except requests.exceptions.ConnectionError as exc:
             logger.error(

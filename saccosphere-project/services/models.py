@@ -430,7 +430,12 @@ class Loan(models.Model):
 
     class DisbursementStatus(models.TextChoices):
         PENDING = 'PENDING', 'Pending'
+        INITIATING = 'INITIATING', 'Claimed, Calling M-Pesa'
         INITIATED = 'INITIATED', 'B2C Initiated'
+        PENDING_CONFIRMATION = (
+            'PENDING_CONFIRMATION',
+            'M-Pesa Response Unknown (Timed Out)',
+        )
         DISBURSED = 'DISBURSED', 'M-Pesa Confirmed'
         MEMBER_CONFIRMED = 'MEMBER_CONFIRMED', 'Member Confirmed'
         AUTO_CONFIRMED = 'AUTO_CONFIRMED', 'Auto-Confirmed by M-Pesa'
@@ -541,6 +546,20 @@ class Loan(models.Model):
         choices=DisbursementStatus.choices,
         default=DisbursementStatus.PENDING,
         help_text='Current fraud-aware disbursement status.',
+    )
+
+    disbursement_idempotency_key = models.UUIDField(
+        null=True,
+        blank=True,
+        unique=True,
+        editable=False,
+        help_text=(
+            'Server-generated key stamped when a B2C disbursement attempt '
+            'is claimed under lock. A unique DB constraint backstops the '
+            'row lock so a second concurrent attempt for this loan can '
+            'never be recorded, even if application code fails to lock '
+            'correctly.'
+        ),
     )
 
     mpesa_conversation_id = models.CharField(

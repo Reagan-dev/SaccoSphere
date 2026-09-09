@@ -255,6 +255,73 @@ class WebhookCallbackView(APIView):
         )
 ```
 
+## Idempotent Outbound Payout Initiation Pattern (Compare-and-Swap)
+
+### Definition
+The patterns above protect *inbound* callback processing. Initiating an
+*outbound* real-money payout (M-Pesa B2C loan disbursement) needs the
+mirror-image guarantee: a duplicated, retried, or concurrent request for
+the same loan must never trigger a second Safaricom payout.
+
+### Implementation in SaccoSphere
+
+**File:** `payments/disbursements.py`, `initiate_b2c_loan_disbursement`
+
+**Guards (all three, in one `db_transaction.atomic()` block):**
+
+1. **Row lock:** `Loan.objects.select_for_update(of=('self',)).get(...)`
+   serialises concurrent callers on PostgreSQL (Railway).
+2. **Compare-and-swap claim:** the disbursement slot is taken with a
+   single conditional UPDATE and the affected-row count is checked:
+
+   ```python
+   claimed_rows = Loan.objects.filter(
+       pk=loan.pk,
+       disbursement_status=Loan.DisbursementStatus.PENDING,
+   ).update(
+       disbursement_status=Loan.DisbursementStatus.INITIATING,
+       disbursement_idempotency_key=uuid4(),
+       disbursement_initiated_at=now,
+       updated_at=now,
+   )
+   if not claimed_rows:
+       return False, {...}, 409   # lost the race / duplicate
+   ```
+
+   This is atomic on **every** backend, including ones where
+   `select_for_update()` is a no-op, so the guarantee does not depend on
+   the row lock actually locking.
+3. **Unique constraint:** `Loan.disbursement_idempotency_key` is
+   `unique`, a schema-level backstop, and the key is echoed in the API
+   response, `Transaction.metadata`, and the `DisbursementAuditLog` row
+   so a retry can be correlated to the original attempt.
+
+**Outbound HTTP call is outside the transaction** - holding a DB lock
+across a slow network call is its own hazard.
+
+**Timeout handling:** a B2C initiate timeout raises
+`DarajaError(is_timeout=True)`. It is recorded as `PENDING_CONFIRMATION`,
+never `FAILED` (Safaricom may have paid), and left for
+`_reconcile_stale_b2c_disbursements` + the manual runbook
+(`docs/runbooks/b2c-disbursement-timeout.md`).
+
+**Legitimate retry:** only the audited admin action
+`LoanAdmin.retry_failed_disbursement` re-opens the CAS slot, by resetting
+`disbursement_status` to `PENDING` and clearing the key.
+
+**Test Coverage:**
+- `B2CInitiationConcurrencyRegressionTests`
+  (`payments/tests/test_payments.py`) - two real threads/connections,
+  asserts exactly one Daraja call and exactly one `DisbursementAuditLog`
+  row (PostgreSQL; skipped on SQLite).
+- `B2CDisbursementIdempotencyTests` - deterministic duplicate/retry
+  rejection, runs on every backend.
+
+### When to Use This Pattern
+Use for any endpoint that initiates a non-reversible outbound side effect
+(a payout, an external charge, sending money) keyed to a row whose state
+machine has a distinct "not started yet" value.
+
 ## Summary of Key Principles
 
 1. **Never acknowledge success before durable storage:** Always persist the payload before returning 200 to the provider.
