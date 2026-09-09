@@ -3,7 +3,6 @@
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Sum
 from django.utils import timezone
 
 from guarantor.models import ExternalGuarantor
@@ -21,19 +20,28 @@ LOAN_FINAL_STATUSES = {
 
 
 def build_guarantors_summary(loan):
-    """Return internal/external guarantor counts and total coverage."""
-    internal_approved = loan.guarantors.filter(
-        status=Guarantor.Status.APPROVED,
-    ).count()
-    external_approved = loan.external_guarantors.filter(
-        status=ExternalGuarantor.Status.APPROVED_BY_ADMIN,
-    ).count()
-    internal_amount = loan.guarantors.filter(
-        status=Guarantor.Status.APPROVED,
-    ).aggregate(total=Sum('guarantee_amount'))['total'] or Decimal('0.00')
-    external_amount = loan.external_guarantors.filter(
-        status=ExternalGuarantor.Status.APPROVED_BY_ADMIN,
-    ).aggregate(total=Sum('guarantee_amount'))['total'] or Decimal('0.00')
+    """Return internal/external guarantor counts and total coverage.
+
+    Iterates the related managers with .all() so that a caller which has
+    prefetch_related('guarantors', 'external_guarantors') - the approval
+    queue does - pays zero extra queries per loan. Using .filter()/
+    .count()/.aggregate() here would re-hit the DB and bypass the
+    prefetch (~4 queries per loan on the queue).
+    """
+    internal_approved = 0
+    internal_amount = Decimal('0.00')
+    for guarantor in loan.guarantors.all():
+        if guarantor.status == Guarantor.Status.APPROVED:
+            internal_approved += 1
+            internal_amount += guarantor.guarantee_amount
+
+    external_approved = 0
+    external_amount = Decimal('0.00')
+    for external in loan.external_guarantors.all():
+        if external.status == ExternalGuarantor.Status.APPROVED_BY_ADMIN:
+            external_approved += 1
+            external_amount += external.guarantee_amount
+
     return {
         'internal_approved': internal_approved,
         'external_approved': external_approved,

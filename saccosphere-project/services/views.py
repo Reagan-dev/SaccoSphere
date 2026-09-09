@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from django.core.cache import cache
 from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -58,7 +58,6 @@ from .models import (
     Saving,
     SavingsType,
 )
-from .permissions import GuarantorCapacityCheck
 from .serializers import (
     DividendDeclarationSerializer,
     DividendPayoutSerializer,
@@ -853,12 +852,23 @@ class GuarantorRequestView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            guarantor = Guarantor.objects.create(
-                loan=loan,
-                guarantor=guarantor_user,
-                guarantee_amount=guarantee_amount,
-                status=Guarantor.Status.PENDING,
-            )
+            # The .exists() check above is a fast path; the unique_together
+            # (loan, guarantor) on Guarantor is the real guard. A nested
+            # savepoint lets a concurrent duplicate surface as a clean 400
+            # instead of a 500, without breaking the outer transaction.
+            try:
+                with transaction.atomic():
+                    guarantor = Guarantor.objects.create(
+                        loan=loan,
+                        guarantor=guarantor_user,
+                        guarantee_amount=guarantee_amount,
+                        status=Guarantor.Status.PENDING,
+                    )
+            except IntegrityError:
+                return Response(
+                    {'detail': 'Guarantor request already exists.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             if loan.status != Loan.Status.GUARANTORS_PENDING:
                 loan.status = Loan.Status.GUARANTORS_PENDING
@@ -876,9 +886,15 @@ class GuarantorRequestView(APIView):
 
 
 class GuarantorRespondView(APIView):
-    """Guarantor approval or decline of a guarantee request."""
+    """Guarantor approval or decline of a guarantee request.
 
-    permission_classes = [IsAuthenticated, GuarantorCapacityCheck]
+    Capacity is enforced inline in the APPROVE branch under a row lock on
+    GuaranteeCapacity (see below); there is no separate permission class
+    for it. A permission check would run before that transaction, on a
+    stale read, and would also wrongly gate DECLINE.
+    """
+
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, loan_id, guarantor_id):
         """

@@ -58,6 +58,10 @@ app.conf.beat_schedule = {
         'task': 'saccomanagement.tasks.flag_stuck_sms_campaigns',
         'schedule': crontab(minute='*/15'),  # Every 15 minutes
     },
+    'expire-stale-external-guarantors': {
+        'task': 'guarantor.tasks.expire_stale_external_guarantors',
+        'schedule': crontab(minute='*/30'),  # Every 30 minutes
+    },
 }
 app.conf.task_serializer = 'json'
 app.conf.result_expires = 3600

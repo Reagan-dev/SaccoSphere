@@ -1,7 +1,9 @@
 """Test guarantor search and request endpoints."""
 
 from decimal import Decimal
+from unittest.mock import patch
 
+from django.db import IntegrityError
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -160,6 +162,65 @@ class GuarantorEndpointTestCase(TestCase):
 
         self.loan.refresh_from_db()
         self.assertEqual(self.loan.status, Loan.Status.GUARANTORS_PENDING)
+
+    def _request_guarantor(self):
+        self.client.force_authenticate(user=self.applicant)
+        return self.client.post(
+            reverse(
+                'services:guarantor-request',
+                kwargs={'loan_id': self.loan.id},
+            ),
+            {
+                'guarantor_user_id': str(self.guarantor_user.id),
+                'guarantee_amount': '10000.00',
+            },
+            format='json',
+        )
+
+    def test_duplicate_guarantor_request_is_clean_400(self):
+        """A second request for the same (loan, guarantor) -> 400, not 500."""
+        Guarantor.objects.create(
+            loan=self.loan,
+            guarantor=self.guarantor_user,
+            guarantee_amount=Decimal('10000.00'),
+            status=Guarantor.Status.PENDING,
+        )
+
+        response = self._request_guarantor()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            Guarantor.objects.filter(
+                loan=self.loan, guarantor=self.guarantor_user,
+            ).count(),
+            1,
+        )
+
+    def test_guarantor_request_race_integrityerror_is_clean_400(self):
+        """
+        If a duplicate is inserted between the .exists() fast path and the
+        create (a race), the unique_together IntegrityError is caught and
+        returned as 400, not surfaced as a 500.
+        """
+        real_manager = Guarantor.objects
+
+        with patch('services.views.Guarantor') as mock_guarantor:
+            mock_guarantor.Status = Guarantor.Status
+            mock_guarantor.objects.filter.return_value.exists.return_value = (
+                False
+            )
+            mock_guarantor.objects.create.side_effect = IntegrityError(
+                'duplicate key value violates unique constraint',
+            )
+
+            response = self._request_guarantor()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(
+            real_manager.filter(
+                loan=self.loan, guarantor=self.guarantor_user,
+            ).exists()
+        )
 
     def test_request_rejected_when_sacco_requires_external_only(self):
         """guarantor_type_allowed=EXTERNAL_ONLY blocks a member guarantor request."""
@@ -465,8 +526,9 @@ class GuarantorWorkflowTestCase(TestCase):
         """
         Test that guarantor approval is blocked if capacity is insufficient.
 
-        GuarantorCapacityCheck permission should prevent approval when the
-        guarantor's available_capacity is less than guarantee_amount.
+        The inline, row-locked capacity check in GuarantorRespondView's
+        APPROVE branch returns 400 when available_capacity is below the
+        guarantee amount.
         """
         from services.models import GuaranteeCapacity
 

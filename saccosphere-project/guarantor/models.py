@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 from django.utils import timezone
 
 from .utils import generate_response_token
@@ -10,6 +11,22 @@ from .utils import generate_response_token
 
 def default_response_token_expires_at():
     return timezone.now() + timedelta(hours=48)
+
+
+# Statuses in which an ExternalGuarantor is a live candidate for its loan.
+# The partial unique constraint on (loan, id_number) keys on this set, so
+# the same person can't be submitted twice while one submission is still
+# in play, but CAN be re-submitted after a DECLINED / EXPIRED /
+# REJECTED_BY_ADMIN outcome (the workflow tells the applicant to add
+# another guarantor). Defined at module level so Meta.constraints can
+# reference it - a nested class body cannot see the outer class namespace.
+ACTIVE_EXTERNAL_GUARANTOR_STATUSES = (
+    'PENDING_SMS',
+    'SMS_SENT',
+    'ACCEPTED',
+    'UNDER_ADMIN_REVIEW',
+    'APPROVED_BY_ADMIN',
+)
 
 
 class ExternalGuarantor(models.Model):
@@ -31,9 +48,12 @@ class ExternalGuarantor(models.Model):
         SMS_SENT = 'SMS_SENT', 'SMS sent'
         ACCEPTED = 'ACCEPTED', 'Accepted'
         DECLINED = 'DECLINED', 'Declined'
+        EXPIRED = 'EXPIRED', 'Expired (no response)'
         UNDER_ADMIN_REVIEW = 'UNDER_ADMIN_REVIEW', 'Under admin review'
         APPROVED_BY_ADMIN = 'APPROVED_BY_ADMIN', 'Approved by admin'
         REJECTED_BY_ADMIN = 'REJECTED_BY_ADMIN', 'Rejected by admin'
+
+    ACTIVE_STATUSES = ACTIVE_EXTERNAL_GUARANTOR_STATUSES
 
     class GuarantorResponse(models.TextChoices):
         ACCEPTED = 'ACCEPTED', 'Accepted'
@@ -104,6 +124,15 @@ class ExternalGuarantor(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['loan', 'id_number'],
+                condition=Q(
+                    status__in=ACTIVE_EXTERNAL_GUARANTOR_STATUSES,
+                ),
+                name='uniq_active_external_guarantor_per_loan_id_number',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.full_name} for loan {self.loan.id} - {self.status}'

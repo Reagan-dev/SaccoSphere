@@ -9,7 +9,11 @@ from rest_framework.test import APIClient
 
 from accounts.models import Sacco, User
 from guarantor.models import ExternalGuarantor
-from guarantor.utils import generate_response_token, send_guarantor_sms
+from guarantor.tasks import send_external_guarantor_sms_task
+from guarantor.utils import (
+    build_guarantor_sms_message,
+    generate_response_token,
+)
 from notifications.models import Notification
 from saccomembership.models import Membership
 from services.models import Loan, LoanType
@@ -86,29 +90,45 @@ class ExternalGuarantorTests(TestCase):
             timezone.now(),
         )
 
-    @patch('guarantor.utils.ATSMSClient')
-    def test_send_guarantor_sms_sends_message_and_marks_sms_sent(
+    def test_sms_message_points_at_the_response_page(self):
+        external_guarantor = self.create_external_guarantor()
+
+        message = build_guarantor_sms_message(external_guarantor)
+
+        self.assertIn('External Person', message)
+        self.assertIn(str(external_guarantor.response_token), message)
+        self.assertIn('/guarantor-response/', message)
+        self.assertIn(f'token={external_guarantor.response_token}', message)
+        self.assertNotIn('reply ACCEPT', message)
+
+    @patch('accounts.integrations.otp_service.ATSMSClient')
+    def test_send_sms_task_marks_sms_sent_and_notifies_applicant(
         self,
         sms_client,
     ):
         external_guarantor = self.create_external_guarantor()
         sms_client.return_value.send_sms.return_value = True
 
-        sent = send_guarantor_sms(external_guarantor)
+        result = send_external_guarantor_sms_task(str(external_guarantor.id))
 
-        self.assertTrue(sent)
+        self.assertTrue(result)
         external_guarantor.refresh_from_db()
         self.assertEqual(
             external_guarantor.status,
             ExternalGuarantor.Status.SMS_SENT,
         )
-        message = sms_client.return_value.send_sms.call_args.args[1]
-        self.assertIn('External Person', message)
-        self.assertIn(str(external_guarantor.response_token), message)
-        self.assertIn('/guarantor/respond/', message)
+        sent_message = sms_client.return_value.send_sms.call_args.args[1]
+        self.assertIn(str(external_guarantor.response_token), sent_message)
+        self.assertTrue(
+            Notification.objects.filter(
+                user=self.user,
+                category=Notification.Category.GUARANTOR,
+                title='Guarantor SMS Sent',
+            ).exists()
+        )
 
-    @patch('guarantor.external_views.send_guarantor_sms', return_value=True)
-    def test_create_external_guarantor_endpoint(self, send_sms):
+    @patch('guarantor.external_views.send_external_guarantor_sms_task.delay')
+    def test_create_external_guarantor_endpoint(self, delay_mock):
         self.client.force_authenticate(user=self.user)
 
         response = self.client.post(
@@ -135,18 +155,12 @@ class ExternalGuarantorTests(TestCase):
             loan=self.loan,
             id_number='12345678',
         )
+        # Delivery is deferred to the task; the row is still PENDING_SMS.
         self.assertEqual(
             external_guarantor.status,
-            ExternalGuarantor.Status.SMS_SENT,
+            ExternalGuarantor.Status.PENDING_SMS,
         )
-        send_sms.assert_called_once_with(external_guarantor)
-        self.assertTrue(
-            Notification.objects.filter(
-                user=self.user,
-                category=Notification.Category.GUARANTOR,
-                title='Guarantor SMS Sent',
-            ).exists()
-        )
+        delay_mock.assert_called_once_with(str(external_guarantor.id))
 
     def test_list_external_guarantors_for_loan_owner(self):
         self.client.force_authenticate(user=self.user)
