@@ -144,3 +144,86 @@ class GuarantorLogicTestCase(TestCase):
         capacity.refresh_from_db()
         self.assertEqual(capacity.active_guarantees, Decimal('0.00'))
         self.assertEqual(capacity.available_capacity, Decimal('10000.00'))
+
+    def test_savings_are_summed_across_every_sacco(self):
+        """0.5x ACTIVE savings summed across ALL of the user's SACCOs."""
+        Saving.objects.create(
+            membership=self.guarantor_membership,
+            savings_type=self.savings_type,
+            amount=Decimal('20000.00'),
+            status=Saving.Status.ACTIVE,
+        )
+        other_sacco = Sacco.objects.create(
+            name='Second SACCO',
+            registration_number='CAP002',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        other_membership = Membership.objects.create(
+            user=self.user,
+            sacco=other_sacco,
+            status=Membership.Status.APPROVED,
+            member_number='CAP-G-002',
+            approved_date=timezone.now(),
+        )
+        other_savings_type = SavingsType.objects.create(
+            sacco=other_sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('100.00'),
+        )
+        Saving.objects.create(
+            membership=other_membership,
+            savings_type=other_savings_type,
+            amount=Decimal('10000.00'),
+            status=Saving.Status.ACTIVE,
+        )
+
+        data = calculate_guarantee_capacity(self.user)
+
+        # (20000 + 10000) * 0.5
+        self.assertEqual(data['total_savings'], Decimal('30000.00'))
+        self.assertEqual(data['max_guarantee_capacity'], Decimal('15000.0000'))
+        self.assertEqual(data['available_capacity'], Decimal('15000.0000'))
+
+    def test_pending_guarantee_does_not_reduce_capacity(self):
+        """Only APPROVED guarantees reserve capacity, not PENDING ones."""
+        Saving.objects.create(
+            membership=self.guarantor_membership,
+            savings_type=self.savings_type,
+            amount=Decimal('20000.00'),
+            status=Saving.Status.ACTIVE,
+        )
+        active_loan = self._create_loan(Loan.Status.ACTIVE)
+        Guarantor.objects.create(
+            loan=active_loan,
+            guarantor=self.user,
+            status=Guarantor.Status.PENDING,
+            guarantee_amount=Decimal('4000.00'),
+        )
+
+        data = calculate_guarantee_capacity(self.user)
+
+        self.assertEqual(data['active_guarantees'], Decimal('0'))
+        self.assertEqual(data['available_capacity'], Decimal('10000.0000'))
+
+    def test_approved_guarantee_on_terminal_loan_frees_capacity(self):
+        """A guarantee whose loan is COMPLETED/REJECTED is released."""
+        Saving.objects.create(
+            membership=self.guarantor_membership,
+            savings_type=self.savings_type,
+            amount=Decimal('20000.00'),
+            status=Saving.Status.ACTIVE,
+        )
+        completed_loan = self._create_loan(Loan.Status.COMPLETED)
+        Guarantor.objects.create(
+            loan=completed_loan,
+            guarantor=self.user,
+            status=Guarantor.Status.APPROVED,
+            guarantee_amount=Decimal('4000.00'),
+        )
+
+        data = calculate_guarantee_capacity(self.user)
+
+        self.assertEqual(data['active_guarantees'], Decimal('0'))
+        self.assertEqual(data['available_capacity'], Decimal('10000.0000'))

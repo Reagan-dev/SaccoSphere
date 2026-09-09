@@ -36,16 +36,19 @@ from saccomanagement.models import Role
 
 from .engines.guarantor_logic import (
     calculate_guarantee_capacity,
+    lock_guarantee_capacity,
     update_guarantee_capacity,
 )
-from .engines.loan_limits import calculate_loan_limit
+from .engines.loan_limits import (
+    calculate_loan_limit,
+    lock_member_loan_capacity_rows,
+)
 from .engines.liquidity_monitor import check_liquidity_risk
 from .models import (
     CRBCheck,
     DisbursementAuditLog,
     DividendDeclaration,
     DividendPayout,
-    GuaranteeCapacity,
     Guarantor,
     LiquidityAlert,
     Loan,
@@ -168,53 +171,70 @@ class LoanEligibilityCreateMixin:
     """Create loans only after checking member eligibility limits."""
 
     def create(self, request, *args, **kwargs):
-        """Create a loan application after checking member eligibility."""
+        """Create a loan application after checking member eligibility.
+
+        The eligibility read and the loan insert run in one transaction
+        with the member's savings and outstanding-loan rows locked
+        FOR UPDATE first (see lock_member_loan_capacity_rows). Two
+        concurrent applications from the same member therefore serialise -
+        the second re-reads a limit that already counts the first loan -
+        so they cannot jointly exceed the limit off a stale snapshot.
+        """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         loan_type = serializer.validated_data['loan_type']
         amount = serializer.validated_data['amount']
-        eligibility = calculate_loan_limit(request.user, loan_type.sacco)
 
-        if not eligibility['eligible']:
-            return Response(
-                {'reason': eligibility['reason']},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        with transaction.atomic():
+            membership = Membership.objects.filter(
+                user=request.user,
+                sacco=loan_type.sacco,
+                status=Membership.Status.APPROVED,
+            ).first()
+            if membership is not None:
+                lock_member_loan_capacity_rows(membership)
 
-        # TODO(product): confirm min_loan_amount should gate request size,
-        # not eligibility floor. It only rejects a request below this
-        # amount here - it must never raise the computed eligibility limit
-        # itself, which would let a member borrow more than their
-        # savings-based eligibility suggests.
-        sacco_settings = getattr(loan_type.sacco, 'settings', None)
-        if (
-            sacco_settings is not None
-            and amount < sacco_settings.min_loan_amount
-        ):
-            return Response(
-                {
-                    'detail': (
-                        'Requested amount is below the minimum loan '
-                        f'amount of KES {sacco_settings.min_loan_amount} '
-                        'for this SACCO.'
-                    ),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            eligibility = calculate_loan_limit(request.user, loan_type.sacco)
 
-        if amount > eligibility['max_amount']:
-            return Response(
-                {
-                    'detail': (
-                        'Requested amount exceeds your loan limit of '
-                        f'KES {eligibility["max_amount"]}.'
-                    ),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            if not eligibility['eligible']:
+                return Response(
+                    {'reason': eligibility['reason']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-        self.perform_create(serializer)
+            # min_loan_amount gates the request size only. It must never
+            # raise the computed eligibility limit itself, which would let
+            # a member borrow more than their savings-based eligibility.
+            sacco_settings = getattr(loan_type.sacco, 'settings', None)
+            if (
+                sacco_settings is not None
+                and amount < sacco_settings.min_loan_amount
+            ):
+                return Response(
+                    {
+                        'detail': (
+                            'Requested amount is below the minimum loan '
+                            f'amount of KES {sacco_settings.min_loan_amount} '
+                            'for this SACCO.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if amount > eligibility['max_amount']:
+                return Response(
+                    {
+                        'detail': (
+                            'Requested amount exceeds your loan limit of '
+                            f'KES {eligibility["max_amount"]}.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            self.perform_create(serializer)
+
         headers = self.get_success_headers(serializer.data)
         return Response(
             serializer.data,
@@ -239,8 +259,14 @@ class LoanApplyView(LoanEligibilityCreateMixin, CreateAPIView):
             loan.status = Loan.Status.GUARANTORS_PENDING
             loan.save(update_fields=['status', 'updated_at'])
 
-            # Dispatch async task to notify guarantors.
-            notify_guarantors_task.delay(str(loan.id))
+            # perform_create now runs inside the mixin's eligibility
+            # transaction, so defer the enqueue until that commits: never
+            # notify guarantors for a loan row that then rolls back, and
+            # don't fail the application if the broker is briefly down.
+            loan_id = str(loan.id)
+            transaction.on_commit(
+                lambda: notify_guarantors_task.delay(loan_id),
+            )
         else:
             loan.status = Loan.Status.PENDING_APPROVAL
             loan.save(update_fields=['status', 'updated_at'])
@@ -682,10 +708,9 @@ class GuarantorSearchView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        capacity = self._update_guarantee_capacity(
-            guarantor_user,
-            loan.membership.sacco,
-        )
+        # Single source of truth: the same all-SACCO 0.5x-savings formula
+        # the signals persist (services/engines/guarantor_logic.py).
+        capacity = update_guarantee_capacity(guarantor_user)
         data = {
             'user': guarantor_user,
             'member_number': membership.member_number,
@@ -725,36 +750,6 @@ class GuarantorSearchView(APIView):
                 return membership.user
 
         return None
-
-    def _update_guarantee_capacity(self, user, sacco):
-        """Refresh and return a user's guarantee capacity."""
-        total_savings = Saving.objects.filter(
-            membership__user=user,
-            membership__sacco=sacco,
-            status=Saving.Status.ACTIVE,
-        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-        active_guarantees = Guarantor.objects.filter(
-            guarantor=user,
-            status__in=[
-                Guarantor.Status.PENDING,
-                Guarantor.Status.APPROVED,
-            ],
-        ).aggregate(total=Sum('guarantee_amount'))['total'] or Decimal('0')
-        available_capacity = max(
-            total_savings - active_guarantees,
-            Decimal('0'),
-        )
-        capacity, _ = GuaranteeCapacity.objects.get_or_create(user=user)
-        capacity.total_savings = total_savings
-        capacity.active_guarantees = active_guarantees
-        capacity.available_capacity = available_capacity
-        capacity.save(update_fields=[
-            'total_savings',
-            'active_guarantees',
-            'available_capacity',
-            'updated_at',
-        ])
-        return capacity
 
 
 class GuarantorRequestView(APIView):
@@ -836,14 +831,19 @@ class GuarantorRequestView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        capacity_data = calculate_guarantee_capacity(guarantor_user)
-        if capacity_data['available_capacity'] < guarantee_amount:
-            return Response(
-                {'detail': 'Guarantor has insufficient capacity.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         with transaction.atomic():
+            # Lock the guarantor's capacity row so this check reads a
+            # state consistent with any concurrent approval for the same
+            # guarantor. Same GuaranteeCapacity row, same lock, as the
+            # approval path below.
+            lock_guarantee_capacity(guarantor_user)
+            capacity_data = calculate_guarantee_capacity(guarantor_user)
+            if capacity_data['available_capacity'] < guarantee_amount:
+                return Response(
+                    {'detail': 'Guarantor has insufficient capacity.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             if Guarantor.objects.filter(
                 loan=loan,
                 guarantor=guarantor_user,
@@ -936,10 +936,13 @@ class GuarantorRespondView(APIView):
 
         with transaction.atomic():
             if action == 'APPROVE':
-                # Validate guarantor has sufficient capacity.
-                capacity = GuaranteeCapacity.objects.get(
-                    user=request.user,
-                )
+                # Lock this guarantor's capacity row, then read it under
+                # the lock. A concurrent approval for another loan blocks
+                # here until we commit update_guarantee_capacity() below,
+                # then reads an available_capacity that already counts
+                # this guarantee - so the two cannot jointly over-commit
+                # the guarantor.
+                capacity = lock_guarantee_capacity(request.user)
 
                 if capacity.available_capacity < guarantor.guarantee_amount:
                     return Response(

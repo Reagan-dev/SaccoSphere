@@ -141,6 +141,11 @@ class LoanApplySerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
 
+        if loan_type.min_amount and amount < loan_type.min_amount:
+            raise serializers.ValidationError(
+                {'amount': 'Loan amount cannot be below the minimum amount.'}
+            )
+
         if loan_type.max_amount and amount > loan_type.max_amount:
             raise serializers.ValidationError(
                 {'amount': 'Loan amount cannot exceed the maximum amount.'}

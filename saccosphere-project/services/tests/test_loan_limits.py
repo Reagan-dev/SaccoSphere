@@ -121,6 +121,57 @@ class LoanLimitEngineTestCase(TestCase):
         self.assertEqual(result['max_amount'], Decimal('25000.0000'))
         self.assertEqual(result['existing_balance'], Decimal('5000.00'))
 
+    def test_pipeline_loans_count_against_limit(self):
+        """A loan still in the approval pipeline reduces the limit.
+
+        Item 3: existing_balance must count every status where the member
+        owes or is about to owe, not just ACTIVE - otherwise a member can
+        stack several mid-pipeline applications past their limit.
+        """
+        self.create_saving(Decimal('10000.00'))
+        for pipeline_status in (
+            Loan.Status.PENDING,
+            Loan.Status.GUARANTORS_PENDING,
+            Loan.Status.PENDING_APPROVAL,
+            Loan.Status.UNDER_REVIEW,
+            Loan.Status.BOARD_REVIEW,
+            Loan.Status.APPROVED,
+            Loan.Status.DISBURSEMENT_PENDING,
+            Loan.Status.DISBURSED,
+        ):
+            with self.subTest(status=pipeline_status):
+                loan = self.create_loan(
+                    amount=Decimal('4000.00'),
+                    outstanding_balance=Decimal('4000.00'),
+                    status=pipeline_status,
+                )
+                result = calculate_loan_limit(self.user, self.sacco)
+                self.assertEqual(
+                    result['existing_balance'], Decimal('4000.00'),
+                )
+                # 30000 gross - 4000 reserved.
+                self.assertEqual(result['max_amount'], Decimal('26000.0000'))
+                loan.delete()
+
+    def test_completed_and_rejected_loans_do_not_count(self):
+        """Repaid / never-advanced loans must not reduce the limit."""
+        self.create_saving(Decimal('10000.00'))
+        self.create_loan(
+            amount=Decimal('4000.00'),
+            outstanding_balance=Decimal('0.00'),
+            status=Loan.Status.COMPLETED,
+        )
+        self.create_loan(
+            amount=Decimal('4000.00'),
+            outstanding_balance=Decimal('4000.00'),
+            status=Loan.Status.REJECTED,
+        )
+
+        result = calculate_loan_limit(self.user, self.sacco)
+
+        self.assertEqual(result['existing_balance'], Decimal('0'))
+        self.assertEqual(result['max_amount'], Decimal('30000.0000'))
+
     def test_default_blocks_new_loan(self):
         """Test that a defaulted loan blocks new loan eligibility."""
         self.create_saving(Decimal('10000.00'))
@@ -259,5 +310,85 @@ class LoanApplyMinAmountTestCase(TestCase):
             },
             format='json',
         )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+
+class LoanTypeMinAmountValidationTestCase(TestCase):
+    """
+    Item 4: LoanType.min_amount is enforced at application time by
+    LoanApplySerializer.validate, mirroring the existing max_amount check.
+    No SaccoSettings.min_loan_amount here, so the loan-type floor is the
+    only thing that can reject a small request.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='lt-min-borrower@example.com',
+            first_name='LT',
+            last_name='Min',
+            password='testpass123',
+        )
+        self.sacco = Sacco.objects.create(
+            name='LT Min SACCO',
+            registration_number='LTM001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+            loan_multiplier=Decimal('3.00'),
+            min_loan_months=3,
+        )
+        self.membership = Membership.objects.create(
+            user=self.user,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number='LTM001-M001',
+            approved_date=timezone.now() - timedelta(days=120),
+        )
+        savings_type = SavingsType.objects.create(
+            sacco=self.sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('100.00'),
+        )
+        Saving.objects.create(
+            membership=self.membership,
+            savings_type=savings_type,
+            amount=Decimal('20000.00'),
+            status=Saving.Status.ACTIVE,
+        )
+        self.loan_type = LoanType.objects.create(
+            sacco=self.sacco,
+            name='Floored Loan',
+            interest_rate=Decimal('12.00'),
+            max_term_months=36,
+            min_amount=Decimal('3000.00'),
+            max_amount=Decimal('40000.00'),
+            requires_guarantors=False,
+        )
+
+    def _apply(self, amount):
+        self.client.force_authenticate(user=self.user)
+        return self.client.post(
+            reverse('services:loan-apply'),
+            {
+                'loan_type': str(self.loan_type.id),
+                'amount': amount,
+                'term_months': 6,
+            },
+            format='json',
+        )
+
+    def test_below_loan_type_min_amount_is_rejected(self):
+        response = self._apply('2000.00')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('below the minimum', str(response.data))
+        self.assertFalse(
+            Loan.objects.filter(membership=self.membership).exists(),
+        )
+
+    def test_at_loan_type_min_amount_is_accepted(self):
+        response = self._apply('3000.00')
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
