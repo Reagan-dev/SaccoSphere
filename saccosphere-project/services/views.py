@@ -33,6 +33,10 @@ from saccomembership.models import Membership
 from saccomanagement.audit_logger import log_audit
 from saccomanagement.mixins import SaccoScopedMixin
 from saccomanagement.models import Role
+from saccomanagement.odpc_logging import (
+    ConsentLogWriteError,
+    create_data_consent_log,
+)
 
 from .engines.guarantor_logic import (
     calculate_guarantee_capacity,
@@ -710,6 +714,23 @@ class GuarantorSearchView(APIView):
         # Single source of truth: the same all-SACCO 0.5x-savings formula
         # the signals persist (services/engines/guarantor_logic.py).
         capacity = update_guarantee_capacity(guarantor_user)
+
+        # ODPC: this response discloses another member's savings total and
+        # guarantee capacity to the loan applicant.
+        try:
+            create_data_consent_log(
+                user=guarantor_user,
+                accessed_by=request.user,
+                data_type='GUARANTOR_SAVINGS_DISCLOSURE',
+                reason=(
+                    'Guarantor savings total and guarantee capacity '
+                    f'disclosed to the applicant for loan {loan.id}.'
+                ),
+                request=request,
+            )
+        except ConsentLogWriteError:
+            pass
+
         data = {
             'user': guarantor_user,
             'member_number': membership.member_number,
@@ -1465,7 +1486,21 @@ class CRBCheckView(APIView):
         
         id_number = kyc.id_number
         phone_number = loan.membership.user.phone_number
-        
+
+        # ODPC: a CRB check discloses the member's credit standing to the
+        # SACCO admin. Logged once here (covers both a fresh check and a
+        # cached hit below); a log failure must not block the check.
+        try:
+            create_data_consent_log(
+                user=loan.membership.user,
+                accessed_by=request.user,
+                data_type='CRB_CHECK',
+                reason=f'CRB credit check performed for loan {loan.id}.',
+                request=request,
+            )
+        except ConsentLogWriteError:
+            pass
+
         # Check for existing recent CRB check (within 30 days)
         force_refresh = (
             request.query_params.get('force_refresh', 'false').lower()

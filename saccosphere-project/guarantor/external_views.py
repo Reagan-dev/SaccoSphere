@@ -21,6 +21,10 @@ from notifications.models import Notification
 from notifications.utils import create_notification
 from saccomanagement.audit_logger import log_audit
 from saccomanagement.models import Role
+from saccomanagement.odpc_logging import (
+    ConsentLogWriteError,
+    create_data_consent_log,
+)
 from services.models import Loan
 
 from .external_serializers import (
@@ -118,6 +122,25 @@ class ExternalGuarantorCreateView(CreateAPIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # ODPC: the applicant has just submitted a third party's ID
+        # number, phone, income and ID images. The data subject has no
+        # user account, so user=None and the ExternalGuarantor id carries
+        # the reference. An audit-log failure must not undo the request.
+        try:
+            create_data_consent_log(
+                user=None,
+                accessed_by=request.user,
+                data_type='EXTERNAL_GUARANTOR_PII',
+                reason=(
+                    'External guarantor PII collected for loan '
+                    f'{external_guarantor.loan_id} '
+                    f'(external_guarantor_id={external_guarantor.id}).'
+                ),
+                request=request,
+            )
+        except ConsentLogWriteError:
+            pass
 
         # Delivery is async with retry (guarantor.tasks); the request
         # returns with the row still PENDING_SMS and the task flips it to

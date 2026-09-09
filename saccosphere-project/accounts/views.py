@@ -54,6 +54,7 @@ from .models import (
     User,
     PasswordResetToken,
     UserConsent,
+    normalize_id_number,
 )
 
 
@@ -850,10 +851,14 @@ class AdminKYCQueueView(DataAccessMixin, AdminKYCQuerysetMixin, ListAPIView):
             )
 
         if search:
-            queryset = queryset.filter(
-                Q(user__email__icontains=search)
-                | Q(id_number__icontains=search)
-            )
+            # id_number is now encrypted at rest, so a substring match on
+            # it is impossible; match the normalized_id_number key exactly
+            # (a full ID) instead, alongside the email substring search.
+            search_filter = Q(user__email__icontains=search)
+            normalized = normalize_id_number(search)
+            if normalized:
+                search_filter |= Q(normalized_id_number=normalized)
+            queryset = queryset.filter(search_filter)
 
         return queryset.order_by('-submitted_at', '-created_at')
 

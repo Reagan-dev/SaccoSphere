@@ -298,13 +298,65 @@ KYC_UPLOAD_IP_RATE = config('KYC_UPLOAD_IP_RATE', default='20/hour')
 _KYC_RETENTION_DAYS = config('KYC_RETENTION_DAYS', default='')
 KYC_RETENTION_DAYS = int(_KYC_RETENTION_DAYS) if _KYC_RETENTION_DAYS else None
 
+# CRB raw-response retention. The decision facts (score, band,
+# listed_negative, reference) are kept indefinitely for the loan audit
+# trail; only the raw bureau payload - the bulk of the PII - is purged
+# once this many days pass. Set to None / unset to keep it indefinitely.
+# Common value: 365 days.
+_CRB_RAW_RESPONSE_RETENTION_DAYS = config(
+    'CRB_RAW_RESPONSE_RETENTION_DAYS',
+    default='',
+)
+CRB_RAW_RESPONSE_RETENTION_DAYS = (
+    int(_CRB_RAW_RESPONSE_RETENTION_DAYS)
+    if _CRB_RAW_RESPONSE_RETENTION_DAYS
+    else None
+)
+
 # Metropol CRB Configuration
 METROPOL_API_KEY = config('METROPOL_API_KEY', default='')
 METROPOL_API_URL = config(
     'METROPOL_API_URL',
     default='https://metropol-mock.saccosphere.dev/credit-check',
 )
-METROPOL_MOCK = config('METROPOL_MOCK', cast=bool, default=True)
+
+
+def _resolve_metropol_mock(debug, raw_value):
+    """Resolve METROPOL_MOCK, failing loud on unsafe production config.
+
+    A silent default in *either* direction is the real hazard: default
+    True and fake CRB scores leak into production, default False and a
+    genuine test/staging box makes real bureau calls. So when DEBUG is
+    False the operator MUST have set METROPOL_MOCK explicitly, and the
+    only value that lets the app boot is an explicit False.
+
+    raw_value is the unparsed env value (None means "not set").
+    """
+    if debug:
+        return _cast_debug(raw_value) if raw_value is not None else True
+
+    if raw_value is None:
+        raise ImproperlyConfigured(
+            'METROPOL_MOCK is not set and DEBUG is False. Leaving it '
+            'unset means CRB checks would silently return fake '
+            'hash-derived credit scores in production. Set '
+            'METROPOL_MOCK=False to call the real Metropol CRB API, or '
+            'METROPOL_MOCK=True only if you deliberately want mock CRB '
+            'data in this non-DEBUG environment.'
+        )
+    if _cast_debug(raw_value):
+        raise ImproperlyConfigured(
+            'METROPOL_MOCK is True while DEBUG is False. CRB checks would '
+            'return fake hash-derived credit scores in production. Set '
+            'METROPOL_MOCK=False to call the real Metropol CRB API.'
+        )
+    return False
+
+
+METROPOL_MOCK = _resolve_metropol_mock(
+    DEBUG,
+    config('METROPOL_MOCK', default=None),
+)
 
 # Google OAuth Configuration
 OAUTH_MOCK = config('OAUTH_MOCK', cast=bool, default=True)

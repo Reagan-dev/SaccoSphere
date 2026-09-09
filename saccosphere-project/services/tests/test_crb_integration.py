@@ -210,6 +210,22 @@ class CRBCheckViewTests(TestCase):
         self.assertIsNotNone(crb_check.score)
         self.assertIsNotNone(crb_check.band)
 
+    def test_crb_check_writes_consent_log(self):
+        """A CRB check records a DataConsentLog for ODPC compliance."""
+        from saccomanagement.models import DataConsentLog
+
+        self.api_client.force_authenticate(user=self.admin_user)
+
+        response = self.api_client.post(
+            f'/api/v1/services/loans/{self.loan.id}/crb-check/',
+        )
+        self.assertEqual(response.status_code, 201)
+
+        log = DataConsentLog.objects.get(data_type='CRB_CHECK')
+        self.assertEqual(log.user, self.member_user)
+        self.assertEqual(log.accessed_by, self.admin_user)
+        self.assertIn(str(self.loan.id), log.reason)
+
     def test_crb_check_caches_result(self):
         """Test that CRB check returns cached result within 30 days."""
         self.api_client.force_authenticate(user=self.admin_user)

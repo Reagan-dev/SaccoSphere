@@ -10,6 +10,8 @@ from django.db import models
 
 from django.utils import timezone
 
+from accounts.models import EncryptedJSONField
+
 
 
 
@@ -1537,13 +1539,32 @@ class CRBCheck(models.Model):
 
     )
 
-    raw_response = models.JSONField(
+    raw_response = EncryptedJSONField(
 
         null=True,
 
         blank=True,
 
-        help_text='Raw response from CRB provider for audit purposes.',
+        help_text=(
+            'Raw response from the CRB provider, encrypted at rest. Kept '
+            'for audit only and purged by the retention sweep once '
+            'raw_response_purge_at passes.'
+        ),
+
+    )
+
+    raw_response_purge_at = models.DateTimeField(
+
+        null=True,
+
+        blank=True,
+
+        editable=False,
+
+        help_text=(
+            'When raw_response becomes eligible for the retention purge. '
+            'Set on save from CRB_RAW_RESPONSE_RETENTION_DAYS.'
+        ),
 
     )
 
@@ -1582,6 +1603,28 @@ class CRBCheck(models.Model):
         verbose_name_plural = 'CRB Checks'
 
 
+
+    def save(self, *args, **kwargs):
+        """Stamp raw_response_purge_at from the retention setting.
+
+        Mirrors KYCVerification.save()/KYC_RETENTION_DAYS. If retention is
+        unset the raw response is kept indefinitely; if raw_response is
+        cleared, so is the purge date.
+        """
+        retention_days = getattr(
+            settings,
+            'CRB_RAW_RESPONSE_RETENTION_DAYS',
+            None,
+        )
+        if not self.raw_response:
+            self.raw_response_purge_at = None
+        elif retention_days and not self.raw_response_purge_at:
+            from datetime import timedelta
+
+            self.raw_response_purge_at = timezone.now() + timedelta(
+                days=retention_days,
+            )
+        super().save(*args, **kwargs)
 
     def __str__(self):
 

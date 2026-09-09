@@ -892,6 +892,99 @@ class PaymentTaskHardeningTests(TestCase):
         self.assertEqual(third.paid_amount, Decimal('50.00'))
         self.assertEqual(self.loan.outstanding_balance, Decimal('50.00'))
 
+    def test_overpayment_past_final_instalment_books_refund_liability(self):
+        self._create_instalments()  # 3 x KES 100 = KES 300 due
+        transaction = self._transaction(
+            Decimal('350.00'),
+            Transaction.TransactionType.LOAN_REPAYMENT,
+            'PAY-HARD-OVERPAY-001',
+        )
+        transaction.gross_amount = Decimal('350.00')
+        transaction.save(update_fields=['gross_amount', 'updated_at'])
+        mpesa_transaction = self._mpesa_for_loan(transaction)
+
+        _apply_loan_repayment(
+            mpesa_transaction,
+            transaction,
+            Decimal('350.00'),
+        )
+
+        self.loan.refresh_from_db()
+        transaction.refresh_from_db()
+        # KES 300 clears the schedule; KES 50 is the overpayment.
+        self.assertEqual(self.loan.outstanding_balance, Decimal('0.00'))
+        self.assertEqual(
+            RepaymentSchedule.objects.filter(
+                loan=self.loan,
+                status=RepaymentSchedule.Status.PAID,
+            ).count(),
+            3,
+        )
+
+        repayment_entry = LedgerEntry.objects.get(
+            reference=str(transaction.id),
+        )
+        self.assertEqual(
+            repayment_entry.category,
+            LedgerEntry.Category.LOAN_REPAYMENT,
+        )
+        self.assertEqual(repayment_entry.amount, Decimal('300.00'))
+
+        overpay_entry = LedgerEntry.objects.get(
+            reference=f'{transaction.id}-OVERPAY',
+        )
+        self.assertEqual(
+            overpay_entry.entry_type, LedgerEntry.EntryType.CREDIT,
+        )
+        self.assertEqual(
+            overpay_entry.category, LedgerEntry.Category.ADJUSTMENT,
+        )
+        self.assertEqual(overpay_entry.amount, Decimal('50.00'))
+
+        self.assertEqual(
+            transaction.metadata['overpayment']['status'],
+            'PENDING_REFUND',
+        )
+        self.assertEqual(
+            transaction.metadata['overpayment']['amount'], '50.00',
+        )
+        self.assertTrue(
+            Notification.objects.filter(
+                user=self.admin,
+                title='Loan overpayment - refund due',
+            ).exists()
+        )
+
+    def test_full_overpayment_on_settled_loan_still_books_liability(self):
+        # No unpaid instalments: nothing applies, all of it is overpayment.
+        transaction = self._transaction(
+            Decimal('75.00'),
+            Transaction.TransactionType.LOAN_REPAYMENT,
+            'PAY-HARD-OVERPAY-002',
+        )
+        transaction.gross_amount = Decimal('75.00')
+        transaction.save(update_fields=['gross_amount', 'updated_at'])
+        mpesa_transaction = self._mpesa_for_loan(transaction)
+        balance_before = self.loan.outstanding_balance
+
+        _apply_loan_repayment(
+            mpesa_transaction,
+            transaction,
+            Decimal('75.00'),
+        )
+
+        self.loan.refresh_from_db()
+        self.assertEqual(self.loan.outstanding_balance, balance_before)
+        self.assertFalse(
+            LedgerEntry.objects.filter(
+                reference=str(transaction.id),
+            ).exists()
+        )
+        overpay_entry = LedgerEntry.objects.get(
+            reference=f'{transaction.id}-OVERPAY',
+        )
+        self.assertEqual(overpay_entry.amount, Decimal('75.00'))
+
     def test_amount_mismatch_does_not_credit_saving_and_notifies_admin(self):
         transaction = self._transaction(
             Decimal('100.00'),

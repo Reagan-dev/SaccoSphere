@@ -961,9 +961,16 @@ def _process_successful_b2c_callback(
     if mpesa_transaction.related_loan:
         loan = mpesa_transaction.related_loan
         loan.status = loan.Status.ACTIVE
+        # disbursed_amount = what actually reached the member's M-Pesa
+        # (net of the platform fee); outstanding_balance = the gross loan
+        # principal, which is what the repayment schedule is generated
+        # against. Keeping these consistent is the whole point of this
+        # branch - services.tasks.on_disbursement_b2c_callback already
+        # does it this way.
+        gross_amount = loan.amount
         loan.disbursed_amount = amount
         loan.disbursement_date = timezone.localdate()
-        loan.outstanding_balance = amount
+        loan.outstanding_balance = gross_amount
         loan.save(
             update_fields=[
                 'status',
@@ -973,7 +980,9 @@ def _process_successful_b2c_callback(
                 'updated_at',
             ]
         )
-        _create_loan_disbursement_ledger(mpesa_transaction, transaction, amount)
+        _create_loan_disbursement_ledger(
+            mpesa_transaction, transaction, gross_amount,
+        )
         _notify_disbursement_success(mpesa_transaction, transaction, amount)
 
     # Handle savings withdrawal
@@ -1107,38 +1116,128 @@ def _apply_loan_repayment(mpesa_transaction, transaction, amount):
             RepaymentSchedule,
         )
 
+        if applied_amount > Decimal('0.00'):
+            loan.outstanding_balance = max(
+                Decimal('0.00'),
+                loan.outstanding_balance - applied_amount,
+            )
+            loan.save(
+                update_fields=['outstanding_balance', 'updated_at'],
+            )
+
+            LedgerEntry.objects.create(
+                membership=loan.membership,
+                entry_type=LedgerEntry.EntryType.CREDIT,
+                category=LedgerEntry.Category.LOAN_REPAYMENT,
+                amount=applied_amount,
+                reference=str(transaction.id),
+                description=(
+                    f'Loan repayment -- member paid KES '
+                    f'{_get_authoritative_gross_amount(transaction):,.2f}. '
+                    f'Instalment: KES {transaction.amount:,.2f}.'
+                ),
+                balance_after=loan.outstanding_balance,
+                transaction=transaction,
+            )
+
         if unapplied_amount > Decimal('0.00'):
-            logger.warning(
-                'Loan repayment has unapplied excess for transaction_id=%s: '
-                'amount=%s, applied=%s, unapplied=%s.',
-                transaction.id,
-                amount,
-                applied_amount,
+            _record_repayment_overpayment(
+                loan,
+                mpesa_transaction,
+                transaction,
                 unapplied_amount,
             )
 
-        if applied_amount <= Decimal('0.00'):
-            return
 
-        loan.outstanding_balance = max(
-            Decimal('0.00'),
-            loan.outstanding_balance - applied_amount,
+def _record_repayment_overpayment(
+    loan,
+    mpesa_transaction,
+    transaction,
+    overpaid_amount,
+):
+    """Book money paid past the final instalment as a refund liability.
+
+    The member is owed this back on M-Pesa. It is NOT applied to the loan
+    (there is nothing left to apply it to) and it does NOT move
+    outstanding_balance. It is posted as a traceable CREDIT ledger entry
+    (category ADJUSTMENT) and the SACCO admin is notified to release a
+    B2C refund; when they do, they post the offsetting DEBIT.
+    """
+    from ledger.models import LedgerEntry
+
+    logger.warning(
+        'Loan repayment overpaid past the final instalment for '
+        'transaction_id=%s: overpaid=%s. Booked as a refund liability.',
+        transaction.id,
+        overpaid_amount,
+    )
+
+    LedgerEntry.objects.create(
+        membership=loan.membership,
+        entry_type=LedgerEntry.EntryType.CREDIT,
+        category=LedgerEntry.Category.ADJUSTMENT,
+        amount=overpaid_amount,
+        reference=f'{transaction.id}-OVERPAY',
+        description=(
+            f'Loan overpayment of KES {overpaid_amount:,.2f} -- pending '
+            'B2C refund to the member (SACCO admin to release).'
+        ),
+        balance_after=loan.outstanding_balance,
+        transaction=transaction,
+    )
+
+    transaction.metadata = {
+        **transaction.metadata,
+        'overpayment': {
+            'amount': str(overpaid_amount),
+            'status': 'PENDING_REFUND',
+            'phone_number': mpesa_transaction.phone_number,
+        },
+    }
+    transaction.save(update_fields=['metadata', 'updated_at'])
+
+    _notify_sacco_admin_overpayment(
+        mpesa_transaction,
+        transaction,
+        overpaid_amount,
+    )
+
+
+def _notify_sacco_admin_overpayment(
+    mpesa_transaction,
+    transaction,
+    overpaid_amount,
+):
+    from notifications.models import Notification
+    from notifications.utils import create_notification
+    from saccomanagement.models import Role
+
+    sacco = _get_related_sacco(mpesa_transaction)
+    if sacco is None:
+        logger.warning(
+            'Loan overpayment has no SACCO context for transaction_id=%s.',
+            transaction.id,
         )
-        loan.save(update_fields=['outstanding_balance', 'updated_at'])
+        return
 
-        LedgerEntry.objects.create(
-            membership=loan.membership,
-            entry_type=LedgerEntry.EntryType.CREDIT,
-            category=LedgerEntry.Category.LOAN_REPAYMENT,
-            amount=applied_amount,
-            reference=str(transaction.id),
-            description=(
-                f'Loan repayment -- member paid KES '
-                f'{_get_authoritative_gross_amount(transaction):,.2f}. '
-                f'Instalment: KES {transaction.amount:,.2f}.'
+    admin_roles = Role.objects.select_related('user').filter(
+        sacco=sacco,
+        name=Role.SACCO_ADMIN,
+        is_active=True,
+    )
+    for role in admin_roles:
+        create_notification(
+            user=role.user,
+            title='Loan overpayment - refund due',
+            message=(
+                f'A member overpaid loan {mpesa_transaction.related_loan_id} '
+                f'by KES {overpaid_amount:,.2f}. Release a B2C refund to '
+                f'{mpesa_transaction.phone_number} and record the offset.'
             ),
-            balance_after=loan.outstanding_balance,
-            transaction=transaction,
+            category=Notification.Category.ALERT,
+            related_object_type='Transaction',
+            related_object_id=str(transaction.id),
+            dispatch_async=False,
         )
 
 
@@ -1205,16 +1304,22 @@ def _create_loan_disbursement_ledger(
     transaction,
     amount,
 ):
+    """Post the loan-liability DEBIT. ``amount`` is the gross principal."""
     from ledger.models import LedgerEntry
 
     loan = mpesa_transaction.related_loan
+    net_received = transaction.amount
+    fee = _get_authoritative_gross_amount(transaction) - net_received
     LedgerEntry.objects.create(
         membership=loan.membership,
         entry_type=LedgerEntry.EntryType.DEBIT,
         category=LedgerEntry.Category.LOAN_DISBURSEMENT,
         amount=amount,
         reference=f'{transaction.reference}-LEDGER',
-        description='M-Pesa loan disbursement',
+        description=(
+            f'M-Pesa loan disbursement. Received: KES {net_received:,.2f}. '
+            f'Disbursement fee: KES {fee:,.2f}.'
+        ),
         balance_after=loan.outstanding_balance,
         transaction=transaction,
     )

@@ -50,6 +50,10 @@ app.conf.beat_schedule = {
         'task': 'accounts.tasks.cleanup_expired_kyc',
         'schedule': crontab(minute=0, hour=2),  # Daily at 2 AM
     },
+    'purge-expired-crb-raw-response': {
+        'task': 'services.tasks.purge_expired_crb_raw_response',
+        'schedule': crontab(minute=30, hour=2),  # Daily at 2:30 AM
+    },
     'process-queued-erasure-requests': {
         'task': 'accounts.tasks.process_queued_erasure_requests',
         'schedule': crontab(minute='*/30'),  # Every 30 minutes
@@ -61,6 +65,16 @@ app.conf.beat_schedule = {
     'expire-stale-external-guarantors': {
         'task': 'guarantor.tasks.expire_stale_external_guarantors',
         'schedule': crontab(minute='*/30'),  # Every 30 minutes
+    },
+    # Flip past-due instalments to OVERDUE + accrue penalties first, then
+    # send the reminders/overdue alerts that key off that status.
+    'mark-overdue-instalments': {
+        'task': 'services.tasks.mark_overdue_instalments',
+        'schedule': crontab(minute=30, hour=5),  # Daily 05:30
+    },
+    'send-repayment-reminders': {
+        'task': 'services.tasks.send_repayment_reminders',
+        'schedule': crontab(minute=0, hour=6),  # Daily 06:00
     },
 }
 app.conf.task_serializer = 'json'

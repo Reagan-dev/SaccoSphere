@@ -209,6 +209,16 @@ class SaccoSettingsAdmin(admin.ModelAdmin):
             },
         ),
         (
+            'Late-repayment penalty rule',
+            {
+                'fields': (
+                    'penalty_type',
+                    'penalty_rate',
+                    'penalty_grace_days',
+                ),
+            },
+        ),
+        (
             'Audit',
             {
                 'classes': ('collapse',),

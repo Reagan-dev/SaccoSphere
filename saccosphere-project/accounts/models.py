@@ -1,3 +1,5 @@
+import json
+
 from decimal import Decimal
 
 from uuid import uuid4
@@ -111,6 +113,48 @@ class EncryptedCharField(EncryptedFieldMixin, models.CharField):
         if value is None:
             return value
         return self._encrypt(value)
+
+
+class EncryptedJSONField(EncryptedFieldMixin, models.TextField):
+    """TextField holding a Fernet-encrypted JSON document.
+
+    Same at-rest protection as EncryptedCharField, for structured audit
+    payloads (e.g. CRB raw responses) that are stored for evidence and
+    never queried by content. The column is plain TEXT; the value on the
+    Python side is the decoded object.
+    """
+
+    def _load(self, value):
+        try:
+            return json.loads(self._decrypt(value))
+        except Exception:
+            # Might be a plaintext JSON string (a row not yet migrated,
+            # a fixture) - fall back to a plain parse.
+            try:
+                return json.loads(value)
+            except (ValueError, TypeError):
+                return value
+
+    def from_db_value(self, value, expression, connection):
+        if value in (None, ''):
+            return None
+        return self._load(value)
+
+    def to_python(self, value):
+        if value is None or isinstance(value, (dict, list)):
+            return value
+        if isinstance(value, str):
+            return self._load(value)
+        return value
+
+    def get_prep_value(self, value):
+        if value is None:
+            return None
+        return self._encrypt(json.dumps(value, default=str, sort_keys=True))
+
+    def value_to_string(self, obj):
+        value = self.value_from_object(obj)
+        return json.dumps(value, default=str, sort_keys=True)
 
 
 
@@ -761,6 +805,19 @@ class SaccoSettings(models.Model):
 
         BOTH = 'BOTH', 'Both'
 
+    class PenaltyType(models.TextChoices):
+
+        NONE = 'NONE', 'No penalty'
+
+        FLAT = 'FLAT', 'Flat fee per overdue instalment'
+
+        PERCENT_ONCE = 'PERCENT_ONCE', 'Percent of instalment, one-time'
+
+        PERCENT_PER_DAY = (
+            'PERCENT_PER_DAY',
+            'Percent of instalment, per day overdue',
+        )
+
 
 
     id = models.UUIDField(
@@ -830,6 +887,44 @@ class SaccoSettings(models.Model):
         decimal_places=2,
 
         default=Decimal('0.00'),
+
+    )
+
+    # Per-SACCO late-repayment penalty rule. NONE disables it. penalty_rate
+    # is a flat KES amount when penalty_type=FLAT, or a fraction of the
+    # instalment (0.05 = 5%) when PERCENT_*. penalty_grace_days is the
+    # number of days after the due date before any penalty applies.
+    # See services.engines.penalties.compute_penalty.
+    penalty_type = models.CharField(
+
+        max_length=20,
+
+        choices=PenaltyType.choices,
+
+        default=PenaltyType.NONE,
+
+    )
+
+    penalty_rate = models.DecimalField(
+
+        max_digits=12,
+
+        decimal_places=4,
+
+        default=Decimal('0.0000'),
+
+        help_text=(
+            'Flat KES amount when penalty_type=FLAT; a fraction of the '
+            'instalment (0.05 = 5%) when penalty_type is a PERCENT rule.'
+        ),
+
+    )
+
+    penalty_grace_days = models.PositiveSmallIntegerField(
+
+        default=0,
+
+        help_text='Days after the due date before a penalty is charged.',
 
     )
 
@@ -1034,15 +1129,18 @@ class KYCVerification(models.Model):
 
     )
 
-    id_number = models.CharField(
+    id_number = EncryptedCharField(
 
-        max_length=20,
+        max_length=255,
 
         null=True,
 
         blank=True,
 
-        help_text='Kenya National ID number.',
+        help_text=(
+            'Kenya National ID number (encrypted at rest). Lookups go '
+            'through normalized_id_number, which is the queryable key.'
+        ),
 
     )
 
