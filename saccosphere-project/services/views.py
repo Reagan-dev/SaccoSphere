@@ -1776,6 +1776,16 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
                 ).select_for_update().filter(id__in=batch_ids)
 
                 for payout in batch_payouts:
+                    if payout.dividend_amount <= Decimal('0.00'):
+                        # Clamped to zero at calculation time (negative
+                        # reconstructed balance). Nothing to post -
+                        # apply_ledger_entry rejects non-positive amounts
+                        # - so mark it paid and move on.
+                        payout.status = DividendPayout.Status.PAID
+                        payout.save(update_fields=['status'])
+                        paid_count += 1
+                        continue
+
                     # apply_ledger_entry is the only path allowed to move
                     # Saving.amount: it locks the saving, posts the
                     # DIVIDEND_PAYOUT credit and raises the balance in one

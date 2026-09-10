@@ -13,7 +13,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import Sacco, SaccoSettings, User
 from ledger.models import LedgerEntry
-from ledger.utils import create_ledger_entry
+from ledger.utils import apply_ledger_entry, create_ledger_entry
 from saccomanagement.models import Role, SystemAuditLog
 from saccomembership.models import Membership
 from services.engines.dividend_calculator import (
@@ -73,16 +73,21 @@ class DividendCalculatorTests(TestCase):
             period_end,
         )
 
-        # Should return a Decimal
         self.assertIsInstance(average, Decimal)
-        # Should be rounded to 2 decimal places
         self.assertEqual(
             average.as_tuple().exponent,
             -2,
             'Average should be rounded to 2 decimal places',
         )
+        # self.saving carries a 10 000.00 seeded opening balance and has
+        # no ledger / M-Pesa history at all: every month-end samples
+        # 10 000.00, so the average is exactly that. The old
+        # M-Pesa-only reconstruction returned ~0.00 here - the reported
+        # bug.
+        self.assertEqual(average, Decimal('10000.00'))
 
     def test_average_balance_uses_specific_saving_history(self):
+        """Reconstruction unwinds only THIS account's later movements."""
         other_savings_type = SavingsType.objects.create(
             sacco=self.sacco,
             name=SavingsType.Name.FOSA,
@@ -100,26 +105,31 @@ class DividendCalculatorTests(TestCase):
             provider_type=PaymentProvider.ProviderType.MPESA,
             is_active=True,
         )
+        # Later (June) M-Pesa deposits on BOTH accounts.
         self._create_saving_ledger_entry(
             provider,
             self.saving,
-            Decimal('100.00'),
+            Decimal('2000.00'),
             'DIV-SPECIFIC-001',
+            when=date(2025, 6, 15),
         )
         self._create_saving_ledger_entry(
             provider,
             other_saving,
-            Decimal('900.00'),
+            Decimal('4000.00'),
             'DIV-SPECIFIC-002',
+            when=date(2025, 6, 15),
         )
 
+        # As of end-January: only self.saving's own 2 000 June deposit
+        # is unwound (10 000 - 2 000); other_saving's 4 000 is ignored.
         average = calculate_average_balance(
             self.saving,
             date(2025, 1, 1),
             date(2025, 1, 31),
         )
 
-        self.assertEqual(average, Decimal('100.00'))
+        self.assertEqual(average, Decimal('8000.00'))
 
     def _create_saving_ledger_entry(
         self,
@@ -127,6 +137,7 @@ class DividendCalculatorTests(TestCase):
         saving,
         amount,
         reference,
+        when=date(2025, 1, 15),
     ):
         transaction = Transaction.objects.create(
             provider=provider,
@@ -153,10 +164,162 @@ class DividendCalculatorTests(TestCase):
             transaction=transaction,
         )
         created_at = timezone.make_aware(
-            datetime.combine(date(2025, 1, 15), time(hour=12)),
+            datetime.combine(when, time(hour=12)),
         )
         LedgerEntry.objects.filter(id=entry.id).update(created_at=created_at)
         return entry
+
+    def test_average_balance_includes_prior_dividend_and_adjustment(self):
+        """Non-M-Pesa movements are part of the reconstructed balance."""
+        # Phantom opening balance (10 000.00) + a real prior-year
+        # dividend credit + an admin adjustment, the last two written
+        # through apply_ledger_entry so Saving.amount tracks them.
+        prior_declaration = DividendDeclaration.objects.create(
+            sacco=self.sacco,
+            savings_type=self.savings_type,
+            financial_year='2024/2025',
+            declared_rate=Decimal('8.00'),
+            period_start=date(2024, 1, 1),
+            period_end=date(2024, 12, 31),
+            status=DividendDeclaration.Status.DISBURSED,
+        )
+        prior_payout = DividendPayout.objects.create(
+            declaration=prior_declaration,
+            membership=self.membership,
+            saving=self.saving,
+            average_balance=Decimal('6250.00'),
+            dividend_amount=Decimal('500.00'),
+            status=DividendPayout.Status.PAID,
+        )
+        dividend_entry = apply_ledger_entry(
+            saving=self.saving,
+            amount=Decimal('500.00'),
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.DIVIDEND_PAYOUT,
+            description='prior year dividend',
+            reference=f'DIV-{prior_declaration.id}-{prior_payout.id}',
+        )
+        adjustment_entry = apply_ledger_entry(
+            saving=self.saving,
+            amount=Decimal('300.00'),
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.ADJUSTMENT,
+            description='admin correction',
+            reference='ADJ-HIST-1',
+        )
+        for entry in (dividend_entry, adjustment_entry):
+            LedgerEntry.objects.filter(id=entry.id).update(
+                created_at=timezone.make_aware(
+                    datetime.combine(date(2025, 3, 10), time(hour=12)),
+                ),
+            )
+        self.saving.refresh_from_db()
+        self.assertEqual(self.saving.amount, Decimal('10800.00'))
+
+        # A month-end AFTER both movements: nothing to unwind, so both
+        # the dividend and the adjustment are reflected.
+        after = calculate_average_balance(
+            self.saving, date(2025, 6, 1), date(2025, 6, 30),
+        )
+        self.assertEqual(after, Decimal('10800.00'))
+
+        # A month-end BEFORE both: the dividend credit is attributable
+        # and unwound; the membership-level ADJUSTMENT has no
+        # per-account link and stays in the baseline (documented
+        # limitation - exact fix is a per-entry saving FK).
+        before = calculate_average_balance(
+            self.saving, date(2025, 2, 1), date(2025, 2, 28),
+        )
+        self.assertEqual(before, Decimal('10300.00'))
+
+    def test_negative_reconstructed_balance_clamps_dividend_to_zero(self):
+        provider = PaymentProvider.objects.create(
+            name='M-Pesa',
+            provider_type=PaymentProvider.ProviderType.MPESA,
+            is_active=True,
+        )
+        # A large deposit dated AFTER the one-month period: every
+        # month-end in the period unwinds it, driving the reconstructed
+        # balance well negative (10 000 - 50 000).
+        self._create_saving_ledger_entry(
+            provider,
+            self.saving,
+            Decimal('50000.00'),
+            'NEG-RECON-1',
+            when=date(2025, 2, 15),
+        )
+        declaration = DividendDeclaration.objects.create(
+            sacco=self.sacco,
+            savings_type=self.savings_type,
+            financial_year='2025/2026',
+            declared_rate=Decimal('10.00'),
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 1, 31),
+            status=DividendDeclaration.Status.DRAFT,
+        )
+
+        result = calculate_dividends_for_declaration(declaration)
+
+        payout = declaration.payouts.get(saving=self.saving)
+        self.assertLess(payout.average_balance, Decimal('0.00'))
+        self.assertEqual(payout.dividend_amount, Decimal('0.00'))
+        self.assertEqual(result['payout_count'], 1)
+        declaration.refresh_from_db()
+        self.assertEqual(
+            declaration.total_dividend_amount, Decimal('0.00'),
+        )
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                action='DIVIDEND_NEGATIVE_CLAMPED',
+                resource_type='Saving',
+                resource_id=str(self.saving.id),
+            ).exists()
+        )
+
+    def test_balance_query_ignores_other_sacco_ledger_rows(self):
+        other_sacco = Sacco.objects.create(
+            name='Other Dividend SACCO',
+            registration_number='DIV-OTHER',
+            sector=Sacco.Sector.FINANCE,
+            county='Kiambu',
+        )
+        other_type = SavingsType.objects.create(
+            sacco=other_sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('500.00'),
+        )
+        other_user = User.objects.create_user(
+            email='other-div-member@example.com',
+            password='secret',
+            phone_number='254799999999',
+        )
+        other_membership = Membership.objects.create(
+            user=other_user,
+            sacco=other_sacco,
+            status=Membership.Status.APPROVED,
+            member_number='DIV-O-001',
+        )
+        # Large movement on the OTHER SACCO's ledger, dated after the
+        # as-of date - must never be summed into self.saving's balance.
+        entry = create_ledger_entry(
+            membership=other_membership,
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.SAVING_DEPOSIT,
+            amount=Decimal('999999.00'),
+            description='other sacco deposit',
+            reference='OTHER-SACCO-DIV-1',
+        )
+        LedgerEntry.objects.filter(id=entry.id).update(
+            created_at=timezone.make_aware(
+                datetime.combine(date(2025, 6, 1), time(hour=12)),
+            ),
+        )
+
+        average = calculate_average_balance(
+            self.saving, date(2025, 1, 1), date(2025, 1, 31),
+        )
+
+        self.assertEqual(average, Decimal('10000.00'))
 
     def test_dividend_calculation_is_idempotent(self):
         declaration = DividendDeclaration.objects.create(
