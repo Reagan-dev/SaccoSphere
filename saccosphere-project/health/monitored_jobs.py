@@ -15,4 +15,11 @@ MONITORED_JOBS = {
     'flag_npl_arrears': timedelta(days=2),
     # config/celery.py: 'reconcile-savings-ledger', crontab 06:45 daily.
     'reconcile_savings_ledger': timedelta(days=2),
+    # NOTE: 'accrue_savings_interest' (config/celery.py, monthly on the
+    # 1st) deliberately writes a JobHeartbeat but is NOT registered here.
+    # A once-a-month cadence would leave /health/jobs/ reporting it
+    # "missing" for up to a month after deploy and generally does not
+    # fit a freshness gate designed for daily sweeps. Observability for
+    # it is the heartbeat row + the savings_interest_accrual_run metric
+    # + the per-SACCO SAVINGS_INTEREST_ACCRUED audit rows.
 }

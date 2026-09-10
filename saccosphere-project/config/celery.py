@@ -82,6 +82,13 @@ app.conf.beat_schedule = {
         'task': 'services.tasks.reconcile_savings_ledger',
         'schedule': crontab(minute=45, hour=6),  # Daily 06:45
     },
+    # Credit one month of savings interest to opted-in SACCOs. Runs early
+    # on the 1st; idempotent per (saving, month), so a missed/retried run
+    # is harmless.
+    'accrue-savings-interest': {
+        'task': 'services.tasks.accrue_savings_interest',
+        'schedule': crontab(minute=30, hour=1, day_of_month=1),
+    },
 }
 app.conf.task_serializer = 'json'
 app.conf.result_expires = 3600

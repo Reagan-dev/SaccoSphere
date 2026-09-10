@@ -964,6 +964,16 @@ class SaccoSettings(models.Model):
         ),
     )
 
+    savings_interest_accrual_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            'Opt in to the monthly savings-interest accrual job. When '
+            'off (the default) no interest is credited even if a '
+            'SavingsType advertises an interest_rate. Simple interest, '
+            'monthly, on each ACTIVE account\'s balance at run time.'
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     updated_at = models.DateTimeField(auto_now=True)

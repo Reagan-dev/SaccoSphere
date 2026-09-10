@@ -25,6 +25,7 @@ CATEGORY_PREFIXES = {
     LedgerEntry.Category.DIVIDEND_PAYOUT: 'DIV',
     LedgerEntry.Category.ADJUSTMENT: 'ADJ',
     LedgerEntry.Category.OPENING_BALANCE: 'OPEN',
+    LedgerEntry.Category.SAVINGS_INTEREST: 'INT',
 }
 
 
@@ -39,6 +40,7 @@ SAVINGS_LEDGER_CATEGORIES = (
     LedgerEntry.Category.SAVING_WITHDRAWAL,
     LedgerEntry.Category.DIVIDEND_PAYOUT,
     LedgerEntry.Category.OPENING_BALANCE,
+    LedgerEntry.Category.SAVINGS_INTEREST,
 )
 
 

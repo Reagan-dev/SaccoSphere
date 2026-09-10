@@ -1514,3 +1514,128 @@ def disburse_dividends_for_declaration_task(
         'paid_count': result['paid_count'],
         **summary,
     }
+
+
+# --- Monthly savings-interest accrual ---------------------------------
+
+SAVINGS_INTEREST_CHUNK_SIZE = 500
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='services.tasks.accrue_savings_interest',
+)
+def accrue_savings_interest(self, accrual_date_iso=None):
+    """Credit one month of savings interest, per SACCO, for every SACCO
+    that has opted in via ``SaccoSettings.savings_interest_accrual_enabled``.
+
+    Idempotent per ``(saving, month)``; safe to retry or re-run. Writes a
+    per-SACCO ``SAVINGS_INTEREST_ACCRUED`` audit row, a JobHeartbeat, and
+    a ``savings_interest_accrual_run`` metric (duration + totals).
+    """
+    from health.models import JobHeartbeat
+
+    try:
+        result = _run_savings_interest_accrual(accrual_date_iso)
+        logger.info(
+            'Savings-interest accrual complete for %s. saccos_processed=%s '
+            'savings_credited=%s total_interest=%s duration_ms=%s.',
+            result['period'],
+            result['saccos_processed'],
+            result['savings_credited'],
+            result['total_interest_credited'],
+            result['duration_ms'],
+        )
+        JobHeartbeat.record('accrue_savings_interest', detail=result)
+        return result
+    except Exception as exc:
+        logger.exception('Savings-interest accrual failed.')
+        try:
+            JobHeartbeat.record(
+                'accrue_savings_interest',
+                status=JobHeartbeat.Status.ERROR,
+                detail={'error': str(exc)},
+            )
+        except Exception:
+            logger.exception(
+                'Could not record savings-interest failure heartbeat.',
+            )
+        raise self.retry(exc=exc)
+
+
+def _run_savings_interest_accrual(accrual_date_iso=None):
+    from datetime import date
+
+    from config.utils import emit_metric
+    from saccomanagement.audit_logger import log_audit
+    from services.engines.savings_interest import (
+        accrue_savings_interest_for_sacco,
+    )
+
+    if accrual_date_iso:
+        accrual_date = date.fromisoformat(accrual_date_iso)
+    else:
+        accrual_date = timezone.localdate()
+    period = accrual_date.strftime('%Y-%m')
+
+    started_at = timezone.now()
+    zero = Decimal('0.00')
+    saccos_processed = 0
+    savings_credited = 0
+    skipped_already_accrued = 0
+    total_interest = zero
+
+    saccos = (
+        Sacco.objects.filter(
+            is_active=True,
+            settings__savings_interest_accrual_enabled=True,
+        )
+        .select_related('settings')
+        .iterator(chunk_size=SAVINGS_INTEREST_CHUNK_SIZE)
+    )
+    for sacco in saccos:
+        sacco_result = accrue_savings_interest_for_sacco(
+            sacco, accrual_date=accrual_date,
+        )
+        saccos_processed += 1
+        savings_credited += sacco_result['savings_credited']
+        skipped_already_accrued += sacco_result['skipped_already_accrued']
+        total_interest += sacco_result['total_interest']
+
+        if sacco_result['savings_credited']:
+            log_audit(
+                None,
+                'SAVINGS_INTEREST_ACCRUED',
+                'Sacco',
+                sacco.id,
+                new_values={
+                    'period': period,
+                    'savings_credited': sacco_result['savings_credited'],
+                    'total_interest': str(sacco_result['total_interest']),
+                },
+            )
+
+    ended_at = timezone.now()
+    duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+    result = {
+        'period': period,
+        'saccos_processed': saccos_processed,
+        'savings_credited': savings_credited,
+        'skipped_already_accrued': skipped_already_accrued,
+        'total_interest_credited': str(total_interest),
+        'started_at': started_at.isoformat(),
+        'ended_at': ended_at.isoformat(),
+        'duration_ms': duration_ms,
+    }
+    emit_metric(
+        'savings_interest_accrual_run',
+        period=period,
+        outcome='succeeded',
+        saccos_processed=saccos_processed,
+        savings_credited=savings_credited,
+        total_interest_credited=str(total_interest),
+        duration_ms=duration_ms,
+    )
+    return result
