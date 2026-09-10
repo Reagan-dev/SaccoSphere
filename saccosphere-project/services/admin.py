@@ -1,3 +1,5 @@
+from decimal import Decimal, InvalidOperation
+
 from django import forms
 from django.contrib import admin, messages
 from django.db import transaction
@@ -46,6 +48,45 @@ class SavingsTypeAdmin(admin.ModelAdmin):
     search_fields = ('name', 'sacco__name')
 
 
+class SavingAdminActionForm(admin.helpers.ActionForm):
+    """Extra inputs for the audited SavingAdmin actions.
+
+    Rendered in the action bar (matches DisbursementRetryActionForm); each
+    action reads only the fields it needs.
+    """
+
+    reason = forms.CharField(
+        required=False,
+        max_length=500,
+        widget=forms.TextInput(
+            attrs={
+                'placeholder': 'Reason (required, min 10 chars)',
+                'size': 45,
+            },
+        ),
+    )
+    adjustment_amount = forms.DecimalField(
+        required=False,
+        max_digits=12,
+        decimal_places=2,
+        widget=forms.NumberInput(
+            attrs={'placeholder': 'Adjustment amount', 'step': '0.01'},
+        ),
+    )
+    adjustment_direction = forms.ChoiceField(
+        required=False,
+        choices=(
+            ('', 'Direction'),
+            ('CREDIT', 'Credit (increase)'),
+            ('DEBIT', 'Debit (decrease)'),
+        ),
+    )
+    new_status = forms.ChoiceField(
+        required=False,
+        choices=(('', 'New status'),) + tuple(Saving.Status.choices),
+    )
+
+
 @admin.register(Saving)
 class SavingAdmin(admin.ModelAdmin):
     list_display = (
@@ -64,14 +105,34 @@ class SavingAdmin(admin.ModelAdmin):
         'membership__member_number',
         'membership__sacco__name',
     )
+    action_form = SavingAdminActionForm
+    actions = ['create_balance_adjustment', 'change_account_status']
+
+    # Money and status are ledger- / audit-gated: never a bare field edit
+    # in this form. amount / total_* move only through
+    # ledger.utils.apply_ledger_entry; status only through
+    # services.engines.savings_admin_ops.set_saving_status. Use the
+    # actions below (super-admin only, reason required).
+    readonly_fields = (
+        'amount',
+        'total_contributions',
+        'total_withdrawals',
+        'status',
+    )
+
+    def has_delete_permission(self, request, obj=None):
+        # Deleting a Saving row would make a balance vanish with no
+        # ledger entry and no reversal. Freeze / close via the action.
+        return False
 
     def save_model(self, request, obj, form, change):
         """Route new accounts through the one shared creation path.
 
-        Editing an existing row saves normally; adding one goes through
-        ``open_savings_account`` so the same-SACCO check runs and any
-        amount entered on the form is recorded as an opening ledger
-        entry instead of a bare ``Saving.amount`` write.
+        Editing an existing row saves normally (amount / total_* / status
+        are readonly, so the form cannot touch them); adding one goes
+        through ``open_savings_account`` so the same-SACCO check runs and
+        any amount entered is recorded as an opening ledger entry instead
+        of a bare ``Saving.amount`` write.
         """
         if change:
             super().save_model(request, obj, form, change)
@@ -89,6 +150,119 @@ class SavingAdmin(admin.ModelAdmin):
         # Point the admin at the row that was actually created.
         obj.pk = saving.pk
         obj.id = saving.id
+
+    @admin.action(
+        description='Create a manual balance adjustment (reason required)',
+    )
+    def create_balance_adjustment(self, request, queryset):
+        from services.engines.savings_admin_ops import (
+            SavingsAdminOpError,
+            create_savings_adjustment,
+        )
+
+        if not request.user.is_superuser:
+            self.message_user(
+                request,
+                'Only a super admin can adjust a savings balance.',
+                level=messages.ERROR,
+            )
+            return
+
+        reason = (request.POST.get('reason') or '').strip()
+        direction = (request.POST.get('adjustment_direction') or '').strip()
+        raw_amount = (request.POST.get('adjustment_amount') or '').strip()
+        try:
+            amount = Decimal(raw_amount)
+        except (InvalidOperation, TypeError):
+            self.message_user(
+                request,
+                'Enter a valid adjustment amount.',
+                level=messages.ERROR,
+            )
+            return
+
+        done = 0
+        for saving in queryset:
+            try:
+                entry = create_savings_adjustment(
+                    saving,
+                    amount=amount,
+                    direction=direction,
+                    actor=request.user,
+                    reason=reason,
+                )
+            except SavingsAdminOpError as exc:
+                self.message_user(
+                    request, f'{saving}: {exc}', level=messages.ERROR,
+                )
+                continue
+            done += 1
+            self.message_user(
+                request,
+                f'{saving}: {direction} {amount} posted as ledger entry '
+                f'{entry.reference}; new balance {saving.amount}.',
+                level=messages.SUCCESS,
+            )
+
+        if not done:
+            self.message_user(
+                request,
+                'No adjustments were posted.',
+                level=messages.WARNING,
+            )
+
+    @admin.action(
+        description='Change account status: ACTIVE / FROZEN / CLOSED '
+        '(reason required)',
+    )
+    def change_account_status(self, request, queryset):
+        from services.engines.savings_admin_ops import (
+            MIN_REASON_LENGTH,
+            SavingsAdminOpError,
+            set_saving_status,
+        )
+
+        if not request.user.is_superuser:
+            self.message_user(
+                request,
+                'Only a super admin can change a savings account status.',
+                level=messages.ERROR,
+            )
+            return
+
+        reason = (request.POST.get('reason') or '').strip()
+        new_status = (request.POST.get('new_status') or '').strip()
+        if len(reason) < MIN_REASON_LENGTH:
+            self.message_user(
+                request,
+                f'A reason of at least {MIN_REASON_LENGTH} characters is '
+                'required to change an account status.',
+                level=messages.ERROR,
+            )
+            return
+
+        done = 0
+        for saving in queryset:
+            try:
+                set_saving_status(
+                    saving,
+                    new_status=new_status,
+                    actor=request.user,
+                    reason=reason,
+                )
+            except SavingsAdminOpError as exc:
+                self.message_user(
+                    request, f'{saving}: {exc}', level=messages.ERROR,
+                )
+                continue
+            done += 1
+
+        if done:
+            self.message_user(
+                request,
+                f'{done} account(s) set to {new_status}.',
+                level=messages.SUCCESS,
+            )
 
 
 @admin.register(DividendDeclaration)
