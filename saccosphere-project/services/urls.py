@@ -28,6 +28,8 @@ from .views import (
     SavingListView,
     SavingsAccountAdminOpenView,
     SavingsBreakdownView,
+    SavingsDividendEligibilityView,
+    SavingsStatusActionView,
     SavingsTypeViewSet,
 )
 
@@ -51,6 +53,16 @@ urlpatterns = [
         name='savings-admin-open',
     ),
     path('savings/breakdown/', SavingsBreakdownView.as_view(), name='savings-breakdown'),
+    path(
+        'savings/<uuid:id>/status/',
+        SavingsStatusActionView.as_view(),
+        name='savings-status-action',
+    ),
+    path(
+        'savings/<uuid:id>/dividend-eligibility/',
+        SavingsDividendEligibilityView.as_view(),
+        name='savings-dividend-eligibility',
+    ),
     path('loan-types/', LoanTypeListView.as_view(), name='loan-type-list'),
     path('loans/', LoanCollectionView.as_view(), name='loan-collection'),
     path(
