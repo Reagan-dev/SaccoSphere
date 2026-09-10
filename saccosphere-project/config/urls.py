@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.urls import include, path
 from drf_yasg import openapi
 from drf_yasg.views import get_schema_view
-from health.views import HealthCheckView, ReadinessCheckView
+from health.views import HealthCheckView, JobHealthView, ReadinessCheckView
 from rest_framework import permissions
 
 
@@ -45,6 +45,7 @@ urlpatterns = [
         ReadinessCheckView.as_view(),
         name='readiness-check',
     ),
+    path('health/jobs/', JobHealthView.as_view(), name='job-health-check'),
     path(
         'swagger/',
         schema_view.with_ui('swagger', cache_timeout=0),

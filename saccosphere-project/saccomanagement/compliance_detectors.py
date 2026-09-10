@@ -218,3 +218,58 @@ class RepeatedPaymentFailureDetector(ComplianceDetector):
             metadata={'latest_transaction_id': str(transaction.id)},
         )
         return flag
+
+
+# The 90-day arrears line is SASRA's non-performing threshold - not a
+# number chosen here. 30/60/90 staged NPLFlags + member/admin
+# notifications remain the operational early-warning layer; only 90-day
+# arrears escalate to a platform-visible compliance flag.
+NPL_SEVERE_ARREARS_THRESHOLD_DAYS = 90
+
+
+class SevereArrearsDetector(ComplianceDetector):
+    """Platform-visible flag for a SACCO carrying non-performing loans.
+
+    Why this exists alongside NPLFlag rather than replacing it: NPLFlag
+    (services.engines.npl_monitor / services.tasks.flag_npl_arrears) is
+    per-loan, staged at 30/60/90 days, and drives member + SACCO-admin
+    notifications and the ACTIVE<->DEFAULTED transition - operational
+    early warning owned by the SACCO. ComplianceFlag is the platform
+    layer read by the superadmin dashboards (PlatformAlertsView,
+    TopSaccosView). This detector bridges them: once a SACCO has one or
+    more loans 90+ days in arrears, a single aggregate flag surfaces it
+    platform-wide. It is refreshed (count/outstanding + occurrence_count
+    + last_seen_at) on every daily sweep; a superadmin resolves it once
+    the SACCO works the book back down - the same manual-resolution model
+    as every other detector (see RepeatedPaymentFailureDetector,
+    flag_stuck_sms_campaigns). A stale ``last_seen_at`` in the flag
+    metadata is the signal that the arrears have since cleared.
+    """
+
+    flag_type = ComplianceFlag.FlagType.NPL
+    severity = ComplianceFlag.Severity.HIGH
+
+    def check(self, sacco, severe_loan_count, outstanding_balance):
+        """Call once per SACCO that currently has 90+ day arrears.
+
+        Returns the ComplianceFlag, or None when there is nothing to
+        flag.
+        """
+        if not severe_loan_count or severe_loan_count <= 0:
+            return None
+
+        flag, _created = self.flag(
+            sacco,
+            description=(
+                f'{severe_loan_count} loan(s) at this SACCO are '
+                f'{NPL_SEVERE_ARREARS_THRESHOLD_DAYS}+ days in arrears '
+                f'(KES {outstanding_balance:,.2f} outstanding) - '
+                'non-performing under SASRA arrears rules.'
+            ),
+            metadata={
+                'severe_loan_count': severe_loan_count,
+                'outstanding_balance': str(outstanding_balance),
+                'threshold_days': NPL_SEVERE_ARREARS_THRESHOLD_DAYS,
+            },
+        )
+        return flag

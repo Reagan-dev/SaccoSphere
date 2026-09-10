@@ -606,6 +606,8 @@ class Loan(models.Model):
 
         default=Status.PENDING,
 
+        db_index=True,
+
         help_text='Current loan workflow status.',
 
     )
@@ -871,6 +873,8 @@ class RepaymentSchedule(models.Model):
 
         default=Status.PENDING,
 
+        db_index=True,
+
         help_text='Current instalment payment status.',
 
     )
@@ -918,6 +922,18 @@ class RepaymentSchedule(models.Model):
         ordering = ['instalment_number']
 
         unique_together = ['loan', 'instalment_number']
+
+        indexes = [
+
+            # Overdue sweep, reminder lookups and the NPL arrears query
+            # all filter status + a due_date window.
+            models.Index(fields=['status', 'due_date']),
+
+            # Per-loan schedule scans (NPL resolution, repayment
+            # waterfall) filter loan + status.
+            models.Index(fields=['loan', 'status']),
+
+        ]
 
 
 
