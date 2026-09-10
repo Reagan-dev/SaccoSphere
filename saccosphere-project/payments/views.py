@@ -26,6 +26,7 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsSaccoAdmin
 from config.response import StandardResponseMixin
+from config.utils import get_client_ip
 from django.conf import settings
 from guarantor.utils import check_loan_guarantors_complete
 from payments.disbursements import initiate_b2c_loan_disbursement
@@ -108,20 +109,12 @@ def _retry_mpesa_response(result_desc='Temporary processing unavailable'):
 
 
 def _get_client_ip(request):
-    """Get the real client IP, accounting for Railway's proxy.
-    
-    Railway adds 1 proxy hop, so X-Forwarded-For format is:
-    [spoofed_ip, ..., real_client_ip, railway_proxy_ip]
-    
-    We take the rightmost IP (last value) as the real client IP,
-    since Railway appends the true client IP to the end of the chain.
+    """Real client IP for M-Pesa callback logging.
+
+    Delegates to the single canonical resolver
+    (:func:`config.utils.get_client_ip`).
     """
-    forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if forwarded_for:
-        # Take the last IP in the chain (real client IP after Railway proxy)
-        ips = [ip.strip() for ip in forwarded_for.split(',')]
-        return ips[-1] if ips else request.META.get('REMOTE_ADDR')
-    return request.META.get('REMOTE_ADDR')
+    return get_client_ip(request)
 
 
 def _get_stk_callback_path():

@@ -1,12 +1,79 @@
 """Shared utility functions."""
 
 import hashlib
+import ipaddress
 import logging
 import re
 from uuid import uuid4
 
 
 metrics_logger = logging.getLogger('saccosphere.metrics')
+
+# Railway (this project's deploy target - see README "Railway Deployment
+# Processes") fronts every service with a single Envoy edge hop. Its
+# internal proxy addresses live in the RFC 6598 carrier-grade NAT block,
+# so an X-Forwarded-For entry inside this range was added by Railway, not
+# by a real client.
+_RAILWAY_INTERNAL_NETWORK = ipaddress.ip_network('100.64.0.0/10')
+
+
+def _is_ip_address(value):
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_railway_internal_ip(value):
+    try:
+        return ipaddress.ip_address(value) in _RAILWAY_INTERNAL_NETWORK
+    except ValueError:
+        return False
+
+
+def get_client_ip(request):
+    """Return the real client IP, trusting only Railway's edge proxy.
+
+    Railway puts exactly one trusted hop (its Envoy edge) in front of the
+    app. That edge:
+
+    * sets ``X-Envoy-External-Address`` to the single client IP it
+      observed and overwrites any value the client sent, so it is the
+      authoritative source whenever present;
+    * *appends* the observed peer to ``X-Forwarded-For`` without stripping
+      client-supplied entries. Only the rightmost entry was added by
+      infrastructure we control; everything to its left is
+      attacker-controllable and must never be trusted.
+
+    Resolution order:
+
+    1. ``X-Envoy-External-Address`` when it is a valid IP.
+    2. ``X-Forwarded-For`` scanned right-to-left, skipping Railway
+       internal (``100.64.0.0/10``) hops, taking the first public IP.
+    3. ``REMOTE_ADDR``.
+
+    Returns the IP string, or ``None`` when nothing usable is present.
+    Callers that need a non-empty value (e.g. a cache key) should coerce
+    ``None`` themselves.
+    """
+    envoy_address = (
+        request.META.get('HTTP_X_ENVOY_EXTERNAL_ADDRESS') or ''
+    ).strip()
+    if _is_ip_address(envoy_address):
+        return envoy_address
+
+    forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '') or ''
+    entries = [entry.strip() for entry in forwarded_for.split(',')]
+    for candidate in reversed(entries):
+        if not _is_ip_address(candidate):
+            continue
+        if _is_railway_internal_ip(candidate):
+            continue
+        return candidate
+
+    remote_addr = (request.META.get('REMOTE_ADDR') or '').strip()
+    return remote_addr or None
 
 
 class InvalidPhoneNumberError(ValueError):
