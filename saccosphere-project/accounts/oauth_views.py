@@ -11,6 +11,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from config.utils import get_client_ip
+
 from .models import KYCVerification, User
 from .serializers import GoogleAuthSerializer, UserProfileSerializer
 from .throttles import GoogleOAuthThrottle
@@ -43,19 +45,14 @@ def _mask_email(email):
 
 
 def _get_client_ip(request):
+    """Client IP for the OAuth sign-in audit trail.
+
+    Delegates to the single canonical resolver
+    (:func:`config.utils.get_client_ip`). Previously this copy trusted the
+    *leftmost* X-Forwarded-For entry, which a client can forge - the
+    shared resolver trusts only the entry Railway's edge appends.
     """
-    Get the client IP address from the request.
-    
-    Checks for X-Forwarded-For header first (for reverse proxies),
-    then falls back to REMOTE_ADDR.
-    """
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        # X-Forwarded-For can contain multiple IPs, take the first one
-        ip = x_forwarded_for.split(',')[0].strip()
-    else:
-        ip = request.META.get('REMOTE_ADDR', 'unknown')
-    return ip
+    return get_client_ip(request) or 'unknown'
 
 LOGIN_ACCOUNT_NOT_FOUND = (
     'No account found with this Google account. Please sign up first.'

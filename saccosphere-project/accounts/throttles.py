@@ -8,30 +8,23 @@ from django.core.cache import cache
 from django.utils import timezone
 from datetime import timedelta
 
+from config.utils import get_client_ip
+
 
 logger = logging.getLogger(__name__)
 
 
 def _get_client_ip(request):
-    """
-    Get the client IP address from the request.
+    """Client IP for IP-scoped throttle cache keys.
 
-    Checks for X-Forwarded-For header first (for reverse proxies), then
-    falls back to REMOTE_ADDR. Takes the rightmost entry, not the leftmost:
-    this deployment sits behind exactly one reverse proxy hop, which appends
-    the true client IP as the last entry, while anything earlier in the
-    chain is client-supplied and spoofable. Used as the cache-key source for
-    every IP-scoped throttle in this module (OTP send, KYC upload, consent
-    give/withdraw) — trusting the leftmost entry here would let a client
-    defeat all of them by rotating a forged first X-Forwarded-For value.
-    Matches payments.integrations.mpesa.security._get_client_ip.
+    Delegates to the single canonical resolver
+    (:func:`config.utils.get_client_ip` - Railway single-hop Envoy edge,
+    rightmost non-internal X-Forwarded-For / X-Envoy-External-Address),
+    then coerces a missing value to ``'unknown'`` so every throttle in
+    this module (OTP send, KYC upload, consent give/withdraw) always has a
+    usable cache-key component.
     """
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        ips = [ip.strip() for ip in x_forwarded_for.split(',') if ip.strip()]
-        if ips:
-            return ips[-1]
-    return request.META.get('REMOTE_ADDR', 'unknown')
+    return get_client_ip(request) or 'unknown'
 
 
 class OTPSendThrottle(AnonRateThrottle):

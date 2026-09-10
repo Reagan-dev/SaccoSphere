@@ -1,38 +1,23 @@
 """Shared account helper utilities."""
 
+from config.utils import get_client_ip as _get_client_ip
 from saccomanagement.models import Role
 
 
 def get_client_ip(request):
-    """
-    Extract the client IP address from the request.
+    """Return the client IP address from the request.
 
-    Checks X-Forwarded-For header (for proxy/load balancer setups) and falls
-    back to REMOTE_ADDR. Takes the rightmost IP from X-Forwarded-For, not the
-    leftmost: this deployment sits behind exactly one reverse proxy (Render or
-    Railway), which appends the true client IP as the last entry in the chain.
-    Anything before that is client-supplied and can be spoofed by sending a
-    fabricated X-Forwarded-For header, so trusting the leftmost entry would
-    let a client forge its own IP for throttling and audit purposes. This
-    matches payments.integrations.mpesa.security._get_client_ip, which reasons
-    through the same single-hop trust boundary for M-Pesa callback security.
-
-    Args:
-        request: The Django request object.
+    Thin wrapper around :func:`config.utils.get_client_ip` - the single
+    canonical client-IP resolver for this project (Railway single-hop
+    Envoy edge; prefers ``X-Envoy-External-Address``, else the rightmost
+    non-internal ``X-Forwarded-For`` entry, else ``REMOTE_ADDR``). Kept as
+    a named export because callers across the accounts app import it from
+    here.
 
     Returns:
-        str: The client IP address, or None if not found.
+        str | None: the client IP, or None if nothing usable is present.
     """
-    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded_for:
-        # X-Forwarded-For format here is [client-supplied, ..., real_client_ip]
-        # since our one reverse proxy hop appends the true IP last.
-        ips = [ip.strip() for ip in x_forwarded_for.split(',') if ip.strip()]
-        if ips:
-            return ips[-1]
-
-    remote_addr = request.META.get('REMOTE_ADDR')
-    return remote_addr
+    return _get_client_ip(request)
 
 
 def get_user_sacco_context(user):
