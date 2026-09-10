@@ -218,6 +218,7 @@ class SaccoSettingsSerializer(serializers.ModelSerializer):
             'penalty_type',
             'penalty_rate',
             'penalty_grace_days',
+            'enforce_dividend_dual_control',
             'updated_at',
         )
         read_only_fields = ('sacco_id', 'updated_at')

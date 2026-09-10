@@ -100,10 +100,20 @@ class DividendDeclarationAdmin(admin.ModelAdmin):
         'declared_rate',
         'status',
         'total_dividend_amount',
+        'created_by',
+        'approved_by',
         'created_at',
     )
     list_filter = ('status', 'sacco', 'savings_type')
     search_fields = ('sacco__name', 'financial_year')
+    readonly_fields = ('created_by',)
+
+    def save_model(self, request, obj, form, change):
+        """Stamp the creating admin so the four-eyes approval check has a
+        creator to compare against for admin-created declarations."""
+        if not change and obj.created_by_id is None:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(DividendPayout)

@@ -38,9 +38,42 @@ class GuarantorUserSerializer(serializers.Serializer):
 
 
 class SavingsTypeSerializer(serializers.ModelSerializer):
+    """Full read serializer - the SACCO's own admins managing products.
+
+    Explicit field list (never ``__all__``) so a new model field can't
+    silently leak through a public code path.
+    """
+
     class Meta:
         model = SavingsType
-        fields = '__all__'
+        fields = (
+            'id',
+            'sacco',
+            'name',
+            'description',
+            'interest_rate',
+            'minimum_contribution',
+            'is_active',
+            'allows_multiple_accounts',
+        )
+
+
+class SavingsTypePublicSerializer(serializers.ModelSerializer):
+    """Narrow read serializer for non-admin / cross-tenant browsing.
+
+    Only genuinely public product attributes - no internal ``id`` or
+    ``sacco`` FK, no ``is_active`` / ops flags, nothing useful for
+    enumerating another SACCO's configuration.
+    """
+
+    class Meta:
+        model = SavingsType
+        fields = (
+            'name',
+            'description',
+            'minimum_contribution',
+            'interest_rate',
+        )
 
 
 class SavingsTypeWriteSerializer(serializers.ModelSerializer):
@@ -294,6 +327,10 @@ class DividendDeclarationSerializer(serializers.ModelSerializer):
         source='approved_by.email',
         read_only=True,
     )
+    created_by_email = serializers.EmailField(
+        source='created_by.email',
+        read_only=True,
+    )
 
     class Meta:
         model = DividendDeclaration
@@ -308,6 +345,7 @@ class DividendDeclarationSerializer(serializers.ModelSerializer):
             'period_end',
             'status',
             'calculated_at',
+            'created_by_email',
             'approved_by_email',
             'total_dividend_amount',
             'created_at',
@@ -318,6 +356,7 @@ class DividendDeclarationSerializer(serializers.ModelSerializer):
             'savings_type_name',
             'status',
             'calculated_at',
+            'created_by_email',
             'approved_by_email',
             'total_dividend_amount',
             'created_at',
@@ -390,10 +429,16 @@ class DividendDeclarationSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         from django.db import IntegrityError
 
+        request = self.context.get('request')
+        creator = getattr(request, 'user', None)
+        if creator is not None and not creator.is_authenticated:
+            creator = None
+
         try:
             return DividendDeclaration.objects.create(
                 sacco=self.context['sacco'],
                 status=DividendDeclaration.Status.DRAFT,
+                created_by=creator,
                 **validated_data,
             )
         except IntegrityError:
