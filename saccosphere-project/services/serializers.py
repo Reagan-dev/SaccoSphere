@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from saccomembership.models import Membership
@@ -15,6 +16,35 @@ from .models import (
     Saving,
     SavingsType,
 )
+from .validators import (
+    MAX_ANNUAL_RATE_PERCENT,
+    MIN_ANNUAL_RATE_PERCENT,
+    validate_financial_year as _validate_financial_year_format,
+)
+
+
+def _annual_rate_field(**overrides):
+    """A percentage DecimalField bounded to the annual-rate range.
+
+    Explicit (rather than left to ``ModelSerializer`` picking up the
+    model validators) so the min/max messages are our own - DRF rewrites
+    model Min/Max validators into its generic messages otherwise.
+    """
+    kwargs = {
+        'max_digits': 5,
+        'decimal_places': 2,
+        'min_value': MIN_ANNUAL_RATE_PERCENT,
+        'max_value': MAX_ANNUAL_RATE_PERCENT,
+        'error_messages': {
+            'min_value': 'Annual rate cannot be negative.',
+            'max_value': (
+                'Annual rate cannot exceed {max_value} percent '
+                '(placeholder ceiling, pending policy sign-off).'
+            ),
+        },
+    }
+    kwargs.update(overrides)
+    return serializers.DecimalField(**kwargs)
 
 
 class MembershipSummarySerializer(serializers.Serializer):
@@ -77,6 +107,8 @@ class SavingsTypePublicSerializer(serializers.ModelSerializer):
 
 
 class SavingsTypeWriteSerializer(serializers.ModelSerializer):
+    interest_rate = _annual_rate_field(required=False, allow_null=True)
+
     class Meta:
         model = SavingsType
         fields = (
@@ -319,6 +351,7 @@ class InsuranceSerializer(serializers.ModelSerializer):
 
 class DividendDeclarationSerializer(serializers.ModelSerializer):
     sacco_id = serializers.UUIDField(source='sacco.id', read_only=True)
+    declared_rate = _annual_rate_field()
     savings_type_name = serializers.CharField(
         source='savings_type.name',
         read_only=True,
@@ -369,6 +402,13 @@ class DividendDeclarationSerializer(serializers.ModelSerializer):
                 'Savings type does not belong to the selected SACCO.'
             )
         return savings_type
+
+    def validate_financial_year(self, value):
+        try:
+            _validate_financial_year_format(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(list(exc.messages))
+        return value
 
     def validate(self, attrs):
         period_start = attrs.get(

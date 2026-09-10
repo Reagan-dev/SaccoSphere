@@ -14,6 +14,12 @@ from django.utils import timezone
 
 from accounts.models import EncryptedJSONField
 
+from .validators import (
+    ANNUAL_RATE_VALIDATORS,
+    FINANCIAL_YEAR_HELP_TEXT,
+    validate_financial_year,
+)
+
 
 
 
@@ -84,7 +90,12 @@ class SavingsType(models.Model):
 
         blank=True,
 
-        help_text='Optional annual interest rate percentage.',
+        validators=ANNUAL_RATE_VALIDATORS,
+
+        help_text=(
+            'Optional annual interest rate percentage (0-100, ceiling '
+            'pending policy sign-off).'
+        ),
 
     )
 
@@ -1804,12 +1815,17 @@ class DividendDeclaration(models.Model):
     )
     financial_year = models.CharField(
         max_length=20,
-        help_text='Financial year (e.g., 2025/2026).',
+        validators=[validate_financial_year],
+        help_text=FINANCIAL_YEAR_HELP_TEXT,
     )
     declared_rate = models.DecimalField(
         max_digits=5,
         decimal_places=2,
-        help_text='Annual dividend rate percentage.',
+        validators=ANNUAL_RATE_VALIDATORS,
+        help_text=(
+            'Annual dividend rate percentage (0-100, ceiling pending '
+            'policy sign-off).'
+        ),
     )
     period_start = models.DateField(
         help_text='Start date of dividend calculation period.',
