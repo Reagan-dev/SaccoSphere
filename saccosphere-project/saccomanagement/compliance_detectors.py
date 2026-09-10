@@ -317,3 +317,42 @@ class SavingsLedgerMismatchDetector(ComplianceDetector):
             },
         )
         return flag
+
+
+class InactiveAccountDepositDetector(ComplianceDetector):
+    """An M-Pesa deposit that completed into a FROZEN / CLOSED account.
+
+    ``payments.views`` rejects a deposit into a non-ACTIVE savings account
+    at initiation, but an STK started while the account was ACTIVE can be
+    confirmed by M-Pesa after it is frozen.
+    ``payments.tasks._apply_saving_deposit`` still credits the money - the
+    member has already paid - and calls this. The credited amount is
+    unwithdrawable while the account stays non-active; ops decides whether
+    to keep it, refund it, or reactivate the account. Manual resolution,
+    like every other detector here.
+    """
+
+    flag_type = ComplianceFlag.FlagType.PAYMENT_FAILURE
+    severity = ComplianceFlag.Severity.HIGH
+
+    def check(self, *, sacco, saving, transaction, amount):
+        """Call once per deposit that landed in a non-active account."""
+        flag, _created = self.flag(
+            sacco,
+            description=(
+                f'An M-Pesa deposit of KES {amount:,.2f} completed into '
+                f'savings account {saving.id}, which is '
+                f'{saving.get_status_display().upper()}. The member has '
+                'already paid, so the funds were credited and the account '
+                'left non-active (unwithdrawable). Review: keep, refund, '
+                'or reactivate.'
+            ),
+            metadata={
+                'saving_id': str(saving.id),
+                'membership_id': str(saving.membership_id),
+                'account_status': saving.status,
+                'transaction_id': str(transaction.id),
+                'amount': str(amount),
+            },
+        )
+        return flag
