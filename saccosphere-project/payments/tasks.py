@@ -1034,23 +1034,16 @@ def _process_failed_b2c_callback(
             result_description,
         )
 
-    # Handle savings withdrawal failure - revert the balance
+    # Handle savings withdrawal failure - re-credit the balance and post
+    # the offsetting ledger entry (idempotent on the reversal reference).
     elif mpesa_transaction.related_saving:
-        from services.models import Saving
+        from payments.withdrawals import _reverse_withdrawal
 
-        saving = mpesa_transaction.related_saving
-        gross_amount = _get_authoritative_gross_amount(transaction)
-        with db_transaction.atomic():
-            saving = Saving.objects.select_for_update().get(id=saving.id)
-            saving.amount += gross_amount
-            saving.total_withdrawals -= gross_amount
-            saving.save(
-                update_fields=[
-                    'amount',
-                    'total_withdrawals',
-                    'updated_at',
-                ]
-            )
+        _reverse_withdrawal(
+            transaction,
+            reason=result_description,
+            response_code=result_code,
+        )
         _notify_withdrawal_failure(
             mpesa_transaction,
             transaction,
@@ -1643,9 +1636,20 @@ def _normalize_transaction_type(transaction_type):
 
 
 def _create_withdrawal_ledger(mpesa_transaction, transaction):
-    """Create ledger entry for successful savings withdrawal."""
+    """Ensure the SAVING_WITHDRAWAL debit exists for this withdrawal.
+
+    The debit is normally written at initiation, in the same atomic block
+    that reserves the balance (payments.withdrawals). This stays as an
+    idempotent safety net for withdrawals created before that change or
+    via a path that skipped it - it never double-posts because the ledger
+    reference is unique.
+    """
     from ledger.models import LedgerEntry
     from ledger.utils import create_ledger_entry
+
+    reference = str(transaction.id)
+    if LedgerEntry.objects.filter(reference=reference).exists():
+        return
 
     saving = mpesa_transaction.related_saving
     gross_amount = _get_authoritative_gross_amount(transaction)
@@ -1661,7 +1665,7 @@ def _create_withdrawal_ledger(mpesa_transaction, transaction):
             f'Withdrawal. Received: KES {net_amount:,.2f}. '
             f'Processing fee: KES {platform_fee:,.2f}.'
         ),
-        reference=str(transaction.id),
+        reference=reference,
         transaction=transaction,
     )
 

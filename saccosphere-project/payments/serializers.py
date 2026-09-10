@@ -76,19 +76,31 @@ class WithdrawalRequestSerializer(serializers.Serializer):
             'membership__sacco',
         ),
     )
+    # Optional client-supplied de-duplication token: a retried or
+    # double-submitted POST carrying the same key returns the original
+    # in-flight result instead of firing a second B2C payout.
+    idempotency_key = serializers.CharField(
+        max_length=200,
+        required=False,
+        allow_blank=True,
+        trim_whitespace=True,
+    )
 
     def validate_phone_number(self, value):
         return validate_mpesa_phone(value)
 
     def validate_amount(self, value):
+        from payments.withdrawals import MAX_B2C_WITHDRAWAL_AMOUNT
+
         if value <= Decimal('0.00'):
             raise serializers.ValidationError(
                 'Amount must be greater than zero.'
             )
 
-        if value > Decimal('300000.00'):
+        if value > MAX_B2C_WITHDRAWAL_AMOUNT:
             raise serializers.ValidationError(
-                'Amount cannot be more than 300000.'
+                'Amount cannot be more than '
+                f'{MAX_B2C_WITHDRAWAL_AMOUNT:.0f}.'
             )
 
         return value
