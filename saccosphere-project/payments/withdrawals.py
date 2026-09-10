@@ -124,6 +124,10 @@ def initiate_savings_withdrawal(
     member = saving.membership.user
 
     if requested_amount <= Decimal('0.00'):
+        logger.warning(
+            'Savings withdrawal rejected: non-positive amount. %s',
+            log_ctx,
+        )
         return False, {'error': 'Amount must be greater than zero.'}, 400
 
     if requested_amount > MAX_B2C_WITHDRAWAL_AMOUNT:
@@ -141,6 +145,10 @@ def initiate_savings_withdrawal(
 
     # SACCO onboarding / config gates (read config, not balance).
     if not sacco.payment_ready:
+        logger.warning(
+            'Savings withdrawal rejected: SACCO not payment-ready. %s',
+            log_ctx,
+        )
         return False, {
             'error': (
                 'This SACCO has not completed M-Pesa Daraja onboarding. '
@@ -151,14 +159,27 @@ def initiate_savings_withdrawal(
     try:
         payment_config = sacco.payment_config
         if not payment_config.is_active:
+            logger.warning(
+                'Savings withdrawal rejected: SACCO payment config '
+                'inactive. %s',
+                log_ctx,
+            )
             return False, {
                 'error': 'Payment configuration for this SACCO is not active.',
             }, 400
         if not payment_config.has_b2c_config():
+            logger.warning(
+                'Savings withdrawal rejected: SACCO has no B2C config. %s',
+                log_ctx,
+            )
             return False, {
                 'error': 'B2C withdrawal not configured for this SACCO.',
             }, 400
     except AttributeError:
+        logger.warning(
+            'Savings withdrawal rejected: SACCO has no payment config. %s',
+            log_ctx,
+        )
         return False, {
             'error': (
                 'Payment configuration not found for this SACCO. '
@@ -175,6 +196,13 @@ def initiate_savings_withdrawal(
     platform_fee = breakdown['platform_fee']
 
     if net_amount <= Decimal('0.00'):
+        logger.warning(
+            'Savings withdrawal rejected: amount does not exceed the '
+            'processing fee (gross KES %s, fee KES %s). %s',
+            gross_amount,
+            platform_fee,
+            log_ctx,
+        )
         return False, {
             'error': 'Amount must exceed the withdrawal fee.',
         }, 400
@@ -202,6 +230,12 @@ def initiate_savings_withdrawal(
             )
 
             if locked_saving.status != Saving.Status.ACTIVE:
+                logger.warning(
+                    'Savings withdrawal rejected: account not ACTIVE '
+                    '(status=%s). %s',
+                    locked_saving.status,
+                    log_ctx,
+                )
                 return False, {
                     'error': (
                         'Only active savings accounts can be withdrawn from.'
