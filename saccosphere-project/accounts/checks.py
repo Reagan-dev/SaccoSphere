@@ -13,7 +13,13 @@ def check_field_encryption_key(app_configs, **kwargs):
     pass startup/health checks and only surface once payment config is
     touched. This check fails fast at `manage.py check` / process startup
     time instead.
+
+    The check is a deploy-time guard: it is skipped when DEBUG is True so
+    local development without payment encryption configured is not blocked.
     """
+    if settings.DEBUG:
+        return []
+
     from cryptography.fernet import Fernet
 
     errors = []
