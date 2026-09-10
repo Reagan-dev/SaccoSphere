@@ -1738,7 +1738,13 @@ class DividendDeclarationDetailView(
 
 
 class DividendCalculateView(SaccoScopedMixin, APIView):
-    """Calculate dividends for a declaration."""
+    """Queue the per-member dividend calculation for a declaration.
+
+    The expensive O(members x months) loop runs in
+    ``services.tasks.calculate_dividends_for_declaration_task``; the view
+    only does the cheap status guard (kept a synchronous 400/409) and
+    moves the declaration to ``CALCULATING`` before enqueuing.
+    """
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
 
@@ -1747,43 +1753,57 @@ class DividendCalculateView(SaccoScopedMixin, APIView):
         if response:
             return response
 
-        from services.engines.dividend_calculator import (
-            calculate_dividends_for_declaration,
-        )
+        from .tasks import calculate_dividends_for_declaration_task
 
-        declaration = get_object_or_404(
-            self.apply_sacco_scope(
-                DividendDeclaration.objects.filter(id=uuid or pk)
-            )
-        )
-
-        try:
-            with transaction.atomic():
-                result = calculate_dividends_for_declaration(declaration)
-        except ValueError as exc:
-            return Response(
-                {'detail': str(exc)},
-                status=status.HTTP_400_BAD_REQUEST,
+        with transaction.atomic():
+            declaration = get_object_or_404(
+                self.apply_sacco_scope(
+                    DividendDeclaration.objects.select_for_update().filter(
+                        id=uuid or pk,
+                    )
+                )
             )
 
-        log_audit(
-            request.user,
-            'DIVIDEND_CALCULATED',
-            'DividendDeclaration',
-            declaration.id,
-            new_values={
-                'sacco_id': str(declaration.sacco_id),
-                'total_dividend_amount': str(result['total_dividend_amount']),
-                'payout_count': result['payout_count'],
-            },
-            request=request,
+            # Fast, synchronous validation - a cheap status check that
+            # must stay a 4xx, never an async FAILED run.
+            if declaration.status in (
+                DividendDeclaration.Status.APPROVED,
+                DividendDeclaration.Status.DISBURSING,
+                DividendDeclaration.Status.DISBURSED,
+            ):
+                return Response(
+                    {
+                        'detail': (
+                            'Cannot recalculate dividends for a declaration '
+                            f'in {declaration.status} status.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if declaration.status == DividendDeclaration.Status.CALCULATING:
+                return Response(
+                    {'detail': 'A dividend calculation is already running.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            declaration.status = DividendDeclaration.Status.CALCULATING
+            declaration.save(update_fields=['status'])
+
+        declaration_id = str(declaration.id)
+        actor_id = str(request.user.id)
+        transaction.on_commit(
+            lambda: calculate_dividends_for_declaration_task.delay(
+                declaration_id, actor_id,
+            )
         )
 
         return Response(
             {
-                'total_dividend_amount': result['total_dividend_amount'],
-                'payout_count': result['payout_count'],
-            }
+                'id': declaration_id,
+                'status': declaration.status,
+                'detail': 'Dividend calculation has been queued.',
+            },
+            status=status.HTTP_202_ACCEPTED,
         )
 
 
@@ -1844,7 +1864,13 @@ class DividendApproveView(SaccoScopedMixin, APIView):
 
 
 class DividendDisburseView(SaccoScopedMixin, APIView):
-    """Disburse approved dividends to member savings."""
+    """Queue disbursement of an approved dividend declaration.
+
+    The batched, all-or-nothing ledger run lives in
+    ``services.tasks.disburse_dividends_for_declaration_task``; the view
+    only does the synchronous APPROVED-status guard and moves the
+    declaration to ``DISBURSING`` before enqueuing.
+    """
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
 
@@ -1853,8 +1879,7 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
         if response:
             return response
 
-        from ledger.models import LedgerEntry
-        from ledger.utils import apply_ledger_entry
+        from .tasks import disburse_dividends_for_declaration_task
 
         with transaction.atomic():
             declaration = get_object_or_404(
@@ -1865,6 +1890,11 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
                 )
             )
 
+            if declaration.status == DividendDeclaration.Status.DISBURSING:
+                return Response(
+                    {'detail': 'A disbursement is already running.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
             if declaration.status != DividendDeclaration.Status.APPROVED:
                 return Response(
                     {
@@ -1876,79 +1906,24 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            payout_ids = list(
-                declaration.payouts.filter(
-                    status=DividendPayout.Status.PENDING,
-                ).values_list('id', flat=True)
-            )
-            paid_count = 0
-
-            for start in range(0, len(payout_ids), 500):
-                batch_ids = payout_ids[start:start + 500]
-                batch_payouts = DividendPayout.objects.select_related(
-                    'membership',
-                    'saving',
-                ).select_for_update().filter(id__in=batch_ids)
-
-                for payout in batch_payouts:
-                    if payout.dividend_amount <= Decimal('0.00'):
-                        # Clamped to zero at calculation time (negative
-                        # reconstructed balance). Nothing to post -
-                        # apply_ledger_entry rejects non-positive amounts
-                        # - so mark it paid and move on.
-                        payout.status = DividendPayout.Status.PAID
-                        payout.save(update_fields=['status'])
-                        paid_count += 1
-                        continue
-
-                    # apply_ledger_entry is the only path allowed to move
-                    # Saving.amount: it locks the saving, posts the
-                    # DIVIDEND_PAYOUT credit and raises the balance in one
-                    # atomic block.
-                    ledger_entry = apply_ledger_entry(
-                        saving=payout.saving,
-                        amount=payout.dividend_amount,
-                        entry_type=LedgerEntry.EntryType.CREDIT,
-                        category=LedgerEntry.Category.DIVIDEND_PAYOUT,
-                        description=(
-                            'Dividend payout for '
-                            f'{declaration.financial_year}'
-                        ),
-                        reference=f'DIV-{declaration.id}-{payout.id}',
-                    )
-
-                    if ledger_entry is None:
-                        raise RuntimeError(
-                            'Failed to create dividend ledger entry.'
-                        )
-
-                    payout.status = DividendPayout.Status.PAID
-                    payout.save(update_fields=['status'])
-                    paid_count += 1
-
-            declaration.status = DividendDeclaration.Status.DISBURSED
+            declaration.status = DividendDeclaration.Status.DISBURSING
             declaration.save(update_fields=['status'])
 
-        log_audit(
-            request.user,
-            'DIVIDEND_DISBURSED',
-            'DividendDeclaration',
-            declaration.id,
-            old_values={'status': DividendDeclaration.Status.APPROVED},
-            new_values={
-                'status': declaration.status,
-                'sacco_id': str(declaration.sacco_id),
-                'paid_count': paid_count,
-            },
-            request=request,
+        declaration_id = str(declaration.id)
+        actor_id = str(request.user.id)
+        transaction.on_commit(
+            lambda: disburse_dividends_for_declaration_task.delay(
+                declaration_id, actor_id,
+            )
         )
 
         return Response(
             {
-                'id': str(declaration.id),
+                'id': declaration_id,
                 'status': declaration.status,
-                'paid_count': paid_count,
-            }
+                'detail': 'Dividend disbursement has been queued.',
+            },
+            status=status.HTTP_202_ACCEPTED,
         )
 
 
