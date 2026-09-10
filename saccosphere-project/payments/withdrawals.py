@@ -342,20 +342,11 @@ def initiate_savings_withdrawal(
                 related_saving=locked_saving,
             )
 
-            locked_saving.amount -= gross_amount
-            locked_saving.total_withdrawals += gross_amount
-            locked_saving.last_transaction_date = timezone.localdate()
-            locked_saving.save(
-                update_fields=[
-                    'amount',
-                    'total_withdrawals',
-                    'last_transaction_date',
-                    'updated_at',
-                ],
-            )
-
+            # apply_ledger_entry is the only path allowed to move
+            # Saving.amount: it writes the SAVING_WITHDRAWAL debit and
+            # reduces the balance in the same locked block.
             _write_withdrawal_debit_ledger(
-                membership=locked_saving.membership,
+                saving=locked_saving,
                 transaction=payment,
                 gross_amount=gross_amount,
                 net_amount=net_amount,
@@ -499,35 +490,36 @@ def _build_idempotency_key(
 
 def _write_withdrawal_debit_ledger(
     *,
-    membership,
+    saving,
     transaction,
     gross_amount,
     net_amount,
     platform_fee,
 ):
-    """Write the SAVING_WITHDRAWAL debit in the same atomic block.
+    """Write the SAVING_WITHDRAWAL debit and reduce the balance.
 
     Idempotent on the (unique) reference so a retried callback or a
-    reconcile pass never double-posts it.
+    reconcile pass never double-posts it or double-debits the account.
     """
     from ledger.models import LedgerEntry
-    from ledger.utils import create_ledger_entry
+    from ledger.utils import apply_ledger_entry
 
     reference = str(transaction.id)
     if LedgerEntry.objects.filter(reference=reference).exists():
         return
 
-    create_ledger_entry(
-        membership=membership,
+    apply_ledger_entry(
+        saving=saving,
+        amount=gross_amount,
         entry_type=LedgerEntry.EntryType.DEBIT,
         category=LedgerEntry.Category.SAVING_WITHDRAWAL,
-        amount=gross_amount,
         description=(
             f'Withdrawal. Net to member: KES {net_amount:,.2f}. '
             f'Processing fee: KES {platform_fee:,.2f}.'
         ),
         reference=reference,
         transaction=transaction,
+        withdrawal_delta=gross_amount,
     )
 
 
@@ -538,7 +530,7 @@ def _reverse_withdrawal(payment, *, reason, response_code=None):
     async failure callback. Idempotent on the reversal reference.
     """
     from ledger.models import LedgerEntry
-    from ledger.utils import create_ledger_entry
+    from ledger.utils import apply_ledger_entry
     from services.models import Saving
 
     reversal_reference = f'{payment.id}-REV'
@@ -571,31 +563,23 @@ def _reverse_withdrawal(payment, *, reason, response_code=None):
             return
 
         gross_amount = payment.gross_amount or payment.amount
-        locked_saving = Saving.objects.select_for_update().get(
-            id=mpesa_transaction.related_saving_id,
-        )
-        locked_saving.amount += gross_amount
-        locked_saving.total_withdrawals -= gross_amount
-        locked_saving.last_transaction_date = timezone.localdate()
-        locked_saving.save(
-            update_fields=[
-                'amount',
-                'total_withdrawals',
-                'last_transaction_date',
-                'updated_at',
-            ],
-        )
+        saving = Saving.objects.get(id=mpesa_transaction.related_saving_id)
 
-        create_ledger_entry(
-            membership=locked_saving.membership,
-            entry_type=LedgerEntry.EntryType.CREDIT,
-            category=LedgerEntry.Category.ADJUSTMENT,
+        # A withdrawal reversal is a CREDIT SAVING_WITHDRAWAL (not an
+        # ADJUSTMENT): it belongs in the savings-reconciliation set and
+        # nets the original debit to zero. apply_ledger_entry re-credits
+        # Saving.amount and unwinds total_withdrawals in one locked block.
+        apply_ledger_entry(
+            saving=saving,
             amount=gross_amount,
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.SAVING_WITHDRAWAL,
             description=(
                 f'Savings withdrawal reversed: {reason}'
             )[:255],
             reference=reversal_reference,
             transaction=payment,
+            withdrawal_delta=-gross_amount,
         )
 
         if payment.status != Transaction.Status.FAILED:

@@ -18,6 +18,10 @@ class LedgerEntry(models.Model):
         DIVIDEND = 'DIVIDEND', 'Dividend'
         DIVIDEND_PAYOUT = 'DIVIDEND_PAYOUT', 'Dividend payout'
         ADJUSTMENT = 'ADJUSTMENT', 'Adjustment'
+        # One-time reconciliation entry: brings the ledger up to the
+        # savings balance that predated the ledger for an account. Only
+        # written by the backfill_savings_opening_balances command.
+        OPENING_BALANCE = 'OPENING_BALANCE', 'Opening balance'
 
     id = models.UUIDField(
         primary_key=True,

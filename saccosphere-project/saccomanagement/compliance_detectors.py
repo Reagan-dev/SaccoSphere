@@ -273,3 +273,47 @@ class SevereArrearsDetector(ComplianceDetector):
             },
         )
         return flag
+
+
+class SavingsLedgerMismatchDetector(ComplianceDetector):
+    """A SACCO where cached ``Saving.amount`` no longer matches the ledger.
+
+    ``ledger.utils.apply_ledger_entry`` is the only path allowed to move
+    ``Saving.amount``, and ``services.tasks.reconcile_savings_ledger``
+    runs daily per SACCO. When a membership's total ``Saving.amount``
+    drifts from its savings-category ledger balance, something wrote the
+    cache outside ``apply_ledger_entry`` (or a ledger row is missing).
+    This raises a single ``DATA_DISCREPANCY`` flag for the SACCO for a
+    human to investigate - it never auto-corrects. Same manual-resolution
+    model as the other detectors.
+    """
+
+    flag_type = ComplianceFlag.FlagType.DATA_DISCREPANCY
+    severity = ComplianceFlag.Severity.HIGH
+
+    def check(self, sacco, mismatches, total_drift):
+        """Call once per SACCO with >=1 mismatched membership.
+
+        ``mismatches`` is a list of per-membership dicts; ``total_drift``
+        the net Decimal (expected minus ledger). Returns the
+        ComplianceFlag, or None when there is nothing to flag.
+        """
+        if not mismatches:
+            return None
+
+        flag, _created = self.flag(
+            sacco,
+            description=(
+                f'{len(mismatches)} membership(s) at this SACCO have a '
+                'savings balance that no longer matches the ledger '
+                f'(net drift KES {total_drift:,.2f}). Cached Saving.amount '
+                'changed outside ledger.utils.apply_ledger_entry, or a '
+                'ledger row is missing - investigate, do not bulk-correct.'
+            ),
+            metadata={
+                'mismatched_memberships': len(mismatches),
+                'total_drift': str(total_drift),
+                'sample': mismatches[:20],
+            },
+        )
+        return flag

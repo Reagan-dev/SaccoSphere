@@ -1739,7 +1739,7 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
             return response
 
         from ledger.models import LedgerEntry
-        from ledger.utils import create_ledger_entry
+        from ledger.utils import apply_ledger_entry
 
         with transaction.atomic():
             declaration = get_object_or_404(
@@ -1776,11 +1776,15 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
                 ).select_for_update().filter(id__in=batch_ids)
 
                 for payout in batch_payouts:
-                    ledger_entry = create_ledger_entry(
-                        membership=payout.membership,
+                    # apply_ledger_entry is the only path allowed to move
+                    # Saving.amount: it locks the saving, posts the
+                    # DIVIDEND_PAYOUT credit and raises the balance in one
+                    # atomic block.
+                    ledger_entry = apply_ledger_entry(
+                        saving=payout.saving,
+                        amount=payout.dividend_amount,
                         entry_type=LedgerEntry.EntryType.CREDIT,
                         category=LedgerEntry.Category.DIVIDEND_PAYOUT,
-                        amount=payout.dividend_amount,
                         description=(
                             'Dividend payout for '
                             f'{declaration.financial_year}'
@@ -1792,9 +1796,6 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
                         raise RuntimeError(
                             'Failed to create dividend ledger entry.'
                         )
-
-                    payout.saving.amount += payout.dividend_amount
-                    payout.saving.save(update_fields=['amount', 'updated_at'])
 
                     payout.status = DividendPayout.Status.PAID
                     payout.save(update_fields=['status'])
