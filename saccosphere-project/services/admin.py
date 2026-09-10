@@ -40,8 +40,9 @@ class SavingsTypeAdmin(admin.ModelAdmin):
         'interest_rate',
         'minimum_contribution',
         'is_active',
+        'allows_multiple_accounts',
     )
-    list_filter = ('sacco', 'name', 'is_active')
+    list_filter = ('sacco', 'name', 'is_active', 'allows_multiple_accounts')
     search_fields = ('name', 'sacco__name')
 
 
@@ -63,6 +64,31 @@ class SavingAdmin(admin.ModelAdmin):
         'membership__member_number',
         'membership__sacco__name',
     )
+
+    def save_model(self, request, obj, form, change):
+        """Route new accounts through the one shared creation path.
+
+        Editing an existing row saves normally; adding one goes through
+        ``open_savings_account`` so the same-SACCO check runs and any
+        amount entered on the form is recorded as an opening ledger
+        entry instead of a bare ``Saving.amount`` write.
+        """
+        if change:
+            super().save_model(request, obj, form, change)
+            return
+
+        from services.engines.savings_provisioning import (
+            open_savings_account,
+        )
+
+        saving = open_savings_account(
+            membership=obj.membership,
+            savings_type=obj.savings_type,
+            opening_balance=obj.amount or None,
+        )
+        # Point the admin at the row that was actually created.
+        obj.pk = saving.pk
+        obj.id = saving.id
 
 
 @admin.register(DividendDeclaration)

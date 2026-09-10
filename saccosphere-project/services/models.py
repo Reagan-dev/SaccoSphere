@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from django.conf import settings
 
+from django.core.exceptions import ValidationError
+
 from django.db import models
 
 from django.utils import timezone
@@ -103,6 +105,24 @@ class SavingsType(models.Model):
         default=True,
 
         help_text='Whether this savings type is available.',
+
+    )
+
+    allows_multiple_accounts = models.BooleanField(
+
+        default=False,
+
+        help_text=(
+
+            'When true, a member may hold more than one savings account '
+
+            'of this type (e.g. several fixed-deposit pots). When false '
+
+            '(the default) a member is limited to one account of this '
+
+            'type.'
+
+        ),
 
     )
 
@@ -260,8 +280,6 @@ class Saving(models.Model):
 
         ordering = ['-created_at']
 
-        unique_together = ['membership', 'savings_type']
-
 
 
     def __str__(self):
@@ -269,6 +287,114 @@ class Saving(models.Model):
         savings_type = self.savings_type or 'General'
 
         return f'{self.membership} — {savings_type}: {self.amount}'
+
+    def clean(self):
+
+        super().clean()
+
+        self._enforce_same_sacco()
+
+        self._enforce_one_account_per_type()
+
+    def _enforce_same_sacco(self):
+
+        """Membership and savings type must belong to the same SACCO.
+
+        Keeps a cross-tenant account from being formed at the admin or
+
+        any ``full_clean()`` caller; ``open_savings_account`` checks the
+
+        same thing up front for a clearer message.
+
+        """
+
+        if self.savings_type_id is None or self.membership_id is None:
+
+            return
+
+        if self.membership.sacco_id != self.savings_type.sacco_id:
+
+            raise ValidationError(
+
+                {
+
+                    'savings_type': (
+
+                        'The savings type belongs to a different SACCO '
+
+                        'than this member.'
+
+                    ),
+
+                }
+
+            )
+
+    def _enforce_one_account_per_type(self):
+
+        """One savings account per member per type by default.
+
+        A ``SavingsType`` with ``allows_multiple_accounts=True`` opts out
+
+        (e.g. several fixed-deposit pots). This rule is enforced here
+
+        rather than by a DB constraint because it crosses the
+
+        ``savings_type`` relation and a Postgres partial unique index
+
+        cannot reference a joined column. ``full_clean()`` runs it from
+
+        the admin and from any serializer/form that calls it, and
+
+        ``services.engines.savings_provisioning.open_savings_account``
+
+        (the shared creation path) enforces it under a row lock. A raw
+
+        ``.save()`` bypasses it, matching Django's usual ``clean()``
+
+        contract.
+
+        """
+
+        if self.savings_type_id is None:
+
+            return
+
+        if self.savings_type.allows_multiple_accounts:
+
+            return
+
+        siblings = Saving.objects.filter(
+
+            membership_id=self.membership_id,
+
+            savings_type_id=self.savings_type_id,
+
+        )
+
+        if self.pk is not None:
+
+            siblings = siblings.exclude(pk=self.pk)
+
+        if siblings.exists():
+
+            raise ValidationError(
+
+                {
+
+                    'savings_type': (
+
+                        'This member already has a '
+
+                        f'{self.savings_type.name} savings account and '
+
+                        'this type does not allow multiple accounts.'
+
+                    ),
+
+                }
+
+            )
 
 
 
