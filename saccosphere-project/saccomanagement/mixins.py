@@ -1,6 +1,23 @@
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import APIException, PermissionDenied
+from rest_framework.permissions import SAFE_METHODS
 
 from saccomanagement.models import Role
+
+
+class SaccoHeaderRequired(APIException):
+    """A write/money endpoint was hit without an explicit ``X-Sacco-ID``.
+
+    Tenancy on this platform is row-level in a shared schema, so the
+    "no header -> use the admin's first SACCO_ADMIN role" fallback lets a
+    multi-SACCO admin silently execute a write (e.g. a dividend
+    disbursement) against an arbitrary SACCO. For endpoints that opt in
+    with ``require_sacco_header = True`` we fail loudly with a 400
+    instead.
+    """
+
+    status_code = 400
+    default_detail = 'X-Sacco-ID header is required for this operation.'
+    default_code = 'sacco_header_required'
 
 
 class SaccoScopedMixin:
@@ -9,7 +26,16 @@ class SaccoScopedMixin:
 
     Provides methods to filter querysets based on the current SACCO context.
     Only SACCO_ADMIN and SUPER_ADMIN can use these views.
+
+    Set ``require_sacco_header = True`` on a view to forbid the silent
+    "first SACCO_ADMIN role" fallback for unsafe methods
+    (POST/PUT/PATCH/DELETE) when the admin administers more than one
+    SACCO - such a request must carry ``X-Sacco-ID`` or it gets a clean
+    400. Safe methods and single-SACCO admins are unaffected. Turn it on
+    for every endpoint that writes or moves money.
     """
+
+    require_sacco_header = False
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
@@ -60,7 +86,17 @@ class SaccoScopedMixin:
             self.request.current_sacco = role.sacco
             return
 
-        # No header: use first SACCO_ADMIN role
+        # No header sent. Falling back to the admin's SACCO_ADMIN role is
+        # only unambiguous when they have exactly one; for a write/money
+        # endpoint (require_sacco_header) a multi-SACCO admin must be
+        # explicit rather than have the write land on an arbitrary SACCO.
+        if (
+            self.require_sacco_header
+            and self.request.method not in SAFE_METHODS
+            and admin_roles.count() > 1
+        ):
+            raise SaccoHeaderRequired()
+
         role = admin_roles.first()
         if role:
             self.request.current_sacco = role.sacco

@@ -207,6 +207,9 @@ class SavingsAccountAdminOpenView(SaccoScopedMixin, APIView):
     """
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    # Opens an account and posts an opening ledger entry - a multi-SACCO
+    # admin must name the tenant explicitly.
+    require_sacco_header = True
 
     def post(self, request):
         response = self._set_sacco_context()
@@ -1628,6 +1631,8 @@ class DividendDeclarationListCreateView(SaccoScopedMixin, ListCreateAPIView):
     serializer_class = DividendDeclarationSerializer
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
     pagination_class = None
+    # Strict for the POST (create); GET list still accepts the fallback.
+    require_sacco_header = True
 
     def get(self, request, *args, **kwargs):
         response = self._set_sacco_context()
@@ -1667,6 +1672,8 @@ class DividendDeclarationDetailView(
 ):
     """Retrieve, update, or delete a dividend declaration."""
 
+    # Strict for PUT/PATCH/DELETE; GET retrieve still accepts the fallback.
+    require_sacco_header = True
     serializer_class = DividendDeclarationSerializer
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
     lookup_url_kwarg = 'uuid'
@@ -1747,6 +1754,7 @@ class DividendCalculateView(SaccoScopedMixin, APIView):
     """
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    require_sacco_header = True
 
     def post(self, request, uuid=None, pk=None):
         response = self._set_sacco_context()
@@ -1811,6 +1819,7 @@ class DividendApproveView(SaccoScopedMixin, APIView):
     """Approve a calculated dividend declaration."""
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    require_sacco_header = True
 
     def post(self, request, uuid=None, pk=None):
         response = self._set_sacco_context()
@@ -1873,6 +1882,7 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
     """
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    require_sacco_header = True
 
     def post(self, request, uuid=None, pk=None):
         response = self._set_sacco_context()
