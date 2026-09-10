@@ -327,7 +327,7 @@ class SetSavingStatusTests(TestCase):
         self.assertEqual(self.saving.status, Saving.Status.FROZEN)
 
         log = SystemAuditLog.objects.get(
-            action='SAVING_STATUS_CHANGED',
+            action='SAVINGS_STATUS_CHANGED',
             resource_id=str(self.saving.pk),
         )
         self.assertEqual(log.user, self.staff)
@@ -344,7 +344,7 @@ class SetSavingStatusTests(TestCase):
         )
         self.assertFalse(
             SystemAuditLog.objects.filter(
-                action='SAVING_STATUS_CHANGED',
+                action='SAVINGS_STATUS_CHANGED',
             ).exists()
         )
 

@@ -329,6 +329,104 @@ class SavingsAccountAdminOpenView(SaccoScopedMixin, APIView):
         )
 
 
+class _SavingAdminActionView(SaccoScopedMixin, APIView):
+    """Shared base: SACCO-scoped admin action on one member's saving.
+
+    Resolves the saving inside the admin's SACCO (a cross-tenant id
+    404s); subclasses do the actual change through the audited
+    ``services.engines.savings_admin_ops`` helpers.
+    """
+
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    # A money-affecting admin write - a multi-SACCO admin must name the
+    # tenant with X-Sacco-ID.
+    require_sacco_header = True
+
+    def _get_scoped_saving(self, sacco, saving_id):
+        return get_object_or_404(
+            Saving.objects.select_related(
+                'membership',
+                'membership__user',
+                'membership__sacco',
+                'savings_type',
+            ),
+            id=saving_id,
+            membership__sacco=sacco,
+        )
+
+
+class SavingsStatusActionView(_SavingAdminActionView):
+    """POST /savings/<id>/status/ {action: freeze|close|reactivate, reason}."""
+
+    def post(self, request, id=None):
+        response = self._set_sacco_context()
+        if response:
+            return response
+
+        from .engines.savings_admin_ops import (
+            SavingsAdminOpError,
+            apply_savings_status_action,
+        )
+        from .serializers import SavingsStatusActionSerializer
+
+        serializer = SavingsStatusActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        saving = self._get_scoped_saving(self.get_sacco_context(), id)
+        try:
+            saving = apply_savings_status_action(
+                saving,
+                action=data['action'],
+                actor=request.user,
+                reason=data['reason'],
+                request=request,
+            )
+        except SavingsAdminOpError as exc:
+            return Response(
+                {'detail': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(SavingSerializer(saving).data)
+
+
+class SavingsDividendEligibilityView(_SavingAdminActionView):
+    """POST /savings/<id>/dividend-eligibility/ {eligible: bool, reason}."""
+
+    def post(self, request, id=None):
+        response = self._set_sacco_context()
+        if response:
+            return response
+
+        from .engines.savings_admin_ops import (
+            SavingsAdminOpError,
+            set_dividend_eligibility,
+        )
+        from .serializers import SavingsDividendEligibilitySerializer
+
+        serializer = SavingsDividendEligibilitySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        saving = self._get_scoped_saving(self.get_sacco_context(), id)
+        try:
+            saving = set_dividend_eligibility(
+                saving,
+                eligible=data['eligible'],
+                actor=request.user,
+                reason=data['reason'],
+                request=request,
+            )
+        except SavingsAdminOpError as exc:
+            return Response(
+                {'detail': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(SavingSerializer(saving).data)
+
+
 class LoanTypeListView(ListAPIView):
     serializer_class = LoanTypeSerializer
     permission_classes = [AllowAny]

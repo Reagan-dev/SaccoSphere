@@ -145,6 +145,22 @@ class SavingSerializer(serializers.ModelSerializer):
         )
 
 
+class SavingsStatusActionSerializer(serializers.Serializer):
+    """Payload for POST /savings/<id>/status/."""
+
+    action = serializers.ChoiceField(
+        choices=('freeze', 'close', 'reactivate'),
+    )
+    reason = serializers.CharField(max_length=500)
+
+
+class SavingsDividendEligibilitySerializer(serializers.Serializer):
+    """Payload for POST /savings/<id>/dividend-eligibility/."""
+
+    eligible = serializers.BooleanField()
+    reason = serializers.CharField(max_length=500)
+
+
 class OpenSavingsAccountSerializer(serializers.Serializer):
     """Payload for admin-initiated opening of a member savings account."""
 

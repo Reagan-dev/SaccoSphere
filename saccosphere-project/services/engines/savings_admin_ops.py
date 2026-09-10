@@ -126,10 +126,13 @@ def create_savings_adjustment(saving, *, amount, direction, actor, reason):
     return entry
 
 
-def set_saving_status(saving, *, new_status, actor, reason=None):
+def set_saving_status(saving, *, new_status, actor, reason=None, request=None):
     """Change a savings account's status under a row lock, with an audit
-    row. The shared code path for freeze / close / reactivate - admin and
-    any future API must both call this rather than saving the field.
+    row. The single write+audit primitive for freeze / close / reactivate.
+
+    Callers that need *legal-transition* enforcement and the member
+    notification (the API) go through :func:`apply_savings_status_action`;
+    the Django-admin action calls this directly (super-admin, permissive).
 
     Returns the locked ``Saving``. A no-op transition is allowed and
     simply logs nothing.
@@ -148,12 +151,159 @@ def set_saving_status(saving, *, new_status, actor, reason=None):
 
     log_audit(
         actor,
-        'SAVING_STATUS_CHANGED',
+        'SAVINGS_STATUS_CHANGED',
         'Saving',
         saving.pk,
         old_values={'status': old_status},
         new_values={'status': new_status, 'reason': reason},
+        request=request,
     )
 
     saving.status = new_status
+    return locked
+
+
+# Legal savings-account status transitions. CLOSED is TERMINAL - a closed
+# account is never reopened (a member who returns opens a new one). This
+# keeps a wound-down account's state permanently settled for audit and
+# stops an accidental "reactivate" from resurrecting money that was
+# deliberately closed out.
+_ACTION_TARGET = {
+    'freeze': Saving.Status.FROZEN,
+    'close': Saving.Status.CLOSED,
+    'reactivate': Saving.Status.ACTIVE,
+}
+_LEGAL_TRANSITIONS = {
+    Saving.Status.ACTIVE: {Saving.Status.FROZEN, Saving.Status.CLOSED},
+    Saving.Status.FROZEN: {Saving.Status.ACTIVE, Saving.Status.CLOSED},
+    Saving.Status.CLOSED: set(),
+}
+STATUS_ACTIONS = tuple(_ACTION_TARGET)
+
+
+def apply_savings_status_action(
+    saving, *, action, actor, reason, request=None,
+):
+    """API-facing freeze / close / reactivate.
+
+    Locks the row, checks the transition is legal *from the current
+    status*, writes + audits via :func:`set_saving_status`, and notifies
+    the affected member on freeze/close (it touches their money).
+
+    Raises :class:`SavingsAdminOpError` for an unknown action, an illegal
+    or no-op transition, or a too-short reason. Returns the locked
+    ``Saving``.
+    """
+    reason = (reason or '').strip()
+    if len(reason) < MIN_REASON_LENGTH:
+        raise SavingsAdminOpError(
+            f'A reason of at least {MIN_REASON_LENGTH} characters is '
+            'required to change an account status.'
+        )
+    target = _ACTION_TARGET.get(action)
+    if target is None:
+        raise SavingsAdminOpError(
+            "action must be one of 'freeze', 'close', 'reactivate'."
+        )
+
+    with db_transaction.atomic():
+        locked = (
+            Saving.objects.select_for_update()
+            .select_related(
+                'membership',
+                'membership__user',
+                'membership__sacco',
+                'savings_type',
+            )
+            .get(pk=saving.pk)
+        )
+        current = locked.status
+        if current == target:
+            raise SavingsAdminOpError(
+                f'This account is already {current.lower()}.'
+            )
+        if target not in _LEGAL_TRANSITIONS.get(current, set()):
+            raise SavingsAdminOpError(
+                f'Cannot {action} a {current.lower()} savings account.'
+            )
+
+        set_saving_status(
+            locked,
+            new_status=target,
+            actor=actor,
+            reason=reason,
+            request=request,
+        )
+
+        if target in (Saving.Status.FROZEN, Saving.Status.CLOSED):
+            _notify_member_of_status_change(locked, target, reason)
+
+    saving.status = target
+    return locked
+
+
+def _notify_member_of_status_change(saving, new_status, reason):
+    """Best-effort in-app notice to the member on freeze/close.
+
+    ``create_notification`` is itself crash-safe (it swallows and logs
+    its own errors), so a notification-infra hiccup can never roll back
+    the status change.
+    """
+    from notifications.models import Notification
+    from notifications.utils import create_notification
+
+    verb = 'frozen' if new_status == Saving.Status.FROZEN else 'closed'
+    product = (
+        saving.savings_type.name if saving.savings_type_id else 'savings'
+    )
+    create_notification(
+        user=saving.membership.user,
+        title=f'Your {product} account has been {verb}',
+        message=(
+            f'Your savings account at {saving.membership.sacco.name} has '
+            f'been {verb} by an administrator. Reason: {reason}. Please '
+            'contact your SACCO for details.'
+        ),
+        category=Notification.Category.ALERT,
+        related_object_type='Saving',
+        related_object_id=str(saving.id),
+        dispatch_async=False,
+    )
+
+
+def set_dividend_eligibility(saving, *, eligible, actor, reason, request=None):
+    """Toggle ``Saving.dividend_eligible`` under a row lock, with an audit
+    row (``DIVIDEND_ELIGIBILITY_CHANGED``). Rejects a too-short reason and
+    a no-op change. Returns the locked ``Saving``.
+    """
+    reason = (reason or '').strip()
+    if len(reason) < MIN_REASON_LENGTH:
+        raise SavingsAdminOpError(
+            f'A reason of at least {MIN_REASON_LENGTH} characters is '
+            'required to change dividend eligibility.'
+        )
+    eligible = bool(eligible)
+
+    with db_transaction.atomic():
+        locked = Saving.objects.select_for_update().get(pk=saving.pk)
+        before = locked.dividend_eligible
+        if before == eligible:
+            state = 'enabled' if eligible else 'disabled'
+            raise SavingsAdminOpError(
+                f'Dividend eligibility is already {state}.'
+            )
+        locked.dividend_eligible = eligible
+        locked.save(update_fields=['dividend_eligible', 'updated_at'])
+
+    log_audit(
+        actor,
+        'DIVIDEND_ELIGIBILITY_CHANGED',
+        'Saving',
+        saving.pk,
+        old_values={'dividend_eligible': before},
+        new_values={'dividend_eligible': eligible, 'reason': reason},
+        request=request,
+    )
+
+    saving.dividend_eligible = eligible
     return locked
