@@ -307,6 +307,14 @@ class DividendPayoutAdmin(admin.ModelAdmin):
         'membership__member_number',
         'declaration__financial_year',
     )
+    # Payout rows are created only by calculate_dividends_for_declaration
+    # and move PENDING -> PAID only via disburse_dividends_for_declaration
+    # (which posts the ledger credit). A hand edit here - especially
+    # PAID -> PENDING - would let a re-disburse pay the same member twice.
+    readonly_fields = ('average_balance', 'dividend_amount', 'status')
+
+    def has_add_permission(self, request):
+        return False
 
 
 @admin.register(LoanType)
