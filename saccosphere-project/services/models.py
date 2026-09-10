@@ -1903,13 +1903,26 @@ class DividendDeclaration(models.Model):
 
 
 class DividendPayout(models.Model):
-    """
-    Individual dividend payout for a member's saving.
+    """Individual dividend payout for a member's saving.
+
+    State machine (two states, no intermediate):
+
+    * ``PENDING`` - set when the payout row is created by
+      ``calculate_dividends_for_declaration``.
+    * ``PAID`` - set by ``disburse_dividends_for_declaration`` once the
+      dividend has been posted to the member's savings ledger via
+      ``apply_ledger_entry`` (a ``DIVIDEND_PAYOUT`` credit that raises
+      ``Saving.amount``). A zero-amount payout also lands here directly.
+
+    A dividend on this platform is reinvested straight into the member's
+    savings account, so "credited to the account" and "paid" are the same
+    event - there is no separate step and therefore no third state. The
+    old ``CREDITED`` value was never assigned by any code path and was
+    removed in migration 0018.
     """
 
     class Status(models.TextChoices):
         PENDING = 'PENDING', 'Pending'
-        CREDITED = 'CREDITED', 'Credited'
         PAID = 'PAID', 'Paid'
 
     id = models.UUIDField(
