@@ -784,12 +784,47 @@ class STKPushView(APIView):
         return provider
 
     def _get_owned_saving(self, user, data):
-        return get_object_or_404(
-            Saving.objects.select_related('membership', 'membership__sacco'),
+        saving = get_object_or_404(
+            Saving.objects.select_related(
+                'membership', 'membership__sacco', 'savings_type',
+            ),
             id=data['saving_id'],
             membership__user=user,
             membership__sacco_id=data['sacco_id'],
         )
+
+        # (B) Deposits are only accepted into ACTIVE accounts. A FROZEN /
+        # CLOSED account must not be silently topped up - withdrawal
+        # already enforces this (payments/withdrawals.py).
+        if saving.status != Saving.Status.ACTIVE:
+            raise serializers.ValidationError(
+                {
+                    'saving_id': (
+                        'This savings account is '
+                        f'{saving.get_status_display().lower()}. Deposits '
+                        'are only accepted into active accounts.'
+                    ),
+                    'account_status': saving.status,
+                }
+            )
+
+        # (A) Enforce the product's minimum contribution when one is set.
+        # The default (Decimal('0.00')) is falsy, so products without a
+        # configured minimum are unaffected.
+        savings_type = saving.savings_type
+        minimum = getattr(savings_type, 'minimum_contribution', None)
+        if minimum and data['amount'] < minimum:
+            raise serializers.ValidationError(
+                {
+                    'amount': (
+                        'Deposit must be at least the minimum contribution '
+                        f'of KES {minimum:,.2f} for the '
+                        f'{savings_type.name} product.'
+                    ),
+                }
+            )
+
+        return saving
 
     def _get_owned_loan(self, user, data):
         return get_object_or_404(

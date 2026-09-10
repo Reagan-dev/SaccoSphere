@@ -1074,8 +1074,28 @@ def _apply_saving_deposit(mpesa_transaction, transaction, amount):
     from ledger.utils import apply_ledger_entry
     from services.models import Saving
 
-    saving = Saving.objects.select_related('membership').get(
-        id=mpesa_transaction.related_saving_id,
+    saving = Saving.objects.select_related(
+        'membership', 'membership__sacco',
+    ).get(id=mpesa_transaction.related_saving_id)
+
+    # Frozen-between-initiation-and-callback race (product decision):
+    # payments.views rejects a deposit into a non-ACTIVE account at
+    # initiation, but an STK started while the account was ACTIVE can be
+    # confirmed by M-Pesa after it is frozen/closed. By then the member's
+    # money has already left their phone and sits at the SACCO paybill, so
+    # refusing to credit it would *lose member funds* - the worst outcome.
+    # Chosen behaviour: CREDIT WITH A FLAG. The balance is posted normally
+    # (the member is made whole); a HIGH PAYMENT_FAILURE ComplianceFlag +
+    # an audit event are raised; the account is left FROZEN/CLOSED, so the
+    # credited amount is unwithdrawable until an admin clears the freeze.
+    # Rejected alternatives: auto-B2C refund (adds cost and a second
+    # failure surface that can itself strand the funds) and hold-in-limbo
+    # (hides the money from the member with no visible balance).
+    posted_to_inactive = saving.status != Saving.Status.ACTIVE
+    review_marker = (
+        ' [CREDITED TO A NON-ACTIVE ACCOUNT - PENDING COMPLIANCE REVIEW]'
+        if posted_to_inactive
+        else ''
     )
 
     # apply_ledger_entry is the only path allowed to move Saving.amount:
@@ -1090,12 +1110,63 @@ def _apply_saving_deposit(mpesa_transaction, transaction, amount):
             f'Deposit -- member paid KES '
             f'{_get_authoritative_gross_amount(transaction):,.2f}. '
             f'KES {_get_authoritative_platform_fee(transaction):,.2f} '
-            f'platform fee included.'
+            f'platform fee included.{review_marker}'
         ),
         reference=str(transaction.id),
         transaction=transaction,
         contribution_delta=amount,
     )
+
+    if posted_to_inactive:
+        _flag_deposit_into_inactive_account(saving, transaction, amount)
+
+
+def _flag_deposit_into_inactive_account(saving, transaction, amount):
+    """Compliance flag + audit for a deposit that completed into a
+    FROZEN/CLOSED account (see ``_apply_saving_deposit`` for the product
+    decision). Never raises - a flagging bug must not undo the credit.
+    """
+    from saccomanagement.audit_logger import log_audit
+
+    sacco = saving.membership.sacco
+    try:
+        from saccomanagement.compliance_detectors import (
+            InactiveAccountDepositDetector,
+        )
+
+        InactiveAccountDepositDetector().check(
+            sacco=sacco,
+            saving=saving,
+            transaction=transaction,
+            amount=amount,
+        )
+    except Exception:
+        logger.exception(
+            'Could not raise inactive-account-deposit compliance flag for '
+            'saving_id=%s.',
+            saving.id,
+        )
+
+    try:
+        log_audit(
+            None,
+            'DEPOSIT_INTO_INACTIVE_ACCOUNT',
+            'Saving',
+            saving.id,
+            new_values={
+                'account_status': saving.status,
+                'transaction_id': str(transaction.id),
+                'amount': str(amount),
+                'sacco_id': str(sacco.id),
+                'resolution': 'credited_pending_review',
+            },
+        )
+    except Exception:
+        logger.exception(
+            'Could not write DEPOSIT_INTO_INACTIVE_ACCOUNT audit for '
+            'saving_id=%s.',
+            saving.id,
+        )
 
 
 def _apply_loan_repayment(mpesa_transaction, transaction, amount):
