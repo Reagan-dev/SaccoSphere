@@ -1975,6 +1975,16 @@ class DividendPayout(models.Model):
         unique_together = ['declaration', 'saving']
         verbose_name = 'Dividend Payout'
         verbose_name_plural = 'Dividend Payouts'
+        indexes = [
+            # Serves the disburse scan
+            # (``payouts.filter(status=PENDING)`` -> declaration_id = X
+            # AND status = 'PENDING') and, via the leading column, the
+            # ``?declaration=<id>`` list filter.
+            models.Index(
+                fields=['declaration', 'status'],
+                name='divpayout_decl_status_idx',
+            ),
+        ]
 
     def __str__(self):
         return f'{self.membership} - {self.dividend_amount}'

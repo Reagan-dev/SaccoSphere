@@ -625,6 +625,20 @@ def _reverse_withdrawal(payment, *, reason, response_code=None):
     )
 
 
+def _safe_emit_metric(event, **tags):
+    """Counter-increment log line via the project metrics helper.
+
+    Wrapped so a metrics hiccup can never roll back a money movement -
+    these run inside the withdrawal reservation / reversal atomic blocks.
+    """
+    try:
+        from config.utils import emit_metric
+
+        emit_metric(event, **tags)
+    except Exception:
+        logger.exception('Failed to emit metric %s.', event)
+
+
 def _audit_withdrawal_initiated(
     *,
     actor,
@@ -653,6 +667,12 @@ def _audit_withdrawal_initiated(
             'net_amount': str(net_amount),
         },
         request=request,
+    )
+    _safe_emit_metric(
+        'savings_withdrawal_initiated',
+        sacco_id=str(saving.membership.sacco_id),
+        gross_amount=str(gross_amount),
+        net_amount=str(net_amount),
     )
 
 
@@ -686,6 +706,12 @@ def _audit_savings_withdrawal_completed(mpesa_transaction, payment):
             'conversation_id': mpesa_transaction.conversation_id,
         },
     )
+    _safe_emit_metric(
+        'savings_withdrawal_completed',
+        sacco_id=str(saving.membership.sacco_id),
+        gross_amount=str(gross_amount),
+        net_amount=str(payment.amount),
+    )
 
 
 def _audit_savings_withdrawal_failed(
@@ -718,4 +744,12 @@ def _audit_savings_withdrawal_failed(
             ),
             'balance_re_credited': True,
         },
+    )
+    _safe_emit_metric(
+        'savings_withdrawal_failed',
+        sacco_id=str(saving.membership.sacco_id),
+        gross_amount=str(gross_amount),
+        response_code=(
+            str(response_code) if response_code is not None else 'none'
+        ),
     )

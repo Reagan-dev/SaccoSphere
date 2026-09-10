@@ -1165,6 +1165,18 @@ def _audit_savings_deposit_completed(
         },
     )
 
+    try:
+        from config.utils import emit_metric
+
+        emit_metric(
+            'savings_deposit_completed',
+            sacco_id=str(saving.membership.sacco_id),
+            net_amount=str(net_amount),
+            posted_to_inactive_account=str(bool(posted_to_inactive)).lower(),
+        )
+    except Exception:
+        logger.exception('Failed to emit savings_deposit_completed metric.')
+
 
 def _flag_deposit_into_inactive_account(saving, transaction, amount):
     """Compliance flag + audit for a deposit that completed into a
