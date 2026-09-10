@@ -1,4 +1,4 @@
-"""Savings withdrawal initiation: double-spend + idempotency hardening.
+"""Savings withdrawal: double-spend + idempotency + B2C callback hardening.
 
 Covers the reserve-under-lock flow in payments/withdrawals.py:
   * balance re-read under select_for_update (no trust in the passed
@@ -8,7 +8,13 @@ Covers the reserve-under-lock flow in payments/withdrawals.py:
   * per-transaction B2C ceiling; zero/negative amount; FROZEN account;
   * wrong-tenant rejection;
   * DarajaError at initiation reverses balance + posts an offsetting
-    ledger entry, idempotently.
+    ledger entry, idempotently;
+
+and the B2C callback processors in payments/tasks.py:
+  * _process_successful_b2c_callback with related_saving -> COMPLETED,
+    ledger debit, fee invoice line item, notification, nothing raised;
+  * _process_failed_b2c_callback -> balance revert + offsetting entry
+    survive even when the notification helper is made to raise.
 """
 
 import threading
@@ -22,9 +28,16 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, SaccoPaymentConfig, User
+from billing.models import InvoiceLineItem
 from ledger.models import LedgerEntry
+from ledger.utils import create_ledger_entry
+from notifications.models import Notification
 from payments.integrations.mpesa.daraja import DarajaError
 from payments.models import MpesaTransaction, Transaction
+from payments.tasks import (
+    _process_failed_b2c_callback,
+    _process_successful_b2c_callback,
+)
 from payments.withdrawals import (
     MAX_B2C_WITHDRAWAL_AMOUNT,
     _reverse_withdrawal,
@@ -519,3 +532,201 @@ class ConcurrentSavingsWithdrawalRaceTest(TransactionTestCase):
         self.saving.refresh_from_db()
         self.assertEqual(self.saving.amount, Decimal('0.00'))
         self.assertEqual(self.saving.total_withdrawals, Decimal('6000.00'))
+
+
+def _b2c_result_ok(conversation_id, receipt='QWE12345XY'):
+    """Realistic unwrapped Daraja B2C ``Result`` payload (success)."""
+    return {
+        'ResultType': 0,
+        'ResultCode': 0,
+        'ResultDesc': 'The service request is processed successfully.',
+        'OriginatorConversationID': f'ORIG-{conversation_id}',
+        'ConversationID': conversation_id,
+        'TransactionID': f'TXN-{conversation_id}',
+        'ResultParameters': {
+            'ResultParameter': [
+                {'Key': 'TransactionReceipt', 'Value': receipt},
+                {'Key': 'TransactionAmount', 'Value': 4975},
+                {
+                    'Key': 'ReceiverPartyPublicName',
+                    'Value': '254712240001 - WD Member',
+                },
+            ],
+        },
+        'ReferenceData': {
+            'ReferenceItem': {
+                'Key': 'QueueTimeoutURL',
+                'Value': 'https://cb.test/timeout',
+            },
+        },
+    }
+
+
+def _b2c_result_failed(conversation_id, code=2001):
+    """Realistic unwrapped Daraja B2C ``Result`` payload (failure)."""
+    return {
+        'ResultType': 0,
+        'ResultCode': code,
+        'ResultDesc': 'The initiator information is invalid.',
+        'OriginatorConversationID': f'ORIG-{conversation_id}',
+        'ConversationID': conversation_id,
+        'TransactionID': '',
+    }
+
+
+class SavingsWithdrawalB2CCallbackTest(_FixtureMixin, TestCase):
+    """Drive the real B2C callback processors with related_saving set."""
+
+    def _reserve(self, *, conversation_id, gross='5000.00'):
+        """Reserve a withdrawal via the real initiation path."""
+        # Seed a prior ledger CREDIT so balance_after is a clean figure.
+        create_ledger_entry(
+            membership=self.membership,
+            entry_type=LedgerEntry.EntryType.CREDIT,
+            category=LedgerEntry.Category.SAVING_DEPOSIT,
+            amount=Decimal('10000.00'),
+            description='Opening deposit (test seed).',
+            reference=f'SEED-{conversation_id}',
+        )
+        with patch('payments.withdrawals.DarajaClient') as client_cls:
+            client = client_cls.return_value
+            client._build_callback_url.return_value = 'https://cb.test/b2c'
+            client.initiate_b2c.return_value = {
+                'ConversationID': conversation_id,
+                'OriginatorConversationID': f'ORIG-{conversation_id}',
+            }
+            ok, _payload, http_status = initiate_savings_withdrawal(
+                saving=Saving.objects.get(id=self.saving.id),
+                phone_number='+254712240001',
+                requested_amount=Decimal(gross),
+                idempotency_key=f'cb-{conversation_id}',
+            )
+        self.assertTrue(ok)
+        self.assertEqual(http_status, 201)
+        payment = Transaction.objects.get(external_reference=conversation_id)
+        mpesa = MpesaTransaction.objects.get(transaction=payment)
+        return payment, mpesa
+
+    def test_successful_callback_completes_without_raising(self):
+        payment, mpesa = self._reserve(conversation_id='CONV-WD-OK')
+        # Gross 5000 was already debited at initiation.
+        self.saving.refresh_from_db()
+        self.assertEqual(self.saving.amount, Decimal('5000.00'))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            _process_successful_b2c_callback(
+                mpesa,
+                payment,
+                _b2c_result_ok('CONV-WD-OK'),
+            )
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, Transaction.Status.COMPLETED)
+        self.assertEqual(payment.external_reference, 'QWE12345XY')
+
+        debit = LedgerEntry.objects.get(
+            reference=str(payment.id),
+            category=LedgerEntry.Category.SAVING_WITHDRAWAL,
+        )
+        self.assertEqual(debit.entry_type, LedgerEntry.EntryType.DEBIT)
+        self.assertEqual(debit.amount, Decimal('5000.00'))
+        # 10,000 seeded credit - 5,000 withdrawal.
+        self.assertEqual(debit.balance_after, Decimal('5000.00'))
+
+        line_item = InvoiceLineItem.objects.get(transaction=payment)
+        self.assertEqual(line_item.sacco_id, self.sacco.id)
+        self.assertEqual(line_item.transaction_type, 'withdrawal')
+        self.assertEqual(line_item.gross_amount, Decimal('5000.00'))
+
+        note = Notification.objects.get(
+            user=self.user,
+            category=Notification.Category.PAYMENT,
+            related_object_type='MpesaTransaction',
+            related_object_id=str(mpesa.id),
+        )
+        self.assertEqual(note.title, 'Withdrawal successful')
+
+    def test_successful_callback_survives_a_broken_notification(self):
+        payment, mpesa = self._reserve(conversation_id='CONV-WD-OK2')
+
+        with patch(
+            'payments.tasks._notify_withdrawal_success',
+            side_effect=RuntimeError('notify boom'),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                _process_successful_b2c_callback(
+                    mpesa,
+                    payment,
+                    _b2c_result_ok('CONV-WD-OK2'),
+                )
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, Transaction.Status.COMPLETED)
+        self.assertTrue(
+            LedgerEntry.objects.filter(
+                reference=str(payment.id),
+                category=LedgerEntry.Category.SAVING_WITHDRAWAL,
+            ).exists()
+        )
+        self.assertTrue(
+            InvoiceLineItem.objects.filter(transaction=payment).exists()
+        )
+
+    def test_failed_callback_reverts_balance_and_posts_offset(self):
+        payment, mpesa = self._reserve(conversation_id='CONV-WD-FAIL')
+        self.saving.refresh_from_db()
+        self.assertEqual(self.saving.amount, Decimal('5000.00'))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            _process_failed_b2c_callback(
+                mpesa,
+                payment,
+                _b2c_result_failed('CONV-WD-FAIL'),
+                2001,
+            )
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, Transaction.Status.FAILED)
+
+        self.saving.refresh_from_db()
+        self.assertEqual(self.saving.amount, Decimal('10000.00'))
+        self.assertEqual(self.saving.total_withdrawals, Decimal('0.00'))
+
+        debit = LedgerEntry.objects.get(reference=str(payment.id))
+        credit = LedgerEntry.objects.get(reference=f'{payment.id}-REV')
+        self.assertEqual(debit.entry_type, LedgerEntry.EntryType.DEBIT)
+        self.assertEqual(credit.entry_type, LedgerEntry.EntryType.CREDIT)
+        self.assertEqual(credit.category, LedgerEntry.Category.ADJUSTMENT)
+        self.assertEqual(debit.amount, credit.amount)
+
+        note = Notification.objects.get(
+            user=self.user,
+            category=Notification.Category.PAYMENT,
+            related_object_id=str(mpesa.id),
+        )
+        self.assertEqual(note.title, 'Withdrawal failed')
+
+    def test_failed_callback_revert_survives_broken_notification(self):
+        payment, mpesa = self._reserve(conversation_id='CONV-WD-FAIL2')
+
+        with patch(
+            'payments.tasks._notify_withdrawal_failure',
+            side_effect=RuntimeError('notify boom'),
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                _process_failed_b2c_callback(
+                    mpesa,
+                    payment,
+                    _b2c_result_failed('CONV-WD-FAIL2'),
+                    2001,
+                )
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, Transaction.Status.FAILED)
+        self.saving.refresh_from_db()
+        self.assertEqual(self.saving.amount, Decimal('10000.00'))
+        self.assertTrue(
+            LedgerEntry.objects.filter(
+                reference=f'{payment.id}-REV',
+            ).exists()
+        )

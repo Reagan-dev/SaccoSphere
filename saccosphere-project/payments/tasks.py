@@ -983,7 +983,12 @@ def _process_successful_b2c_callback(
         _create_loan_disbursement_ledger(
             mpesa_transaction, transaction, gross_amount,
         )
-        _notify_disbursement_success(mpesa_transaction, transaction, amount)
+        _safe_notify(
+            _notify_disbursement_success,
+            mpesa_transaction,
+            transaction,
+            amount,
+        )
 
     # Handle savings withdrawal
     elif mpesa_transaction.related_saving:
@@ -995,7 +1000,12 @@ def _process_successful_b2c_callback(
             transaction,
             saving.membership.sacco,
         )
-        _notify_withdrawal_success(mpesa_transaction, transaction, amount)
+        _safe_notify(
+            _notify_withdrawal_success,
+            mpesa_transaction,
+            transaction,
+            amount,
+        )
 
 
 def _process_failed_b2c_callback(
@@ -1028,7 +1038,8 @@ def _process_failed_b2c_callback(
         loan = mpesa_transaction.related_loan
         loan.status = loan.Status.APPROVED
         loan.save(update_fields=['status', 'updated_at'])
-        _notify_disbursement_failure(
+        _safe_notify(
+            _notify_disbursement_failure,
             mpesa_transaction,
             transaction,
             result_description,
@@ -1044,7 +1055,8 @@ def _process_failed_b2c_callback(
             reason=result_description,
             response_code=result_code,
         )
-        _notify_withdrawal_failure(
+        _safe_notify(
+            _notify_withdrawal_failure,
             mpesa_transaction,
             transaction,
             result_description,
@@ -1353,6 +1365,30 @@ def _create_loan_disbursement_ledger(
         balance_after=loan.outstanding_balance,
         transaction=transaction,
     )
+
+
+def _safe_notify(notify_fn, *args):
+    """Run a member-notification helper without risk to the caller.
+
+    A notification bug must never roll back a committed money movement
+    (same principle as _check_repeated_payment_failures). The call is
+    deferred with transaction.on_commit so it only runs once the
+    surrounding transaction has committed - the balance, ledger and fee
+    writes are already durable by then - and any error it still raises is
+    logged and swallowed rather than propagated.
+    """
+    fn_name = getattr(notify_fn, '__name__', repr(notify_fn))
+
+    def _run():
+        try:
+            notify_fn(*args)
+        except Exception:
+            logger.exception(
+                'Member notification %s failed; continuing.',
+                fn_name,
+            )
+
+    db_transaction.on_commit(_run)
 
 
 def _notify_payment_success(mpesa_transaction, transaction, amount):
@@ -1671,51 +1707,55 @@ def _create_withdrawal_ledger(mpesa_transaction, transaction):
 
 
 def _notify_withdrawal_success(mpesa_transaction, transaction, amount):
-    """Notify user of successful withdrawal."""
+    """Notify user of successful withdrawal.
+
+    Uses the same contract as _notify_disbursement_success: the meaningful
+    figures (net amount, processing fee) go in the body and the record is
+    linked via related_object_type/id - there is no metadata kwarg.
+    """
     from notifications.models import Notification
     from notifications.utils import create_notification
 
-    user = transaction.user
     net_amount = transaction.amount
     platform_fee = _get_authoritative_platform_fee(transaction)
 
     create_notification(
-        user=user,
-        title='Withdrawal Successful',
+        user=transaction.user,
+        title='Withdrawal successful',
         message=(
-            f'Your withdrawal of KES {net_amount:,.2f} has been processed. '
-            f'Processing fee: KES {platform_fee:,.2f}.'
+            f'Your withdrawal of KES {net_amount:,.2f} has been sent to '
+            f'your M-Pesa. Processing fee: KES {platform_fee:,.2f}.'
         ),
-        notification_type=Notification.NotificationType.TRANSACTION,
-        metadata={
-            'transaction_id': str(transaction.id),
-            'amount': str(net_amount),
-            'platform_fee': str(platform_fee),
-        },
+        category=Notification.Category.PAYMENT,
+        related_object_type='MpesaTransaction',
+        related_object_id=str(mpesa_transaction.id),
+        dispatch_async=True,
     )
 
 
-def _notify_withdrawal_failure(mpesa_transaction, transaction, result_description):
-    """Notify user of failed withdrawal."""
+def _notify_withdrawal_failure(
+    mpesa_transaction,
+    transaction,
+    result_description,
+):
+    """Notify user of a failed withdrawal (balance already re-credited)."""
     from notifications.models import Notification
     from notifications.utils import create_notification
 
-    user = transaction.user
     gross_amount = _get_authoritative_gross_amount(transaction)
 
     create_notification(
-        user=user,
-        title='Withdrawal Failed',
+        user=transaction.user,
+        title='Withdrawal failed',
         message=(
-            f'Your withdrawal request for KES {gross_amount:,.2f} failed. '
+            f'Your withdrawal request for KES {gross_amount:,.2f} failed '
+            f'and the amount has been returned to your savings. '
             f'Reason: {result_description}'
         ),
-        notification_type=Notification.NotificationType.TRANSACTION,
-        metadata={
-            'transaction_id': str(transaction.id),
-            'amount': str(gross_amount),
-            'error': result_description,
-        },
+        category=Notification.Category.PAYMENT,
+        related_object_type='MpesaTransaction',
+        related_object_id=str(mpesa_transaction.id),
+        dispatch_async=True,
     )
 
 
