@@ -331,14 +331,67 @@ class DividendDeclarationSerializer(serializers.ModelSerializer):
                 {'period_end': 'Period end cannot be before period start.'}
             )
 
+        self._reject_duplicate_declaration(attrs)
+
         return attrs
 
-    def create(self, validated_data):
-        return DividendDeclaration.objects.create(
-            sacco=self.context['sacco'],
-            status=DividendDeclaration.Status.DRAFT,
-            **validated_data,
+    def _reject_duplicate_declaration(self, attrs):
+        """Fail cleanly (400) before the DB unique constraint would.
+
+        Scoped to the resolved SACCO tenant - the same (savings_type,
+        financial_year) pair is independent across SACCOs.
+        """
+        sacco = self.context.get('sacco')
+        savings_type = attrs.get(
+            'savings_type',
+            getattr(self.instance, 'savings_type', None),
         )
+        financial_year = attrs.get(
+            'financial_year',
+            getattr(self.instance, 'financial_year', None),
+        )
+
+        if not (sacco and savings_type and financial_year):
+            return
+
+        clash = DividendDeclaration.objects.filter(
+            sacco=sacco,
+            savings_type=savings_type,
+            financial_year=financial_year,
+        )
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+
+        if clash.exists():
+            raise serializers.ValidationError(
+                {
+                    'financial_year': (
+                        'A dividend declaration for this savings type and '
+                        'financial year already exists for this SACCO.'
+                    ),
+                }
+            )
+
+    def create(self, validated_data):
+        from django.db import IntegrityError
+
+        try:
+            return DividendDeclaration.objects.create(
+                sacco=self.context['sacco'],
+                status=DividendDeclaration.Status.DRAFT,
+                **validated_data,
+            )
+        except IntegrityError:
+            # Lost a race between validate() and the INSERT - surface the
+            # same clean 400, never a bare 500.
+            raise serializers.ValidationError(
+                {
+                    'financial_year': (
+                        'A dividend declaration for this savings type and '
+                        'financial year already exists for this SACCO.'
+                    ),
+                }
+            )
 
 
 class DividendPayoutSerializer(serializers.ModelSerializer):

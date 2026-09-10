@@ -1723,6 +1723,17 @@ class DividendDeclaration(models.Model):
         ordering = ['-created_at']
         verbose_name = 'Dividend Declaration'
         verbose_name_plural = 'Dividend Declarations'
+        constraints = [
+            # A SACCO may declare a dividend for a given savings type and
+            # financial year exactly once - otherwise two declarations for
+            # the same period can both be disbursed and members are paid
+            # twice. ``sacco`` is a direct FK on this model, so the tenant
+            # is already part of the key.
+            models.UniqueConstraint(
+                fields=['sacco', 'savings_type', 'financial_year'],
+                name='unique_dividend_declaration_per_sacco_type_year',
+            ),
+        ]
 
     def __str__(self):
         return (
