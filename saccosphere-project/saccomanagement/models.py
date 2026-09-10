@@ -399,6 +399,7 @@ class ComplianceFlag(models.Model):
         REGULATORY = 'REGULATORY', 'Regulatory'
         SECURITY = 'SECURITY', 'Security'
         PERFORMANCE = 'PERFORMANCE', 'Performance'
+        NPL = 'NPL', 'Non-Performing Loans'
 
     class Status(models.TextChoices):
         OPEN = 'OPEN', 'Open'

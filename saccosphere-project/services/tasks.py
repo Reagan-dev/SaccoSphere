@@ -6,6 +6,8 @@ from decimal import Decimal
 
 from celery import shared_task
 from django.db import DatabaseError, InterfaceError, OperationalError, transaction
+from django.db.models import Count, Sum
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -16,10 +18,7 @@ from notifications.utils import create_notification
 from saccomanagement.models import Role
 
 from .engines.liquidity_monitor import check_liquidity_risk
-from .engines.npl_monitor import (
-    get_arrears_bucket,
-    resolve_cleared_npl_flags,
-)
+from .engines.npl_monitor import arrears_buckets_for_monitored_loans
 from .engines.penalties import compute_penalty
 from .models import (
     DisbursementAuditLog,
@@ -302,6 +301,16 @@ def _resolve_open_liquidity_alerts(sacco):
     )
 
 
+# Chunk size for iterating the delinquency working set. The sweep only
+# ever loads loans that are in arrears now or were flagged/defaulted
+# before, so this caps peak memory rather than total work.
+NPL_SWEEP_CHUNK_SIZE = 500
+
+# The 90-day bucket is the SASRA non-performing line; only that level is
+# escalated to a platform-visible ComplianceFlag.
+NPL_COMPLIANCE_BUCKET = 90
+
+
 @shared_task(
     bind=True,
     max_retries=3,
@@ -309,67 +318,178 @@ def _resolve_open_liquidity_alerts(sacco):
     name='services.tasks.flag_npl_arrears',
 )
 def flag_npl_arrears(self):
-    """Stage NPL flags and drive the ACTIVE<->DEFAULTED transition.
+    """Stage NPL flags, drive ACTIVE<->DEFAULTED, surface severe arrears.
 
-    DEFAULTED loans stay in the queryset so the loan can auto-recover
-    once its arrears clear.
+    Scales with delinquency, not portfolio size: arrears for the whole
+    loan book are computed in a single aggregate query, and only loans
+    that are delinquent now OR were previously flagged/defaulted are
+    iterated - a healthy loan is never loaded. Writes a JobHeartbeat on
+    every run so ``/health/jobs/`` can alert if the sweep stops running.
     """
+    from health.models import JobHeartbeat
+
     try:
-        loans = Loan.objects.filter(
-            status__in=[Loan.Status.ACTIVE, Loan.Status.DEFAULTED],
-        ).select_related(
-            'membership__user',
-            'membership__sacco',
-        )
-        checked_count = 0
-        flags_created = 0
-        flags_resolved = 0
-        loans_defaulted = 0
-        loans_recovered = 0
-
-        for loan in loans:
-            checked_count += 1
-            flags_resolved += resolve_cleared_npl_flags(loan)
-            bucket = get_arrears_bucket(loan)
-
-            transition = _apply_default_status_transition(loan, bucket)
-            if transition == 'defaulted':
-                loans_defaulted += 1
-            elif transition == 'recovered':
-                loans_recovered += 1
-
-            if bucket is None:
-                continue
-
-            flag, created = NPLFlag.objects.get_or_create(
-                loan=loan,
-                threshold_days=bucket,
-            )
-            if not created:
-                continue
-
-            flags_created += 1
-            _notify_npl_flag(loan, flag)
-
+        result = _run_npl_arrears_sweep()
         logger.info(
             'NPL arrears check complete. checked=%s flags=%s resolved=%s '
-            'defaulted=%s recovered=%s.',
-            checked_count,
-            flags_created,
-            flags_resolved,
-            loans_defaulted,
-            loans_recovered,
+            'defaulted=%s recovered=%s compliance_flags=%s.',
+            result['checked'],
+            result['flags_created'],
+            result['flags_resolved'],
+            result['loans_defaulted'],
+            result['loans_recovered'],
+            result['compliance_flags'],
         )
-        return {
-            'checked': checked_count,
-            'flags_created': flags_created,
-            'flags_resolved': flags_resolved,
-            'loans_defaulted': loans_defaulted,
-            'loans_recovered': loans_recovered,
-        }
+        JobHeartbeat.record('flag_npl_arrears', detail=result)
+        return result
     except Exception as exc:
         logger.exception('NPL arrears check failed.')
+        try:
+            JobHeartbeat.record(
+                'flag_npl_arrears',
+                status=JobHeartbeat.Status.ERROR,
+                detail={'error': str(exc)},
+            )
+        except Exception:
+            logger.exception('Could not record NPL sweep failure heartbeat.')
         raise self.retry(exc=exc)
+
+
+def _run_npl_arrears_sweep():
+    """Do the actual NPL sweep. Query count is fixed + O(working set)."""
+    now = timezone.now()
+
+    # 1 aggregate query: loan_id -> arrears bucket, delinquent loans only.
+    buckets = arrears_buckets_for_monitored_loans()
+
+    # Loans already carrying an unresolved flag, and loans sitting in
+    # DEFAULTED - both must be revisited so they can clear / recover even
+    # if they have no past-due instalment this run. 2 id-only queries.
+    unresolved_flag_loan_ids = set(
+        NPLFlag.objects.filter(resolved=False).values_list(
+            'loan_id', flat=True,
+        )
+    )
+    defaulted_loan_ids = set(
+        Loan.objects.filter(
+            status=Loan.Status.DEFAULTED,
+        ).values_list('id', flat=True)
+    )
+
+    working_ids = set(buckets) | unresolved_flag_loan_ids | defaulted_loan_ids
+
+    # 1 query: every (loan, threshold) pair already on record for the
+    # working set - resolved or not - so we never violate NPLFlag's
+    # unique_together by re-creating one (mirrors the old get_or_create).
+    existing_thresholds = {}
+    for loan_id, threshold in NPLFlag.objects.filter(
+        loan_id__in=working_ids,
+    ).values_list('loan_id', 'threshold_days'):
+        existing_thresholds.setdefault(loan_id, set()).add(threshold)
+
+    checked = 0
+    flags_created = 0
+    loans_defaulted = 0
+    loans_recovered = 0
+    cleared_flag_loan_ids = []
+
+    loans = Loan.objects.filter(id__in=working_ids).select_related(
+        'membership__user',
+        'membership__sacco',
+    )
+    for loan in loans.iterator(chunk_size=NPL_SWEEP_CHUNK_SIZE):
+        checked += 1
+        bucket = buckets.get(loan.id)
+
+        transition = _apply_default_status_transition(loan, bucket)
+        if transition == 'defaulted':
+            loans_defaulted += 1
+        elif transition == 'recovered':
+            loans_recovered += 1
+
+        if bucket is None:
+            if loan.id in unresolved_flag_loan_ids:
+                cleared_flag_loan_ids.append(loan.id)
+            continue
+
+        if bucket in existing_thresholds.get(loan.id, set()):
+            continue
+
+        flag = NPLFlag.objects.create(loan=loan, threshold_days=bucket)
+        existing_thresholds.setdefault(loan.id, set()).add(bucket)
+        flags_created += 1
+        _notify_npl_flag(loan, flag)
+
+    flags_resolved = 0
+    if cleared_flag_loan_ids:
+        flags_resolved = NPLFlag.objects.filter(
+            loan_id__in=cleared_flag_loan_ids,
+            resolved=False,
+        ).update(resolved=True, resolved_at=now)
+
+    compliance_flags = _sync_severe_arrears_compliance_flags(buckets)
+
+    return {
+        'checked': checked,
+        'flags_created': flags_created,
+        'flags_resolved': flags_resolved,
+        'loans_defaulted': loans_defaulted,
+        'loans_recovered': loans_recovered,
+        'compliance_flags': compliance_flags,
+    }
+
+
+def _sync_severe_arrears_compliance_flags(buckets):
+    """Emit/refresh one platform ComplianceFlag per SACCO with 90+ arrears.
+
+    The per-loan staged NPLFlag + notifications remain the operational
+    early-warning layer at 30/60/90. This is the platform-compliance
+    layer: a single aggregate flag per SACCO once it carries a
+    non-performing (90-day) loan, visible on the superadmin dashboards.
+    One aggregate query; then one detector call per affected SACCO.
+    """
+    from saccomanagement.compliance_detectors import SevereArrearsDetector
+
+    severe_loan_ids = [
+        loan_id
+        for loan_id, bucket in buckets.items()
+        if bucket >= NPL_COMPLIANCE_BUCKET
+    ]
+    if not severe_loan_ids:
+        return 0
+
+    rows = (
+        Loan.objects.filter(id__in=severe_loan_ids)
+        .values('membership__sacco_id')
+        .annotate(
+            loan_count=Count('id'),
+            outstanding=Coalesce(Sum('outstanding_balance'), Decimal('0.00')),
+        )
+    )
+
+    detector = SevereArrearsDetector()
+    flagged = 0
+    saccos = Sacco.objects.in_bulk(
+        [row['membership__sacco_id'] for row in rows],
+    )
+    for row in rows:
+        sacco = saccos.get(row['membership__sacco_id'])
+        if sacco is None:
+            continue
+        try:
+            detector.check(
+                sacco,
+                severe_loan_count=row['loan_count'],
+                outstanding_balance=row['outstanding'],
+            )
+            flagged += 1
+        except Exception:
+            logger.exception(
+                'Could not sync severe-arrears ComplianceFlag for '
+                'sacco_id=%s.',
+                row['membership__sacco_id'],
+            )
+    return flagged
 
 
 def _apply_default_status_transition(loan, bucket):
