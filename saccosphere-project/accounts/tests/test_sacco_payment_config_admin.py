@@ -214,3 +214,26 @@ class FieldEncryptionKeyCheckTestCase(TestCase):
             errors = check_field_encryption_key(None)
 
         self.assertEqual(errors, [])
+
+    def test_check_fails_when_debug_false_and_key_blank(self):
+        with override_settings(DEBUG=False, FIELD_ENCRYPTION_KEY=''):
+            errors = check_field_encryption_key(None)
+
+        self.assertEqual([e.id for e in errors], ['accounts.E001'])
+
+    def test_check_passes_when_debug_false_and_key_valid(self):
+        valid_key = Fernet.generate_key().decode()
+
+        with override_settings(DEBUG=False, FIELD_ENCRYPTION_KEY=valid_key):
+            errors = check_field_encryption_key(None)
+
+        self.assertEqual(errors, [])
+
+    def test_check_never_errors_when_debug_true(self):
+        valid_key = Fernet.generate_key().decode()
+
+        for key in ('', 'not-a-valid-fernet-key', valid_key):
+            with self.subTest(key=key), override_settings(
+                DEBUG=True, FIELD_ENCRYPTION_KEY=key,
+            ):
+                self.assertEqual(check_field_encryption_key(None), [])
