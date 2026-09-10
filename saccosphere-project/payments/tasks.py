@@ -992,6 +992,8 @@ def _process_successful_b2c_callback(
 
     # Handle savings withdrawal
     elif mpesa_transaction.related_saving:
+        from payments.withdrawals import _audit_savings_withdrawal_completed
+
         saving = mpesa_transaction.related_saving
         # Balance was already deducted at initiation
         # Just record the ledger entry and notify
@@ -1000,6 +1002,7 @@ def _process_successful_b2c_callback(
             transaction,
             saving.membership.sacco,
         )
+        _audit_savings_withdrawal_completed(mpesa_transaction, transaction)
         _safe_notify(
             _notify_withdrawal_success,
             mpesa_transaction,
@@ -1101,7 +1104,7 @@ def _apply_saving_deposit(mpesa_transaction, transaction, amount):
     # apply_ledger_entry is the only path allowed to move Saving.amount:
     # it locks the row, writes the ledger entry and updates the balance
     # in one atomic block.
-    apply_ledger_entry(
+    ledger_entry = apply_ledger_entry(
         saving=saving,
         amount=amount,
         entry_type=LedgerEntry.EntryType.CREDIT,
@@ -1117,8 +1120,50 @@ def _apply_saving_deposit(mpesa_transaction, transaction, amount):
         contribution_delta=amount,
     )
 
+    # Compliance audit for the terminal deposit outcome. Fires exactly
+    # once: a replayed callback re-enters apply_ledger_entry above and
+    # raises on the unique reference before reaching this line.
+    _audit_savings_deposit_completed(
+        saving, transaction, amount, ledger_entry,
+        posted_to_inactive=posted_to_inactive,
+    )
+
     if posted_to_inactive:
         _flag_deposit_into_inactive_account(saving, transaction, amount)
+
+
+def _audit_savings_deposit_completed(
+    saving, transaction, net_amount, ledger_entry, *, posted_to_inactive,
+):
+    """SystemAuditLog for a completed inbound savings deposit."""
+    from saccomanagement.audit_logger import log_audit
+
+    log_audit(
+        transaction.user,
+        'SAVINGS_DEPOSIT_COMPLETED',
+        'Saving',
+        saving.id,
+        new_values={
+            'sacco_id': str(saving.membership.sacco_id),
+            'membership_id': str(saving.membership_id),
+            'transaction_id': str(transaction.id),
+            'ledger_entry_id': (
+                str(ledger_entry.id) if ledger_entry is not None else None
+            ),
+            'ledger_entry_reference': str(transaction.id),
+            'net_amount': str(net_amount),
+            'gross_amount': str(
+                _get_authoritative_gross_amount(transaction),
+            ),
+            'platform_fee': str(
+                _get_authoritative_platform_fee(transaction),
+            ),
+            'mpesa_receipt_number': (
+                transaction.external_reference or None
+            ),
+            'posted_to_inactive_account': bool(posted_to_inactive),
+        },
+    )
 
 
 def _flag_deposit_into_inactive_account(saving, transaction, amount):

@@ -582,6 +582,17 @@ def _reverse_withdrawal(payment, *, reason, response_code=None):
             withdrawal_delta=-gross_amount,
         )
 
+        # Terminal FAILED outcome for the payout. The reversal-reference
+        # guard above means this runs exactly once (the sync DarajaError
+        # path and the async failure callback both land here).
+        _audit_savings_withdrawal_failed(
+            mpesa_transaction,
+            payment,
+            gross_amount=gross_amount,
+            reason=reason,
+            response_code=response_code,
+        )
+
         if payment.status != Transaction.Status.FAILED:
             payment.status = Transaction.Status.FAILED
             payment.metadata = {
@@ -634,8 +645,77 @@ def _audit_withdrawal_initiated(
             'sacco_id': str(saving.membership.sacco_id),
             'membership_id': str(saving.membership_id),
             'transaction_id': str(payment.id),
+            # The SAVING_WITHDRAWAL debit ledger row uses the transaction
+            # id as its (unique) reference - the same key cross-references
+            # the Transaction and the LedgerEntry.
+            'ledger_entry_reference': str(payment.id),
             'gross_amount': str(gross_amount),
             'net_amount': str(net_amount),
         },
         request=request,
+    )
+
+
+def _audit_savings_withdrawal_completed(mpesa_transaction, payment):
+    """SystemAuditLog for a confirmed outbound savings payout.
+
+    Called from the B2C success callback (``payments.tasks``). Same
+    payload shape as ``_audit_withdrawal_initiated`` so the pair can be
+    correlated by ``transaction_id``.
+    """
+    from saccomanagement.audit_logger import log_audit
+
+    saving = mpesa_transaction.related_saving
+    gross_amount = payment.gross_amount or payment.amount
+
+    log_audit(
+        payment.user,
+        'SAVINGS_WITHDRAWAL_COMPLETED',
+        'Saving',
+        saving.id,
+        old_values={'transaction_status': Transaction.Status.SENT},
+        new_values={
+            'sacco_id': str(saving.membership.sacco_id),
+            'membership_id': str(saving.membership_id),
+            'transaction_id': str(payment.id),
+            'ledger_entry_reference': str(payment.id),
+            'gross_amount': str(gross_amount),
+            'net_amount': str(payment.amount),
+            'platform_fee': str(payment.platform_fee or Decimal('0.00')),
+            'mpesa_receipt_number': mpesa_transaction.mpesa_receipt_number,
+            'conversation_id': mpesa_transaction.conversation_id,
+        },
+    )
+
+
+def _audit_savings_withdrawal_failed(
+    mpesa_transaction, payment, *, gross_amount, reason, response_code,
+):
+    """SystemAuditLog for a payout that failed and was reversed.
+
+    Called from :func:`_reverse_withdrawal` (both the sync DarajaError
+    path and the async failure callback), exactly once per withdrawal.
+    """
+    from saccomanagement.audit_logger import log_audit
+
+    saving = mpesa_transaction.related_saving
+
+    log_audit(
+        payment.user,
+        'SAVINGS_WITHDRAWAL_FAILED',
+        'Saving',
+        saving.id,
+        old_values={'transaction_status': payment.status},
+        new_values={
+            'sacco_id': str(saving.membership.sacco_id),
+            'membership_id': str(saving.membership_id),
+            'transaction_id': str(payment.id),
+            'reversal_ledger_reference': f'{payment.id}-REV',
+            'gross_amount': str(gross_amount),
+            'reason': reason,
+            'response_code': (
+                str(response_code) if response_code is not None else None
+            ),
+            'balance_re_credited': True,
+        },
     )
