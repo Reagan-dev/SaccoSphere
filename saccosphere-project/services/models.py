@@ -1777,9 +1777,12 @@ class DividendDeclaration(models.Model):
 
     class Status(models.TextChoices):
         DRAFT = 'DRAFT', 'Draft'
+        CALCULATING = 'CALCULATING', 'Calculating'
         CALCULATED = 'CALCULATED', 'Calculated'
         APPROVED = 'APPROVED', 'Approved'
+        DISBURSING = 'DISBURSING', 'Disbursing'
         DISBURSED = 'DISBURSED', 'Disbursed'
+        FAILED = 'FAILED', 'Failed'
 
     id = models.UUIDField(
         primary_key=True,

@@ -3,6 +3,7 @@
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from io import StringIO
+from unittest.mock import patch
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -20,6 +21,10 @@ from services.engines.dividend_calculator import (
     calculate_average_balance,
     calculate_dividends_for_declaration,
 )
+from services.tasks import (
+    calculate_dividends_for_declaration_task,
+    disburse_dividends_for_declaration_task,
+)
 from payments.models import MpesaTransaction, PaymentProvider, Transaction
 from services.models import (
     DividendDeclaration,
@@ -27,6 +32,21 @@ from services.models import (
     Saving,
     SavingsType,
 )
+
+
+def _run_task_eagerly(task):
+    """Return a ``.delay`` stand-in that runs ``task`` inline.
+
+    The project does not use Celery eager mode; existing task tests call
+    the task function directly. Wiring this as ``delay``'s side_effect,
+    together with ``captureOnCommitCallbacks(execute=True)``, exercises
+    the real view -> enqueue -> task path synchronously.
+    """
+
+    def _side_effect(*args, **kwargs):
+        return task(*args, **kwargs)
+
+    return _side_effect
 
 
 class DividendCalculatorTests(TestCase):
@@ -499,12 +519,19 @@ class DividendDeclarationAPITests(TestCase):
             status=DividendDeclaration.Status.DRAFT,
         )
         
-        response = self.client.post(
-            f'/api/v1/services/dividends/declarations/{declaration.id}/calculate/',
-            HTTP_X_SACCO_ID=str(self.sacco.id),
-        )
-        
-        self.assertEqual(response.status_code, 200)
+        with patch(
+            'services.tasks.calculate_dividends_for_declaration_task.delay',
+            side_effect=_run_task_eagerly(
+                calculate_dividends_for_declaration_task,
+            ),
+        ), self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                f'/api/v1/services/dividends/declarations/'
+                f'{declaration.id}/calculate/',
+                HTTP_X_SACCO_ID=str(self.sacco.id),
+            )
+
+        self.assertEqual(response.status_code, 202)
         declaration.refresh_from_db()
         self.assertEqual(declaration.status, DividendDeclaration.Status.CALCULATED)
         self.assertIsNotNone(declaration.calculated_at)
@@ -606,16 +633,23 @@ class DividendDeclarationAPITests(TestCase):
         )
         
         initial_balance = saving.amount
-        
-        response = self.client.post(
-            f'/api/v1/services/dividends/declarations/{declaration.id}/disburse/',
-            HTTP_X_SACCO_ID=str(self.sacco.id),
-        )
-        
-        self.assertEqual(response.status_code, 200)
+
+        with patch(
+            'services.tasks.disburse_dividends_for_declaration_task.delay',
+            side_effect=_run_task_eagerly(
+                disburse_dividends_for_declaration_task,
+            ),
+        ), self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                f'/api/v1/services/dividends/declarations/'
+                f'{declaration.id}/disburse/',
+                HTTP_X_SACCO_ID=str(self.sacco.id),
+            )
+
+        self.assertEqual(response.status_code, 202)
         declaration.refresh_from_db()
         self.assertEqual(declaration.status, DividendDeclaration.Status.DISBURSED)
-        
+
         payout.refresh_from_db()
         self.assertEqual(payout.status, DividendPayout.Status.PAID)
         
@@ -676,8 +710,280 @@ class DividendDeclarationAPITests(TestCase):
             {'declaration': str(declaration1.id)},
             HTTP_X_SACCO_ID=str(self.sacco.id),
         )
-        
+
         self.assertEqual(response.status_code, 200)
+
+
+class DividendAsyncWorkflowTests(TestCase):
+    """Calculate/disburse are enqueued (202); tasks carry the semantics."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.sacco = Sacco.objects.create(
+            name='Async Dividend SACCO',
+            registration_number='ASYNCDIV1',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+        )
+        self.savings_type = SavingsType.objects.create(
+            sacco=self.sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('500.00'),
+        )
+        self.admin = User.objects.create_user(
+            email='async-div-admin@example.com',
+            password='secret',
+            phone_number='254712345690',
+        )
+        Role.objects.create(
+            user=self.admin, sacco=self.sacco, name=Role.SACCO_ADMIN,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+    def _declaration(self, status=DividendDeclaration.Status.DRAFT):
+        return DividendDeclaration.objects.create(
+            sacco=self.sacco,
+            savings_type=self.savings_type,
+            financial_year='2025/2026',
+            declared_rate=Decimal('10.00'),
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+            status=status,
+        )
+
+    def _eligible_member(self, email, number, amount):
+        user = User.objects.create_user(email=email, password='secret')
+        membership = Membership.objects.create(
+            user=user,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number=number,
+        )
+        return Saving.objects.create(
+            membership=membership,
+            savings_type=self.savings_type,
+            amount=Decimal(amount),
+            status=Saving.Status.ACTIVE,
+            dividend_eligible=True,
+        )
+
+    def _calc_url(self, declaration):
+        return (
+            f'/api/v1/services/dividends/declarations/'
+            f'{declaration.id}/calculate/'
+        )
+
+    def _disburse_url(self, declaration):
+        return (
+            f'/api/v1/services/dividends/declarations/'
+            f'{declaration.id}/disburse/'
+        )
+
+    def test_calculate_returns_202_and_enqueues_after_marking_calculating(
+        self,
+    ):
+        declaration = self._declaration()
+
+        with patch(
+            'services.tasks.calculate_dividends_for_declaration_task.delay',
+        ) as delayed, self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self._calc_url(declaration),
+                HTTP_X_SACCO_ID=str(self.sacco.id),
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(
+            response.json()['status'],
+            DividendDeclaration.Status.CALCULATING,
+        )
+        declaration.refresh_from_db()
+        self.assertEqual(
+            declaration.status, DividendDeclaration.Status.CALCULATING,
+        )
+        delayed.assert_called_once_with(
+            str(declaration.id), str(self.admin.id),
+        )
+
+    def test_calculate_fast_path_validation_stays_a_sync_400(self):
+        declaration = self._declaration(
+            status=DividendDeclaration.Status.APPROVED,
+        )
+
+        with patch(
+            'services.tasks.calculate_dividends_for_declaration_task.delay',
+        ) as delayed:
+            response = self.client.post(
+                self._calc_url(declaration),
+                HTTP_X_SACCO_ID=str(self.sacco.id),
+            )
+
+        self.assertEqual(response.status_code, 400)
+        delayed.assert_not_called()
+        declaration.refresh_from_db()
+        self.assertEqual(
+            declaration.status, DividendDeclaration.Status.APPROVED,
+        )
+
+    def test_calculate_in_progress_returns_409(self):
+        declaration = self._declaration(
+            status=DividendDeclaration.Status.CALCULATING,
+        )
+
+        with patch(
+            'services.tasks.calculate_dividends_for_declaration_task.delay',
+        ) as delayed:
+            response = self.client.post(
+                self._calc_url(declaration),
+                HTTP_X_SACCO_ID=str(self.sacco.id),
+            )
+
+        self.assertEqual(response.status_code, 409)
+        delayed.assert_not_called()
+
+    def test_calculate_task_success_transitions_to_calculated(self):
+        self._eligible_member('async-m1@example.com', 'ASY-M1', '10000.00')
+        declaration = self._declaration(
+            status=DividendDeclaration.Status.CALCULATING,
+        )
+
+        calculate_dividends_for_declaration_task(
+            str(declaration.id), str(self.admin.id),
+        )
+
+        declaration.refresh_from_db()
+        self.assertEqual(
+            declaration.status, DividendDeclaration.Status.CALCULATED,
+        )
+        self.assertEqual(declaration.payouts.count(), 1)
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                user=self.admin,
+                action='DIVIDEND_CALCULATED',
+                resource_type='DividendDeclaration',
+                resource_id=str(declaration.id),
+            ).exists()
+        )
+
+    def test_calculate_task_failure_leaves_declaration_failed_no_payouts(
+        self,
+    ):
+        self._eligible_member('async-m2@example.com', 'ASY-M2', '10000.00')
+        self._eligible_member('async-m3@example.com', 'ASY-M3', '20000.00')
+        declaration = self._declaration(
+            status=DividendDeclaration.Status.CALCULATING,
+        )
+
+        with patch(
+            'services.engines.dividend_calculator.calculate_average_balance',
+            side_effect=RuntimeError('boom mid-calculation'),
+        ):
+            with self.assertRaises(RuntimeError):
+                calculate_dividends_for_declaration_task(
+                    str(declaration.id), str(self.admin.id),
+                )
+
+        declaration.refresh_from_db()
+        self.assertEqual(
+            declaration.status, DividendDeclaration.Status.FAILED,
+        )
+        # Atomic calculation rolled back - no half-created payouts.
+        self.assertEqual(declaration.payouts.count(), 0)
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                action='DIVIDEND_CALCULATION_FAILED',
+                resource_type='DividendDeclaration',
+                resource_id=str(declaration.id),
+            ).exists()
+        )
+
+    def test_disburse_returns_202_and_marks_disbursing(self):
+        declaration = self._declaration(
+            status=DividendDeclaration.Status.APPROVED,
+        )
+
+        with patch(
+            'services.tasks.disburse_dividends_for_declaration_task.delay',
+        ) as delayed, self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                self._disburse_url(declaration),
+                HTTP_X_SACCO_ID=str(self.sacco.id),
+            )
+
+        self.assertEqual(response.status_code, 202)
+        declaration.refresh_from_db()
+        self.assertEqual(
+            declaration.status, DividendDeclaration.Status.DISBURSING,
+        )
+        delayed.assert_called_once_with(
+            str(declaration.id), str(self.admin.id),
+        )
+
+    def test_disburse_task_failure_is_all_or_nothing_and_reverts(self):
+        saving_a = self._eligible_member(
+            'async-d1@example.com', 'ASY-D1', '10000.00',
+        )
+        saving_b = self._eligible_member(
+            'async-d2@example.com', 'ASY-D2', '10000.00',
+        )
+        declaration = self._declaration(
+            status=DividendDeclaration.Status.DISBURSING,
+        )
+        for saving in (saving_a, saving_b):
+            DividendPayout.objects.create(
+                declaration=declaration,
+                membership=saving.membership,
+                saving=saving,
+                average_balance=Decimal('10000.00'),
+                dividend_amount=Decimal('1000.00'),
+                status=DividendPayout.Status.PENDING,
+            )
+
+        real_apply = apply_ledger_entry
+        calls = {'n': 0}
+
+        def _flaky_apply(*args, **kwargs):
+            calls['n'] += 1
+            if calls['n'] == 2:
+                raise RuntimeError('boom mid-disbursement')
+            return real_apply(*args, **kwargs)
+
+        with patch(
+            'services.engines.dividend_disbursement.apply_ledger_entry',
+            side_effect=_flaky_apply,
+        ):
+            with self.assertRaises(RuntimeError):
+                disburse_dividends_for_declaration_task(
+                    str(declaration.id), str(self.admin.id),
+                )
+
+        declaration.refresh_from_db()
+        # All-or-nothing: reverted to APPROVED, nothing paid, no ledger
+        # rows, balances untouched.
+        self.assertEqual(
+            declaration.status, DividendDeclaration.Status.APPROVED,
+        )
+        self.assertEqual(
+            declaration.payouts.filter(
+                status=DividendPayout.Status.PAID,
+            ).count(),
+            0,
+        )
+        self.assertFalse(
+            LedgerEntry.objects.filter(
+                category=LedgerEntry.Category.DIVIDEND_PAYOUT,
+            ).exists()
+        )
+        for saving in (saving_a, saving_b):
+            saving.refresh_from_db()
+            self.assertEqual(saving.amount, Decimal('10000.00'))
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                action='DIVIDEND_DISBURSEMENT_FAILED',
+                resource_type='DividendDeclaration',
+                resource_id=str(declaration.id),
+            ).exists()
+        )
 
 
 class DuplicateDividendDeclarationTests(TestCase):

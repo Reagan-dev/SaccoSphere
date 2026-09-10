@@ -1290,3 +1290,227 @@ def send_repayment_reminders(days=3):
     except Exception as exc:
         logger.error('Repayment reminders run failed: %s', exc)
         raise
+
+
+# --- Dividend calculation / disbursement (moved off the request thread) ---
+
+def _resolve_actor(actor_id):
+    """Load the acting user for an audit call, or None."""
+    if not actor_id:
+        return None
+    from django.contrib.auth import get_user_model
+
+    return get_user_model().objects.filter(pk=actor_id).first()
+
+
+def _emit_dividend_run_metric(
+    event, declaration, started_at, *, outcome, members_processed,
+):
+    """Emit a run-duration metric and return the observability summary."""
+    from config.utils import emit_metric
+
+    ended_at = timezone.now()
+    duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+    emit_metric(
+        event,
+        declaration_id=str(declaration.pk),
+        sacco_id=str(declaration.sacco_id),
+        outcome=outcome,
+        members_processed=members_processed,
+        duration_ms=duration_ms,
+    )
+    return {
+        'started_at': started_at.isoformat(),
+        'ended_at': ended_at.isoformat(),
+        'duration_ms': duration_ms,
+        'members_processed': members_processed,
+    }
+
+
+def _settle_failed_dividend_run(
+    declaration_id, *, from_status, revert_to, action, error,
+):
+    """Move a failed run out of its transient status and audit it.
+
+    Only touches the row if it is still in ``from_status`` (the transient
+    the view set) - never stomps a status something else has changed.
+    """
+    from saccomanagement.audit_logger import log_audit
+    from services.models import DividendDeclaration
+
+    with transaction.atomic():
+        declaration = DividendDeclaration.objects.select_for_update().get(
+            pk=declaration_id,
+        )
+        if declaration.status != from_status:
+            logger.warning(
+                'Dividend declaration %s no longer in %s (is %s); leaving '
+                'status untouched after a failed run.',
+                declaration_id, from_status, declaration.status,
+            )
+            return
+        declaration.status = revert_to
+        declaration.save(update_fields=['status'])
+
+    log_audit(
+        None,
+        action,
+        'DividendDeclaration',
+        declaration_id,
+        old_values={'status': from_status},
+        new_values={'status': revert_to, 'error': str(error)[:500]},
+    )
+
+
+@shared_task(
+    bind=True,
+    name='services.tasks.calculate_dividends_for_declaration',
+)
+def calculate_dividends_for_declaration_task(
+    self, declaration_id, actor_id=None,
+):
+    """Run the per-member dividend calculation off the request thread.
+
+    The view has already done the cheap status guard and moved the
+    declaration to ``CALCULATING``. This rebuilds the payout set and, on
+    success, ``calculate_dividends_for_declaration`` moves it to
+    ``CALCULATED``; on any error the payout writes are rolled back (that
+    function is fully atomic) and the declaration is set to ``FAILED``.
+    The ``DIVIDEND_CALCULATED`` audit entry fires here now, with the same
+    action / resource / values as before (no ``request``, so IP and
+    user-agent are null - the work is no longer tied to a request).
+    """
+    from saccomanagement.audit_logger import log_audit
+    from services.engines.dividend_calculator import (
+        calculate_dividends_for_declaration,
+    )
+    from services.models import DividendDeclaration
+
+    started_at = timezone.now()
+    declaration = DividendDeclaration.objects.select_related('sacco').get(
+        pk=declaration_id,
+    )
+    actor = _resolve_actor(actor_id)
+
+    try:
+        result = calculate_dividends_for_declaration(declaration)
+    except Exception as exc:
+        _settle_failed_dividend_run(
+            declaration_id,
+            from_status=DividendDeclaration.Status.CALCULATING,
+            revert_to=DividendDeclaration.Status.FAILED,
+            action='DIVIDEND_CALCULATION_FAILED',
+            error=exc,
+        )
+        _emit_dividend_run_metric(
+            'dividend_calculate_run', declaration, started_at,
+            outcome='failed', members_processed=0,
+        )
+        logger.exception(
+            'Dividend calculation failed for declaration %s.', declaration_id,
+        )
+        raise
+
+    log_audit(
+        actor,
+        'DIVIDEND_CALCULATED',
+        'DividendDeclaration',
+        declaration.id,
+        new_values={
+            'sacco_id': str(declaration.sacco_id),
+            'total_dividend_amount': str(result['total_dividend_amount']),
+            'payout_count': result['payout_count'],
+        },
+    )
+    summary = _emit_dividend_run_metric(
+        'dividend_calculate_run', declaration, started_at,
+        outcome='succeeded', members_processed=result['payout_count'],
+    )
+    logger.info(
+        'Dividend calculation for declaration %s done: payouts=%s total=%s '
+        'duration_ms=%s.',
+        declaration_id, result['payout_count'],
+        result['total_dividend_amount'], summary['duration_ms'],
+    )
+    return {
+        'declaration_id': str(declaration_id),
+        'status': DividendDeclaration.Status.CALCULATED,
+        'payout_count': result['payout_count'],
+        'total_dividend_amount': str(result['total_dividend_amount']),
+        **summary,
+    }
+
+
+@shared_task(
+    bind=True,
+    name='services.tasks.disburse_dividends_for_declaration',
+)
+def disburse_dividends_for_declaration_task(
+    self, declaration_id, actor_id=None,
+):
+    """Post an approved declaration's payouts to the ledger off-thread.
+
+    The view has moved the declaration to ``DISBURSING``. On success
+    ``disburse_dividends_for_declaration`` moves it to ``DISBURSED`` and
+    the ``DIVIDEND_DISBURSED`` audit entry fires here; on failure the
+    whole batched run has already rolled back (all-or-nothing) and the
+    declaration is returned to ``APPROVED`` so it can be retried.
+    """
+    from saccomanagement.audit_logger import log_audit
+    from services.engines.dividend_disbursement import (
+        disburse_dividends_for_declaration,
+    )
+    from services.models import DividendDeclaration
+
+    started_at = timezone.now()
+    declaration = DividendDeclaration.objects.select_related('sacco').get(
+        pk=declaration_id,
+    )
+    actor = _resolve_actor(actor_id)
+
+    try:
+        result = disburse_dividends_for_declaration(declaration)
+    except Exception as exc:
+        _settle_failed_dividend_run(
+            declaration_id,
+            from_status=DividendDeclaration.Status.DISBURSING,
+            revert_to=DividendDeclaration.Status.APPROVED,
+            action='DIVIDEND_DISBURSEMENT_FAILED',
+            error=exc,
+        )
+        _emit_dividend_run_metric(
+            'dividend_disburse_run', declaration, started_at,
+            outcome='failed', members_processed=0,
+        )
+        logger.exception(
+            'Dividend disbursement failed for declaration %s.', declaration_id,
+        )
+        raise
+
+    log_audit(
+        actor,
+        'DIVIDEND_DISBURSED',
+        'DividendDeclaration',
+        declaration.id,
+        old_values={'status': DividendDeclaration.Status.APPROVED},
+        new_values={
+            'status': DividendDeclaration.Status.DISBURSED,
+            'sacco_id': str(declaration.sacco_id),
+            'paid_count': result['paid_count'],
+        },
+    )
+    summary = _emit_dividend_run_metric(
+        'dividend_disburse_run', declaration, started_at,
+        outcome='succeeded', members_processed=result['paid_count'],
+    )
+    logger.info(
+        'Dividend disbursement for declaration %s done: paid=%s '
+        'duration_ms=%s.',
+        declaration_id, result['paid_count'], summary['duration_ms'],
+    )
+    return {
+        'declaration_id': str(declaration_id),
+        'status': DividendDeclaration.Status.DISBURSED,
+        'paid_count': result['paid_count'],
+        **summary,
+    }
