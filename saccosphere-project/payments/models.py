@@ -367,6 +367,60 @@ class MpesaIdempotencyRecord(models.Model):
         return self.checkout_request_id
 
 
+class SavingsWithdrawalIdempotencyKey(models.Model):
+    """De-duplicates savings-withdrawal initiation.
+
+    ``key`` is derived from the member, saving account, gross amount and a
+    client- or server-supplied request id. Its unique constraint makes
+    the check-and-insert atomic, so a retried or double-submitted POST
+    matches the existing row (and its already-created ``transaction``)
+    instead of firing a second real B2C payout.
+    """
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False,
+    )
+    key = models.CharField(
+        max_length=255,
+        unique=True,
+        help_text='member:saving:gross_amount:request_id composite key.',
+    )
+    membership = models.ForeignKey(
+        'saccomembership.Membership',
+        on_delete=models.CASCADE,
+        related_name='withdrawal_idempotency_keys',
+        help_text='Membership the withdrawal belongs to (tenant anchor).',
+    )
+    saving = models.ForeignKey(
+        'services.Saving',
+        on_delete=models.CASCADE,
+        related_name='withdrawal_idempotency_keys',
+        help_text='Saving account debited by the withdrawal.',
+    )
+    amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        help_text='Gross amount requested for this withdrawal.',
+    )
+    transaction = models.ForeignKey(
+        Transaction,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='+',
+        help_text='Withdrawal Transaction created for the first request.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.key
+
+
 class PlatformFee(models.Model):
     class FeeType(models.TextChoices):
         TRANSACTION_PCT = 'TRANSACTION_PCT', 'Transaction percentage'

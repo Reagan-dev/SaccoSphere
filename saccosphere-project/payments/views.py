@@ -1188,6 +1188,8 @@ class SavingsWithdrawalView(APIView):
             saving=saving,
             phone_number=phone_number,
             requested_amount=requested_amount,
+            request=request,
+            idempotency_key=data.get('idempotency_key') or None,
         )
 
         return Response(payload, status=http_status)
