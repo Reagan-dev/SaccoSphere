@@ -1828,13 +1828,28 @@ class DividendDeclaration(models.Model):
         blank=True,
         help_text='Date and time dividends were calculated.',
     )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_dividend_declarations',
+        help_text=(
+            'Admin who created this declaration. Segregation of duties: '
+            'a different admin must approve it (see SaccoSettings.'
+            'enforce_dividend_dual_control).'
+        ),
+    )
     approved_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='approved_dividend_declarations',
-        help_text='User who approved this declaration.',
+        help_text=(
+            'Admin who approved this declaration. A different admin must '
+            'disburse it.'
+        ),
     )
     total_dividend_amount = models.DecimalField(
         max_digits=14,

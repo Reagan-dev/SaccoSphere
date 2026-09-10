@@ -74,6 +74,7 @@ from .serializers import (
     LoanTypeSerializer,
     RepaymentScheduleSerializer,
     SavingSerializer,
+    SavingsTypePublicSerializer,
     SavingsTypeSerializer,
     SavingsTypeWriteSerializer,
 )
@@ -85,35 +86,90 @@ from .tasks import (
 
 
 class SavingsTypeViewSet(SaccoScopedMixin, ModelViewSet):
+    """Savings-product CRUD.
+
+    Writes: authenticated SACCO admins, scoped to their own SACCO.
+
+    Reads (list/retrieve): authenticated users only - the old
+    ``AllowAny`` + ``fields='__all__'`` + optional filter let anyone
+    enumerate every SACCO's ``interest_rate`` / ``minimum_contribution``
+    / ``is_active`` / internal ids. ``list`` now *requires* a ``sacco``
+    (or ``sacco_id``) query param so it is always scoped to exactly one
+    tenant, and non-admins get the narrow
+    :class:`SavingsTypePublicSerializer` (no ids, no ops flags). A SACCO
+    admin listing their own SACCO still gets the full serializer for the
+    management UI.
+    """
+
     serializer_class = SavingsTypeSerializer
     queryset = SavingsType.objects.select_related('sacco')
+    _READ_ACTIONS = ('list', 'retrieve')
+    _WRITE_ACTIONS = ('create', 'update', 'partial_update', 'destroy')
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
-            return [AllowAny()]
+        if self.action in self._READ_ACTIONS:
+            return [IsAuthenticated()]
         return [IsAuthenticated(), IsSaccoAdmin()]
 
     def should_enforce_sacco_scope(self):
-        return self.action not in ['list', 'retrieve']
+        # Reads are not routed through the admin-only scoping context
+        # (they must work for ordinary members too); they enforce a
+        # required single-SACCO filter directly instead.
+        return self.action not in self._READ_ACTIONS
 
     def get_serializer_class(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+        if self.action in self._WRITE_ACTIONS:
             return SavingsTypeWriteSerializer
-        return SavingsTypeSerializer
+        if self.action == 'list' and self._caller_administers_requested_sacco():
+            return SavingsTypeSerializer
+        return SavingsTypePublicSerializer
+
+    def _requested_sacco_id(self):
+        return (
+            self.request.query_params.get('sacco')
+            or self.request.query_params.get('sacco_id')
+        )
+
+    def _caller_administers_requested_sacco(self):
+        """True if the caller is an admin of the SACCO being listed."""
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_staff or user.roles.filter(
+            name=Role.SUPER_ADMIN, is_active=True,
+        ).exists():
+            return True
+        sacco_id = self._requested_sacco_id()
+        return bool(sacco_id) and user.roles.filter(
+            name=Role.SACCO_ADMIN,
+            sacco_id=sacco_id,
+            is_active=True,
+        ).exists()
+
+    def list(self, request, *args, **kwargs):
+        if not self._requested_sacco_id():
+            return Response(
+                {
+                    'detail': (
+                        'A sacco query parameter is required to list '
+                        'savings types.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         queryset = super().get_queryset()
 
-        # For write actions, enforce strict SACCO scoping from context
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
+        # Writes: strict SACCO scoping from the request context.
+        if self.action in self._WRITE_ACTIONS:
             return self.apply_sacco_scope(queryset)
 
-        # For read actions, allow query param filtering
-        sacco = self.request.query_params.get('sacco')
-        sacco_id = self.request.query_params.get('sacco_id')
-
-        if sacco:
-            queryset = queryset.filter(sacco_id=sacco)
+        # Reads: never global - scoped to exactly one SACCO. ``list``
+        # has already 400'd if the param is missing; ``retrieve`` fetches
+        # a single object by pk (one tenant) so an absent param is fine.
+        sacco_id = self._requested_sacco_id()
         if sacco_id:
             queryset = queryset.filter(sacco_id=sacco_id)
 
@@ -1815,8 +1871,25 @@ class DividendCalculateView(SaccoScopedMixin, APIView):
         )
 
 
+def _dividend_dual_control_enforced(sacco):
+    """Whether this SACCO requires separate admins across dividend steps.
+
+    Per-SACCO via ``SaccoSettings.enforce_dividend_dual_control``;
+    defaults to enforced when the SACCO has no settings row yet.
+    """
+    sacco_settings = getattr(sacco, 'settings', None)
+    if sacco_settings is None:
+        return True
+    return sacco_settings.enforce_dividend_dual_control
+
+
 class DividendApproveView(SaccoScopedMixin, APIView):
-    """Approve a calculated dividend declaration."""
+    """Approve a calculated dividend declaration.
+
+    Segregation of duties: the approver must not be the admin who created
+    the declaration (unless the SACCO has disabled
+    ``enforce_dividend_dual_control``).
+    """
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
     require_sacco_header = True
@@ -1844,6 +1917,25 @@ class DividendApproveView(SaccoScopedMixin, APIView):
                         ),
                     },
                     status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Four-eyes: a declaration cannot be approved by whoever
+            # created it. Compared on the authenticated user id, so
+            # swapping X-Sacco-ID does not route around it (a mismatched
+            # tenant just 404s the declaration above).
+            if (
+                declaration.created_by_id is not None
+                and declaration.created_by_id == request.user.id
+                and _dividend_dual_control_enforced(declaration.sacco)
+            ):
+                return Response(
+                    {
+                        'detail': (
+                            'A dividend declaration must be approved by a '
+                            'different admin than the one who created it.'
+                        ),
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
                 )
 
             declaration.status = DividendDeclaration.Status.APPROVED
@@ -1879,6 +1971,10 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
     ``services.tasks.disburse_dividends_for_declaration_task``; the view
     only does the synchronous APPROVED-status guard and moves the
     declaration to ``DISBURSING`` before enqueuing.
+
+    Segregation of duties: the disburser must not be the admin who
+    approved the declaration (unless the SACCO has disabled
+    ``enforce_dividend_dual_control``).
     """
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
@@ -1914,6 +2010,23 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
                         ),
                     },
                     status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Four-eyes: a declaration cannot be disbursed by whoever
+            # approved it.
+            if (
+                declaration.approved_by_id is not None
+                and declaration.approved_by_id == request.user.id
+                and _dividend_dual_control_enforced(declaration.sacco)
+            ):
+                return Response(
+                    {
+                        'detail': (
+                            'A dividend declaration must be disbursed by a '
+                            'different admin than the one who approved it.'
+                        ),
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
                 )
 
             declaration.status = DividendDeclaration.Status.DISBURSING

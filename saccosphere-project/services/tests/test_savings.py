@@ -426,3 +426,156 @@ class MultipleAccountsPerTypeTests(TestCase):
         # Editing the row in place must not trip the "already has one"
         # check against itself.
         self.existing_single.full_clean()
+
+
+class SavingsTypeReadAccessTests(TestCase):
+    """list/retrieve must not leak every SACCO's product configuration."""
+
+    LIST_URL = '/api/v1/services/savings-types/'
+
+    def setUp(self):
+        self.client = APIClient()
+        self.sacco_a = Sacco.objects.create(
+            name='Read A',
+            registration_number='STRD-A',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+        )
+        self.sacco_b = Sacco.objects.create(
+            name='Read B',
+            registration_number='STRD-B',
+            sector=Sacco.Sector.FINANCE,
+            county='Kiambu',
+        )
+        self.type_a = SavingsType.objects.create(
+            sacco=self.sacco_a,
+            name=SavingsType.Name.BOSA,
+            description='A BOSA product',
+            interest_rate=Decimal('7.50'),
+            minimum_contribution=Decimal('100.00'),
+        )
+        self.type_b = SavingsType.objects.create(
+            sacco=self.sacco_b,
+            name=SavingsType.Name.FOSA,
+            interest_rate=Decimal('4.00'),
+            minimum_contribution=Decimal('500.00'),
+        )
+        self.member = User.objects.create_user(
+            email='rd-member@example.com', password='StrongPass1',
+        )
+        Membership.objects.create(
+            user=self.member,
+            sacco=self.sacco_a,
+            status=Membership.Status.APPROVED,
+            member_number='STRD-M1',
+        )
+        self.admin_a = User.objects.create_user(
+            email='rd-admin-a@example.com', password='StrongPass1',
+        )
+        Role.objects.create(
+            user=self.admin_a, sacco=self.sacco_a, name=Role.SACCO_ADMIN,
+        )
+
+    def _detail_url(self, savings_type):
+        return reverse(
+            'services:savings-type-detail', args=[savings_type.id],
+        )
+
+    def test_anonymous_cannot_list_savings_types(self):
+        response = self.client.get(self.LIST_URL)
+        self.assertIn(response.status_code, (401, 403))
+
+        # ...and cannot get around it by naming a SACCO either.
+        scoped = self.client.get(
+            self.LIST_URL, {'sacco': str(self.sacco_a.id)},
+        )
+        self.assertIn(scoped.status_code, (401, 403))
+
+    def test_anonymous_cannot_retrieve_a_savings_type(self):
+        response = self.client.get(self._detail_url(self.type_a))
+        self.assertIn(response.status_code, (401, 403))
+
+    def test_authenticated_list_requires_a_sacco_param(self):
+        self.client.force_authenticate(self.member)
+        response = self.client.get(self.LIST_URL)
+        self.assertEqual(response.status_code, 400)
+
+    def test_list_is_scoped_to_the_requested_sacco_only(self):
+        self.client.force_authenticate(self.member)
+        response = self.client.get(
+            self.LIST_URL, {'sacco': str(self.sacco_a.id)},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        rows = response.json()['data']['results']
+        names = {row['name'] for row in rows}
+        self.assertEqual(names, {SavingsType.Name.BOSA})  # only SACCO A
+
+    def test_non_admin_list_omits_internal_fields(self):
+        self.client.force_authenticate(self.member)
+        response = self.client.get(
+            self.LIST_URL, {'sacco': str(self.sacco_a.id)},
+        )
+        rows = response.json()['data']['results']
+        row = rows[0]
+        self.assertEqual(
+            set(row),
+            {'name', 'description', 'minimum_contribution', 'interest_rate'},
+        )
+        for leaked in ('id', 'sacco', 'sacco_id', 'is_active',
+                       'allows_multiple_accounts'):
+            self.assertNotIn(leaked, row)
+
+    def test_non_admin_cannot_widen_another_saccos_config(self):
+        # A member of SACCO A asking for SACCO B still only gets the
+        # narrow public view, never is_active / ids.
+        self.client.force_authenticate(self.member)
+        response = self.client.get(
+            self.LIST_URL, {'sacco': str(self.sacco_b.id)},
+        )
+        self.assertEqual(response.status_code, 200)
+        rows = response.json()['data']['results']
+        self.assertEqual({r['name'] for r in rows}, {SavingsType.Name.FOSA})
+        self.assertNotIn('is_active', rows[0])
+        self.assertNotIn('id', rows[0])
+
+    def test_sacco_admin_list_includes_management_fields(self):
+        self.client.force_authenticate(self.admin_a)
+        response = self.client.get(
+            self.LIST_URL,
+            {'sacco': str(self.sacco_a.id)},
+            HTTP_X_SACCO_ID=str(self.sacco_a.id),
+        )
+        self.assertEqual(response.status_code, 200)
+        rows = response.json()['data']['results']
+        self.assertIn('id', rows[0])
+        self.assertIn('is_active', rows[0])
+
+    def test_retrieve_uses_the_narrow_serializer(self):
+        self.client.force_authenticate(self.member)
+        response = self.client.get(self._detail_url(self.type_a))
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        row = body.get('data', body)
+        self.assertNotIn('id', row)
+        self.assertNotIn('is_active', row)
+        self.assertEqual(row['name'], SavingsType.Name.BOSA)
+
+    def test_sacco_admin_can_still_create_a_savings_type(self):
+        self.client.force_authenticate(self.admin_a)
+        response = self.client.post(
+            self.LIST_URL,
+            {
+                'name': SavingsType.Name.SHARE_CAPITAL,
+                'minimum_contribution': '1000.00',
+                'interest_rate': '3.00',
+            },
+            format='json',
+            HTTP_X_SACCO_ID=str(self.sacco_a.id),
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            SavingsType.objects.filter(
+                sacco=self.sacco_a, name=SavingsType.Name.SHARE_CAPITAL,
+            ).exists()
+        )

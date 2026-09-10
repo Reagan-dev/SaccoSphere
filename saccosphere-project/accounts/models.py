@@ -955,6 +955,15 @@ class SaccoSettings(models.Model):
         help_text='Daily SMS send limit to control costs.',
     )
 
+    enforce_dividend_dual_control = models.BooleanField(
+        default=True,
+        help_text=(
+            'Require a dividend declaration to be approved by a '
+            'different admin than the one who created it, and disbursed '
+            'by a different admin than the one who approved it.'
+        ),
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     updated_at = models.DateTimeField(auto_now=True)
