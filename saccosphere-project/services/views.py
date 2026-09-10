@@ -135,6 +135,46 @@ class SavingsTypeViewSet(SaccoScopedMixin, ModelViewSet):
     def perform_update(self, serializer):
         serializer.save(sacco=self.get_sacco_context())
 
+    def destroy(self, request, *args, **kwargs):
+        """Refuse to hard-delete a savings type that still has accounts.
+
+        ``Saving.savings_type`` is ``on_delete=SET_NULL``, so deleting a
+        type in use would silently NULL it on every affected account,
+        dropping those balances out of the savings breakdown and the
+        dividend calculator (which filters by ``savings_type``). Retiring
+        a product is ``PATCH is_active=false`` instead.
+        """
+        instance = self.get_object()
+        # ``instance`` is already SACCO-scoped by get_queryset(); a
+        # Saving's savings_type belongs to exactly one SACCO, so this
+        # count is inherently tenant-bound.
+        in_use = Saving.objects.filter(savings_type=instance).count()
+        if in_use:
+            return Response(
+                {
+                    'detail': (
+                        f'Cannot delete this savings type: {in_use} '
+                        f'savings account(s) still reference it. Retire '
+                        f'it instead by patching is_active=false.'
+                    ),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        response = super().destroy(request, *args, **kwargs)
+        log_audit(
+            request.user,
+            'DELETE',
+            'SavingsType',
+            instance.id,
+            old_values={
+                'name': instance.name,
+                'sacco_id': str(instance.sacco_id),
+            },
+            request=request,
+        )
+        return response
+
 
 class SavingListView(ListAPIView):
     serializer_class = SavingSerializer
@@ -153,6 +193,81 @@ class SavingListView(ListAPIView):
             queryset = queryset.filter(membership__sacco_id=sacco)
 
         return queryset
+
+
+class SavingsAccountAdminOpenView(SaccoScopedMixin, APIView):
+    """Admin-initiated opening of a member savings account.
+
+    POST /savings/admin/  {membership_id, savings_type_id, opening_balance?}
+
+    The only product path that creates a ``Saving``; it delegates to
+    ``services.engines.savings_provisioning.open_savings_account`` so the
+    tenant checks and the opening-deposit ledger entry are not
+    re-implemented here.
+    """
+
+    permission_classes = [IsAuthenticated, IsSaccoAdmin]
+
+    def post(self, request):
+        response = self._set_sacco_context()
+        if response:
+            return response
+
+        from .engines.savings_provisioning import (
+            SavingsAccountError,
+            open_savings_account,
+        )
+        from .serializers import OpenSavingsAccountSerializer
+
+        sacco = self.get_sacco_context()
+        serializer = OpenSavingsAccountSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data
+
+        # Both lookups are scoped to the admin's SACCO: a membership or
+        # savings type from another tenant 404s here, so a cross-tenant
+        # pairing can never reach open_savings_account().
+        membership = get_object_or_404(
+            Membership.objects.select_related('sacco', 'user'),
+            id=payload['membership_id'],
+            sacco=sacco,
+        )
+        savings_type = get_object_or_404(
+            SavingsType.objects.filter(sacco=sacco),
+            id=payload['savings_type_id'],
+        )
+
+        try:
+            saving = open_savings_account(
+                membership=membership,
+                savings_type=savings_type,
+                opening_balance=payload.get('opening_balance'),
+            )
+        except SavingsAccountError as exc:
+            detail = exc.messages[0] if exc.messages else str(exc)
+            return Response(
+                {'detail': detail},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        opening_balance = payload.get('opening_balance') or Decimal('0.00')
+        log_audit(
+            request.user,
+            'SAVINGS_ACCOUNT_OPENED',
+            'Saving',
+            saving.id,
+            new_values={
+                'membership_id': str(membership.id),
+                'savings_type_id': str(savings_type.id),
+                'sacco_id': str(sacco.id),
+                'opening_balance': str(opening_balance),
+            },
+            request=request,
+        )
+        return Response(
+            SavingSerializer(saving).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class LoanTypeListView(ListAPIView):

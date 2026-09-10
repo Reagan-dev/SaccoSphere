@@ -54,6 +54,7 @@ class SavingsTypeWriteSerializer(serializers.ModelSerializer):
             'interest_rate',
             'minimum_contribution',
             'is_active',
+            'allows_multiple_accounts',
         )
         read_only_fields = ('id', 'sacco')
 
@@ -77,6 +78,20 @@ class SavingSerializer(serializers.ModelSerializer):
             'dividend_eligible',
             'last_transaction_date',
         )
+
+
+class OpenSavingsAccountSerializer(serializers.Serializer):
+    """Payload for admin-initiated opening of a member savings account."""
+
+    membership_id = serializers.UUIDField()
+    savings_type_id = serializers.UUIDField()
+    opening_balance = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        allow_null=True,
+        min_value=Decimal('0.00'),
+    )
 
 
 class LoanTypeSerializer(serializers.ModelSerializer):
