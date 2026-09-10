@@ -219,6 +219,17 @@ class SaccoSettingsAdmin(admin.ModelAdmin):
             },
         ),
         (
+            'Dividend policy',
+            {
+                'fields': ('dividend_calculation_method',),
+                'description': (
+                    'Only AVERAGE_MONTH_END is implemented; the other '
+                    'methods are placeholders and a dividend run is '
+                    'refused with a 400 while one is selected.'
+                ),
+            },
+        ),
+        (
             'Audit',
             {
                 'classes': ('collapse',),

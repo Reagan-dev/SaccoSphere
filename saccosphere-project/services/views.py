@@ -1916,13 +1916,17 @@ class DividendCalculateView(SaccoScopedMixin, APIView):
             return response
 
         from .tasks import calculate_dividends_for_declaration_task
+        from .engines.dividend_calculator import (
+            is_supported_dividend_method,
+            resolve_dividend_calculation_method,
+        )
 
         with transaction.atomic():
             declaration = get_object_or_404(
                 self.apply_sacco_scope(
-                    DividendDeclaration.objects.select_for_update().filter(
-                        id=uuid or pk,
-                    )
+                    DividendDeclaration.objects.select_for_update()
+                    .select_related('sacco__settings')
+                    .filter(id=uuid or pk)
                 )
             )
 
@@ -1946,6 +1950,23 @@ class DividendCalculateView(SaccoScopedMixin, APIView):
                 return Response(
                     {'detail': 'A dividend calculation is already running.'},
                     status=status.HTTP_409_CONFLICT,
+                )
+
+            # The dividend method is a per-SACCO strategy; only
+            # AVERAGE_MONTH_END is implemented. Refuse here with a 400 -
+            # never queue a run that would fall back to the default.
+            method = resolve_dividend_calculation_method(declaration.sacco)
+            if not is_supported_dividend_method(method):
+                return Response(
+                    {
+                        'detail': (
+                            f'Dividend calculation method "{method}" is not '
+                            'yet supported. This SACCO must be set to '
+                            'AVERAGE_MONTH_END before dividends can be '
+                            'calculated.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
             declaration.status = DividendDeclaration.Status.CALCULATING

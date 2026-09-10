@@ -9,6 +9,7 @@ from django.db.models import Case, DecimalField, F, Q, Sum, When
 from django.utils import timezone
 from dateutil.relativedelta import relativedelta
 
+from accounts.models import SaccoSettings
 from ledger.models import LedgerEntry
 from saccomanagement.audit_logger import log_audit
 from services.models import DividendDeclaration, DividendPayout, Saving
@@ -25,6 +26,73 @@ TWELVE = Decimal('12')
 # match it for the signed conditional sum below.
 _LEDGER_AMOUNT_FIELD = DecimalField(max_digits=12, decimal_places=2)
 
+_Method = SaccoSettings.DividendCalculationMethod
+
+
+class DividendMethodNotSupported(NotImplementedError):
+    """A SACCO selected a dividend method with no engine implementation.
+
+    Subclasses ``NotImplementedError`` so the stub strategies and the
+    dispatcher raise one consistent type. ``DividendCalculateView`` turns
+    this into a synchronous 400 before any async run is queued, and
+    ``calculate_dividends_for_declaration`` re-checks as a backstop so an
+    unimplemented method can never silently fall back to the default.
+    """
+
+    def __init__(self, method):
+        self.method = method
+        super().__init__(
+            f'Dividend calculation method {method!r} is not yet supported.'
+        )
+
+
+def resolve_dividend_calculation_method(sacco):
+    """Return the ``DividendCalculationMethod`` configured for ``sacco``.
+
+    Falls back to ``AVERAGE_MONTH_END`` (the historical behaviour) when
+    the SACCO has no ``settings`` row yet.
+    """
+    sacco_settings = getattr(sacco, 'settings', None)
+    if sacco_settings is None:
+        return _Method.AVERAGE_MONTH_END
+    return sacco_settings.dividend_calculation_method
+
+
+def calculate_period_balance(saving, period_start, period_end, *, method):
+    """Dispatch to the configured dividend balance-basis strategy.
+
+    ``method`` is a ``SaccoSettings.DividendCalculationMethod`` value.
+    Only ``AVERAGE_MONTH_END`` is implemented; every other value (or an
+    unknown string) raises :class:`DividendMethodNotSupported` rather
+    than falling back to a default.
+    """
+    strategy = _BALANCE_STRATEGIES.get(method)
+    if strategy is None:
+        raise DividendMethodNotSupported(method)
+    return strategy(saving, period_start, period_end)
+
+
+def _day_weighted_balance(saving, period_start, period_end):
+    """Stub: day-weighted average balance over the period.
+
+    TODO(dividends): implement once at least one real SACCO's bylaws
+    give a confirmed reference for the exact rules - inclusive/exclusive
+    period boundaries, the day-count basis, and how a same-day
+    deposit-then-withdraw is weighted. Do not guess the formula.
+    """
+    raise DividendMethodNotSupported(_Method.DAY_WEIGHTED)
+
+
+def _minimum_balance(saving, period_start, period_end):
+    """Stub: pay dividends on the lowest balance held during the period.
+
+    TODO(dividends): implement once at least one real SACCO's bylaws
+    give a confirmed reference - in particular the sampling granularity
+    (calendar-day minimum vs per-transaction running minimum) and
+    whether the opening balance counts. Do not guess the formula.
+    """
+    raise DividendMethodNotSupported(_Method.MINIMUM_BALANCE)
+
 
 def calculate_average_balance(saving, period_start, period_end):
     """
@@ -34,10 +102,16 @@ def calculate_average_balance(saving, period_start, period_end):
     month in the period, and returns the simple average of those month-end
     balances.
 
-    NOTE: This uses the average-monthly-balance method. This must be reviewed
-    against the SACCO's bylaws, as some SACCOs use a stricter minimum-balance
-    or day-weighted method. The calculation method should match what is
-    specified in the SACCO's dividend policy.
+    This is the ``AVERAGE_MONTH_END`` strategy in ``_BALANCE_STRATEGIES``
+    - the default and, for now, the only implemented dividend method.
+    Reached via ``calculate_period_balance(..., method=...)``; still
+    importable directly under its historical name for callers and tests
+    that only ever use this method.
+
+    NOTE: The average-monthly-balance basis must be reviewed against each
+    SACCO's bylaws - some use a stricter minimum-balance or day-weighted
+    method (see the ``DAY_WEIGHTED`` / ``MINIMUM_BALANCE`` stubs). A SACCO
+    selects its basis via ``SaccoSettings.dividend_calculation_method``.
 
     Args:
         saving: Saving instance
@@ -87,6 +161,37 @@ def calculate_average_balance(saving, period_start, period_end):
     average = total / Decimal(len(balances))
 
     return average.quantize(MONEY_QUANTIZER, rounding=ROUND_HALF_UP)
+
+
+def _average_month_end_strategy(saving, period_start, period_end):
+    """``AVERAGE_MONTH_END`` strategy seam.
+
+    Delegates to the module-level ``calculate_average_balance`` by name
+    (not by a captured reference) so callers and tests can still patch
+    that function and have the dispatcher pick the patch up.
+    """
+    return calculate_average_balance(saving, period_start, period_end)
+
+
+# Strategy registry: dividend method -> period-balance callable
+# ``(saving, period_start, period_end) -> Decimal``. Only
+# ``AVERAGE_MONTH_END`` has a real implementation; the other two are
+# stubs that raise ``DividendMethodNotSupported``. Anything not listed
+# here is likewise unsupported.
+_BALANCE_STRATEGIES = {
+    _Method.AVERAGE_MONTH_END: _average_month_end_strategy,
+    _Method.DAY_WEIGHTED: _day_weighted_balance,
+    _Method.MINIMUM_BALANCE: _minimum_balance,
+}
+
+# Methods with a working engine. The view checks membership here for its
+# synchronous 400; keep it in sync with the real implementations above.
+SUPPORTED_DIVIDEND_METHODS = frozenset({_Method.AVERAGE_MONTH_END})
+
+
+def is_supported_dividend_method(method):
+    """True when ``method`` has a real balance-basis implementation."""
+    return method in SUPPORTED_DIVIDEND_METHODS
 
 
 def _saving_dividend_ledger_refs(saving):
@@ -183,6 +288,10 @@ def calculate_dividends_for_declaration(declaration):
 
     Raises:
         ValueError: If declaration status is APPROVED or DISBURSED
+        DividendMethodNotSupported: If the SACCO is configured for a
+            dividend method that has no engine implementation. The view
+            guards this synchronously; this is the backstop so an async
+            run can never silently fall back to AVERAGE_MONTH_END.
     """
     with transaction.atomic():
         declaration = DividendDeclaration.objects.select_for_update().get(
@@ -197,6 +306,10 @@ def calculate_dividends_for_declaration(declaration):
                 'Cannot recalculate dividends for declaration with status '
                 f'{declaration.status}.'
             )
+
+        method = resolve_dividend_calculation_method(declaration.sacco)
+        if not is_supported_dividend_method(method):
+            raise DividendMethodNotSupported(method)
 
         if declaration.payouts.exists():
             declaration.payouts.all().delete()
@@ -226,10 +339,11 @@ def calculate_dividends_for_declaration(declaration):
         total_dividend_amount = Decimal('0.00')
 
         for saving in eligible_savings:
-            average_balance = calculate_average_balance(
+            average_balance = calculate_period_balance(
                 saving,
                 declaration.period_start,
                 declaration.period_end,
+                method=method,
             )
 
             raw_dividend = (
