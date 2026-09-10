@@ -235,6 +235,26 @@ class SavingsWithdrawalValidationTest(_FixtureMixin, TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertFalse(Transaction.objects.exists())
 
+    def test_early_rejection_branch_emits_a_structured_log(self):
+        self.saving.status = Saving.Status.FROZEN
+        self.saving.save(update_fields=['status'])
+
+        with self.assertLogs('saccosphere.payments', level='WARNING') as logs:
+            with patch('payments.withdrawals.DarajaClient'):
+                ok, _payload, http_status = initiate_savings_withdrawal(
+                    saving=Saving.objects.get(id=self.saving.id),
+                    phone_number='+254712240001',
+                    requested_amount=Decimal('1000.00'),
+                )
+
+        self.assertFalse(ok)
+        self.assertEqual(http_status, 400)
+        line = '\n'.join(logs.output)
+        self.assertIn('not ACTIVE', line)
+        self.assertIn(str(self.saving.id), line)
+        self.assertIn(str(self.sacco.id), line)
+        self.assertIn(str(self.user.id), line)
+
 
 class SavingsWithdrawalTenantScopingTest(_FixtureMixin, TestCase):
     def setUp(self):
@@ -400,22 +420,37 @@ class SavingsWithdrawalStaleInstanceTest(_FixtureMixin, TestCase):
 
 class SavingsWithdrawalDarajaErrorReversalTest(_FixtureMixin, TestCase):
     def test_daraja_error_reverses_balance_and_posts_offsetting_entry(self):
-        with patch('payments.withdrawals.DarajaClient') as client_cls:
-            client = client_cls.return_value
-            client._build_callback_url.return_value = 'https://cb.test/b2c'
-            client.initiate_b2c.side_effect = DarajaError(
-                'B2C rejected', response_code='500',
-            )
+        with self.assertLogs('saccosphere.payments', level='ERROR') as logs:
+            with patch('payments.withdrawals.DarajaClient') as client_cls:
+                client = client_cls.return_value
+                client._build_callback_url.return_value = (
+                    'https://cb.test/b2c'
+                )
+                client.initiate_b2c.side_effect = DarajaError(
+                    'B2C rejected', response_code='500',
+                )
 
-            ok, payload, http_status = initiate_savings_withdrawal(
-                saving=self.saving,
-                phone_number='+254712240001',
-                requested_amount=Decimal('5000.00'),
-                idempotency_key='rev-1',
-            )
+                ok, payload, http_status = initiate_savings_withdrawal(
+                    saving=self.saving,
+                    phone_number='+254712240001',
+                    requested_amount=Decimal('5000.00'),
+                    idempotency_key='rev-1',
+                )
 
+        # Clean error, never a bare 500.
         self.assertFalse(ok)
         self.assertEqual(http_status, 502)
+        self.assertEqual(payload['response_code'], '500')
+
+        # A structured failure log carrying member / saving / txn / code.
+        error_line = '\n'.join(
+            m for m in logs.output if m.startswith('ERROR')
+        )
+        self.assertIn('B2C initiation failed', error_line)
+        self.assertIn('code=500', error_line)
+        self.assertIn(str(self.saving.id), error_line)
+        self.assertIn(str(self.sacco.id), error_line)
+        self.assertIn(str(self.user.id), error_line)
 
         self.saving.refresh_from_db()
         self.assertEqual(self.saving.amount, Decimal('10000.00'))
@@ -426,6 +461,9 @@ class SavingsWithdrawalDarajaErrorReversalTest(_FixtureMixin, TestCase):
         )
         self.assertEqual(payment.status, Transaction.Status.FAILED)
         self.assertIn('withdrawal_reversal_reason', payment.metadata)
+
+        mpesa = MpesaTransaction.objects.get(transaction=payment)
+        self.assertEqual(mpesa.result_code, '500')
 
         debit = LedgerEntry.objects.get(reference=str(payment.id))
         credit = LedgerEntry.objects.get(reference=f'{payment.id}-REV')
