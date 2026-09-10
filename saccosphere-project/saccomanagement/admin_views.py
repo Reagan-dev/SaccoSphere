@@ -140,6 +140,9 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
     lookup_field = 'id'
     http_method_names = ['patch', 'head', 'options']
+    # Loan status changes here drive disbursement (money movement) - a
+    # multi-SACCO admin must name the tenant with X-Sacco-ID.
+    require_sacco_header = True
 
     def patch(self, request, *args, **kwargs):
         response = self._set_sacco_context()
