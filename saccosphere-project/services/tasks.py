@@ -492,6 +492,132 @@ def _sync_severe_arrears_compliance_flags(buckets):
     return flagged
 
 
+SAVINGS_RECON_CHUNK_SIZE = 500
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='services.tasks.reconcile_savings_ledger',
+)
+def reconcile_savings_ledger(self):
+    """Per-SACCO: flag memberships whose cached savings balance has
+    drifted from the ledger. Alerts only - it never auto-corrects.
+
+    ``ledger.utils.apply_ledger_entry`` is the sole writer of
+    ``Saving.amount``; this is the control that catches anything that
+    bypassed it. Writes a JobHeartbeat every run for ``/health/jobs/``.
+    """
+    from health.models import JobHeartbeat
+
+    try:
+        result = _run_savings_ledger_reconciliation()
+        logger.info(
+            'Savings-ledger reconciliation complete. checked=%s '
+            'memberships_mismatched=%s saccos_flagged=%s.',
+            result['checked'],
+            result['memberships_mismatched'],
+            result['saccos_flagged'],
+        )
+        JobHeartbeat.record('reconcile_savings_ledger', detail=result)
+        return result
+    except Exception as exc:
+        logger.exception('Savings-ledger reconciliation failed.')
+        try:
+            JobHeartbeat.record(
+                'reconcile_savings_ledger',
+                status=JobHeartbeat.Status.ERROR,
+                detail={'error': str(exc)},
+            )
+        except Exception:
+            logger.exception(
+                'Could not record reconciliation failure heartbeat.',
+            )
+        raise self.retry(exc=exc)
+
+
+def _run_savings_ledger_reconciliation():
+    from ledger.utils import (
+        expected_savings_balance,
+        savings_ledger_balance,
+    )
+    from saccomanagement.audit_logger import log_audit
+    from saccomanagement.compliance_detectors import (
+        SavingsLedgerMismatchDetector,
+    )
+    from saccomembership.models import Membership
+    from services.models import Saving
+
+    zero = Decimal('0.00')
+    detector = SavingsLedgerMismatchDetector()
+    checked = 0
+    saccos_flagged = 0
+    memberships_mismatched = 0
+
+    for sacco in Sacco.objects.filter(is_active=True).iterator(
+        chunk_size=SAVINGS_RECON_CHUNK_SIZE,
+    ):
+        member_ids = list(
+            Saving.objects.filter(membership__sacco=sacco)
+            .values_list('membership_id', flat=True)
+            .distinct()
+        )
+        if not member_ids:
+            continue
+
+        mismatches = []
+        total_drift = zero
+        memberships = (
+            Membership.objects.filter(id__in=member_ids)
+            .only('id', 'member_number')
+            .iterator(chunk_size=SAVINGS_RECON_CHUNK_SIZE)
+        )
+        for membership in memberships:
+            checked += 1
+            expected = expected_savings_balance(membership)
+            ledger = savings_ledger_balance(membership)
+            drift = expected - ledger
+            if drift != zero:
+                memberships_mismatched += 1
+                total_drift += drift
+                mismatches.append({
+                    'membership_id': str(membership.id),
+                    'member_number': membership.member_number,
+                    'saving_amount_total': str(expected),
+                    'ledger_savings_balance': str(ledger),
+                    'drift': str(drift),
+                })
+
+        if mismatches:
+            saccos_flagged += 1
+            try:
+                detector.check(sacco, mismatches, total_drift)
+            except Exception:
+                logger.exception(
+                    'Could not raise savings-ledger mismatch flag for '
+                    'sacco_id=%s.',
+                    sacco.id,
+                )
+            log_audit(
+                None,
+                'SAVINGS_LEDGER_MISMATCH',
+                'Sacco',
+                sacco.id,
+                new_values={
+                    'mismatched_memberships': len(mismatches),
+                    'total_drift': str(total_drift),
+                    'sample': mismatches[:10],
+                },
+            )
+
+    return {
+        'checked': checked,
+        'memberships_mismatched': memberships_mismatched,
+        'saccos_flagged': saccos_flagged,
+    }
+
+
 def _apply_default_status_transition(loan, bucket):
     """Flip a loan between ACTIVE and DEFAULTED off the 90-day bucket.
 

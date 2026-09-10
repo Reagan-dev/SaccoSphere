@@ -1071,39 +1071,31 @@ def _process_failed_b2c_callback(
 
 def _apply_saving_deposit(mpesa_transaction, transaction, amount):
     from ledger.models import LedgerEntry
-    from ledger.utils import create_ledger_entry
+    from ledger.utils import apply_ledger_entry
     from services.models import Saving
 
-    with db_transaction.atomic():
-        saving = Saving.objects.select_for_update().select_related(
-            'membership',
-        ).get(id=mpesa_transaction.related_saving_id)
-        saving.amount += amount
-        saving.total_contributions += amount
-        saving.last_transaction_date = timezone.localdate()
-        saving.save(
-            update_fields=[
-                'amount',
-                'total_contributions',
-                'last_transaction_date',
-                'updated_at',
-            ]
-        )
+    saving = Saving.objects.select_related('membership').get(
+        id=mpesa_transaction.related_saving_id,
+    )
 
-        create_ledger_entry(
-            membership=saving.membership,
-            entry_type=LedgerEntry.EntryType.CREDIT,
-            category=LedgerEntry.Category.SAVING_DEPOSIT,
-            amount=amount,
-            description=(
-                f'Deposit -- member paid KES '
-                f'{_get_authoritative_gross_amount(transaction):,.2f}. '
-                f'KES {_get_authoritative_platform_fee(transaction):,.2f} '
-                f'platform fee included.'
-            ),
-            reference=str(transaction.id),
-            transaction=transaction,
-        )
+    # apply_ledger_entry is the only path allowed to move Saving.amount:
+    # it locks the row, writes the ledger entry and updates the balance
+    # in one atomic block.
+    apply_ledger_entry(
+        saving=saving,
+        amount=amount,
+        entry_type=LedgerEntry.EntryType.CREDIT,
+        category=LedgerEntry.Category.SAVING_DEPOSIT,
+        description=(
+            f'Deposit -- member paid KES '
+            f'{_get_authoritative_gross_amount(transaction):,.2f}. '
+            f'KES {_get_authoritative_platform_fee(transaction):,.2f} '
+            f'platform fee included.'
+        ),
+        reference=str(transaction.id),
+        transaction=transaction,
+        contribution_delta=amount,
+    )
 
 
 def _apply_loan_repayment(mpesa_transaction, transaction, amount):

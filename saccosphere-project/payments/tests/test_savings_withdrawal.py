@@ -469,7 +469,11 @@ class SavingsWithdrawalDarajaErrorReversalTest(_FixtureMixin, TestCase):
         credit = LedgerEntry.objects.get(reference=f'{payment.id}-REV')
         self.assertEqual(debit.entry_type, LedgerEntry.EntryType.DEBIT)
         self.assertEqual(credit.entry_type, LedgerEntry.EntryType.CREDIT)
-        self.assertEqual(credit.category, LedgerEntry.Category.ADJUSTMENT)
+        # Reversal is a CREDIT SAVING_WITHDRAWAL so it nets the debit
+        # inside the savings-reconciliation set.
+        self.assertEqual(
+            credit.category, LedgerEntry.Category.SAVING_WITHDRAWAL,
+        )
         self.assertEqual(debit.amount, credit.amount)
 
         # Reversal is idempotent.
@@ -734,7 +738,11 @@ class SavingsWithdrawalB2CCallbackTest(_FixtureMixin, TestCase):
         credit = LedgerEntry.objects.get(reference=f'{payment.id}-REV')
         self.assertEqual(debit.entry_type, LedgerEntry.EntryType.DEBIT)
         self.assertEqual(credit.entry_type, LedgerEntry.EntryType.CREDIT)
-        self.assertEqual(credit.category, LedgerEntry.Category.ADJUSTMENT)
+        # Reversal is a CREDIT SAVING_WITHDRAWAL so it nets the debit
+        # inside the savings-reconciliation set.
+        self.assertEqual(
+            credit.category, LedgerEntry.Category.SAVING_WITHDRAWAL,
+        )
         self.assertEqual(debit.amount, credit.amount)
 
         note = Notification.objects.get(

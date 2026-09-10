@@ -76,6 +76,12 @@ app.conf.beat_schedule = {
         'task': 'services.tasks.send_repayment_reminders',
         'schedule': crontab(minute=0, hour=6),  # Daily 06:00
     },
+    # Flag (never auto-fix) any Saving.amount that drifted from the
+    # ledger. Runs after the other daily financial sweeps.
+    'reconcile-savings-ledger': {
+        'task': 'services.tasks.reconcile_savings_ledger',
+        'schedule': crontab(minute=45, hour=6),  # Daily 06:45
+    },
 }
 app.conf.task_serializer = 'json'
 app.conf.result_expires = 3600

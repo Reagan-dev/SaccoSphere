@@ -255,7 +255,16 @@ def build_financial_position_return(sacco, as_of_date):
     # and require manual interpretation
     cash_balance = cash_in - cash_out
 
-    # Liabilities: Member savings by type
+    # Liabilities: Member savings by type.
+    #
+    # Reads Saving.amount, NOT a live re-sum of the ledger. Saving.amount
+    # is now a ledger-gated cache: ledger.utils.apply_ledger_entry is the
+    # only code path that moves it, and services.tasks.reconcile_savings
+    # _ledger runs daily to raise a DATA_DISCREPANCY ComplianceFlag if it
+    # ever drifts from the ledger. We read the cache here because SASRA
+    # needs the per-savings-type breakdown (BOSA / FOSA / SHARE_CAPITAL),
+    # and LedgerEntry is membership-scoped with no per-account attribution
+    # so it cannot produce that split.
     savings_by_type = {}
 
     for savings_type_name in SavingsType.Name.values:

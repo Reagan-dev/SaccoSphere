@@ -13,4 +13,6 @@ MONITORED_JOBS = {
     # config/celery.py: 'daily-npl-arrears-check', crontab 06:30 daily.
     # One missed day is tolerated; two is a real outage.
     'flag_npl_arrears': timedelta(days=2),
+    # config/celery.py: 'reconcile-savings-ledger', crontab 06:45 daily.
+    'reconcile_savings_ledger': timedelta(days=2),
 }

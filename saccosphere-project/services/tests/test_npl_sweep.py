@@ -249,7 +249,10 @@ class JobHealthEndpointTest(TestCase):
         )
 
     def test_fresh_heartbeat_returns_200(self):
-        JobHeartbeat.record('flag_npl_arrears')
+        from health.monitored_jobs import MONITORED_JOBS
+
+        for job_name in MONITORED_JOBS:
+            JobHeartbeat.record(job_name)
         response = self.client.get('/health/jobs/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['status'], 'ok')
