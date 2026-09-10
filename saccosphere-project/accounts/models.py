@@ -818,6 +818,33 @@ class SaccoSettings(models.Model):
             'Percent of instalment, per day overdue',
         )
 
+    class DividendCalculationMethod(models.TextChoices):
+
+        # The historical (and only implemented) method: sample each
+        # account's balance at every calendar month-end in the period and
+        # take the simple average. See
+        # services.engines.dividend_calculator.
+        AVERAGE_MONTH_END = (
+            'AVERAGE_MONTH_END',
+            'Average of month-end balances',
+        )
+
+        # Weight every balance by the number of days it was held over the
+        # period. Not implemented - needs a confirmed bylaws reference
+        # before the exact day-count / boundary rules are pinned down.
+        DAY_WEIGHTED = (
+            'DAY_WEIGHTED',
+            'Day-weighted average balance (not yet supported)',
+        )
+
+        # Pay on the lowest balance the account fell to during the period.
+        # Not implemented - needs a confirmed bylaws reference before the
+        # sampling granularity (daily vs per-transaction) is pinned down.
+        MINIMUM_BALANCE = (
+            'MINIMUM_BALANCE',
+            'Minimum balance over the period (not yet supported)',
+        )
+
 
 
     id = models.UUIDField(
@@ -971,6 +998,18 @@ class SaccoSettings(models.Model):
             'off (the default) no interest is credited even if a '
             'SavingsType advertises an interest_rate. Simple interest, '
             'monthly, on each ACTIVE account\'s balance at run time.'
+        ),
+    )
+
+    dividend_calculation_method = models.CharField(
+        max_length=20,
+        choices=DividendCalculationMethod.choices,
+        default=DividendCalculationMethod.AVERAGE_MONTH_END,
+        help_text=(
+            'Which balance basis the dividend engine uses for this '
+            'SACCO. AVERAGE_MONTH_END is the only implemented method; '
+            'DAY_WEIGHTED and MINIMUM_BALANCE are placeholders and a '
+            'dividend run is refused with a 400 while one is selected.'
         ),
     )
 

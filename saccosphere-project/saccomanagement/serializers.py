@@ -220,6 +220,7 @@ class SaccoSettingsSerializer(serializers.ModelSerializer):
             'penalty_grace_days',
             'enforce_dividend_dual_control',
             'savings_interest_accrual_enabled',
+            'dividend_calculation_method',
             'updated_at',
         )
         read_only_fields = ('sacco_id', 'updated_at')
@@ -284,6 +285,25 @@ class SaccoSettingsSerializer(serializers.ModelSerializer):
                     'penalty_rate': (
                         'For a PERCENT rule, penalty_rate is a fraction '
                         '(0.05 = 5%); it cannot exceed 1.'
+                    ),
+                },
+            )
+
+        # Only AVERAGE_MONTH_END has a working engine. Reject the
+        # placeholder methods here so a SACCO cannot be saved into a
+        # state where every dividend run 400s; lift this per method as
+        # each one is implemented in services.engines.dividend_calculator.
+        dividend_method = _current('dividend_calculation_method')
+        if (
+            dividend_method is not None
+            and dividend_method
+            != SaccoSettings.DividendCalculationMethod.AVERAGE_MONTH_END
+        ):
+            raise serializers.ValidationError(
+                {
+                    'dividend_calculation_method': (
+                        f'{dividend_method} is not yet supported. Only '
+                        'AVERAGE_MONTH_END is currently implemented.'
                     ),
                 },
             )
