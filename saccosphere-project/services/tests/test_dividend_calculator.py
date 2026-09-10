@@ -504,9 +504,12 @@ class DividendDeclarationAPITests(TestCase):
             '/api/v1/services/dividends/declarations/',
             HTTP_X_SACCO_ID=str(self.sacco.id),
         )
-        
+
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data['data']), 1)
+        # Paginated by SaccoSpherePagination: data.results holds the page.
+        body = response.json()
+        self.assertEqual(body['data']['count'], 1)
+        self.assertEqual(len(body['data']['results']), 1)
 
     def test_calculate_dividends_endpoint(self):
         declaration = DividendDeclaration.objects.create(

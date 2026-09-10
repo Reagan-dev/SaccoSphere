@@ -1780,11 +1780,16 @@ class CRBCheckView(APIView):
 
 
 class DividendDeclarationListCreateView(SaccoScopedMixin, ListCreateAPIView):
-    """List and create dividend declarations for a SACCO."""
+    """List and create dividend declarations for a SACCO.
+
+    GET is paginated by the project-standard ``SaccoSpherePagination``
+    (the DRF default) - a SACCO with a long dividend history no longer
+    returns every declaration in one response. Payload:
+    ``{"success": true, "data": {"count", "results", ...}}``.
+    """
 
     serializer_class = DividendDeclarationSerializer
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
-    pagination_class = None
     # Strict for the POST (create); GET list still accepts the fallback.
     require_sacco_header = True
 
@@ -1799,11 +1804,6 @@ class DividendDeclarationListCreateView(SaccoScopedMixin, ListCreateAPIView):
         if response:
             return response
         return super().post(request, *args, **kwargs)
-
-    def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
-        return Response({'success': True, 'data': serializer.data})
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -2149,22 +2149,22 @@ class DividendDisburseView(SaccoScopedMixin, APIView):
 
 
 class DividendPayoutListView(SaccoScopedMixin, ListAPIView):
-    """List dividend payouts for a SACCO, filterable by declaration."""
+    """List dividend payouts for a SACCO, filterable by ``?declaration=``.
+
+    Paginated by the project-standard ``SaccoSpherePagination`` (the DRF
+    default). ``?declaration=<id>`` narrows to one declaration - the
+    ``(declaration, status)`` index on ``DividendPayout`` serves both
+    that filter and the disburse ``status=PENDING`` scan.
+    """
 
     serializer_class = DividendPayoutSerializer
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
-    pagination_class = None
 
     def get(self, request, *args, **kwargs):
         response = self._set_sacco_context()
         if response:
             return response
         return super().get(request, *args, **kwargs)
-
-    def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
-        return Response({'success': True, 'data': serializer.data})
 
     def get_queryset(self):
         queryset = self.get_sacco_queryset(
