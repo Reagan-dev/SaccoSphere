@@ -2,8 +2,12 @@
 
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from io import StringIO
 
-from django.test import TestCase
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.db import IntegrityError, connection, transaction
+from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -511,3 +515,225 @@ class DividendDeclarationAPITests(TestCase):
         )
         
         self.assertEqual(response.status_code, 200)
+
+
+class DuplicateDividendDeclarationTests(TestCase):
+    """One dividend declaration per (sacco, savings_type, financial_year)."""
+
+    FY = '2025/2026'
+
+    def setUp(self):
+        self.client = APIClient()
+        self.sacco = Sacco.objects.create(
+            name='Dup Dividend SACCO A',
+            registration_number='DUPDIV-A',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+        )
+        self.savings_type = SavingsType.objects.create(
+            sacco=self.sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('500.00'),
+        )
+        self.admin = User.objects.create_user(
+            email='dup-dividend-admin@example.com',
+            password='secret',
+            phone_number='254712345691',
+        )
+        Role.objects.create(
+            user=self.admin, sacco=self.sacco, name=Role.SACCO_ADMIN,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        self.existing = DividendDeclaration.objects.create(
+            sacco=self.sacco,
+            savings_type=self.savings_type,
+            financial_year=self.FY,
+            declared_rate=Decimal('10.00'),
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+            status=DividendDeclaration.Status.DRAFT,
+        )
+
+    def _post(self, sacco, savings_type, financial_year, **overrides):
+        body = {
+            'savings_type': str(savings_type.id),
+            'financial_year': financial_year,
+            'declared_rate': '12.50',
+            'period_start': '2025-01-01',
+            'period_end': '2025-12-31',
+        }
+        body.update(overrides)
+        return self.client.post(
+            '/api/v1/services/dividends/declarations/',
+            body,
+            format='json',
+            HTTP_X_SACCO_ID=str(sacco.id),
+        )
+
+    def test_api_rejects_duplicate_with_400(self):
+        response = self._post(self.sacco, self.savings_type, self.FY)
+        self.assertEqual(response.status_code, 400)
+        body = response.json()
+        errors = body.get('errors', body)
+        self.assertIn('financial_year', errors)
+        self.assertEqual(
+            DividendDeclaration.objects.filter(
+                sacco=self.sacco,
+                savings_type=self.savings_type,
+                financial_year=self.FY,
+            ).count(),
+            1,
+        )
+
+    def test_api_allows_a_different_financial_year(self):
+        response = self._post(self.sacco, self.savings_type, '2026/2027')
+        self.assertEqual(response.status_code, 201)
+
+    def test_direct_db_insert_of_duplicate_raises_integrity_error(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                DividendDeclaration.objects.create(
+                    sacco=self.sacco,
+                    savings_type=self.savings_type,
+                    financial_year=self.FY,
+                    declared_rate=Decimal('9.00'),
+                    period_start=date(2025, 1, 1),
+                    period_end=date(2025, 12, 31),
+                    status=DividendDeclaration.Status.DRAFT,
+                )
+
+    def test_same_type_and_year_allowed_for_a_different_sacco(self):
+        other_sacco = Sacco.objects.create(
+            name='Dup Dividend SACCO B',
+            registration_number='DUPDIV-B',
+            sector=Sacco.Sector.FINANCE,
+            county='Kiambu',
+        )
+        other_type = SavingsType.objects.create(
+            sacco=other_sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('500.00'),
+        )
+        Role.objects.create(
+            user=self.admin, sacco=other_sacco, name=Role.SACCO_ADMIN,
+        )
+
+        # Direct insert: no cross-SACCO clash.
+        DividendDeclaration.objects.create(
+            sacco=other_sacco,
+            savings_type=other_type,
+            financial_year=self.FY,
+            declared_rate=Decimal('11.00'),
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+            status=DividendDeclaration.Status.DRAFT,
+        )
+
+        # And via the API for that other tenant.
+        DividendDeclaration.objects.filter(
+            sacco=other_sacco,
+        ).delete()
+        response = self._post(other_sacco, other_type, self.FY)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            DividendDeclaration.objects.filter(
+                savings_type=other_type, financial_year=self.FY,
+            ).count(),
+            1,
+        )
+
+    def test_editing_the_declaration_in_place_is_not_a_duplicate(self):
+        response = self.client.patch(
+            f'/api/v1/services/dividends/declarations/{self.existing.id}/',
+            {'declared_rate': '13.00'},
+            format='json',
+            HTTP_X_SACCO_ID=str(self.sacco.id),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.existing.refresh_from_db()
+        self.assertEqual(self.existing.declared_rate, Decimal('13.00'))
+
+    def test_audit_command_is_clean_when_there_are_no_duplicates(self):
+        # Distinct declarations (different years) must NOT be flagged.
+        DividendDeclaration.objects.create(
+            sacco=self.sacco,
+            savings_type=self.savings_type,
+            financial_year='2026/2027',
+            declared_rate=Decimal('9.00'),
+            period_start=date(2026, 1, 1),
+            period_end=date(2026, 12, 31),
+            status=DividendDeclaration.Status.DRAFT,
+        )
+        out = StringIO()
+        call_command('audit_duplicate_dividend_declarations', stdout=out)
+        self.assertIn('No duplicate dividend declarations', out.getvalue())
+
+
+class DuplicateDividendAuditCommandTests(TransactionTestCase):
+    """The pre-migration audit command surfaces real duplicate rows.
+
+    Planting duplicates needs the unique constraint dropped first. That is
+    a clean ``ALTER TABLE ... DROP CONSTRAINT`` on PostgreSQL but a full
+    table rebuild on SQLite (which re-adds the constraint from model
+    state), so this runs on PostgreSQL only - mirroring the other
+    DB-behaviour tests in this project. The clean path is covered on every
+    backend by
+    DividendDeclarationAPITests-side
+    test_audit_command_is_clean_when_there_are_no_duplicates.
+    """
+
+    def setUp(self):
+        if connection.vendor != 'postgresql':
+            self.skipTest(
+                'Dropping a UniqueConstraint to plant duplicates only '
+                'works cleanly on PostgreSQL; SQLite rebuilds the table '
+                'and re-applies the constraint from model state.'
+            )
+        self.sacco = Sacco.objects.create(
+            name='Audit Cmd SACCO',
+            registration_number='AUDCMD-1',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+        )
+        self.savings_type = SavingsType.objects.create(
+            sacco=self.sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('500.00'),
+        )
+        self._constraint = next(
+            c for c in DividendDeclaration._meta.constraints
+            if c.name == 'unique_dividend_declaration_per_sacco_type_year'
+        )
+
+    def _make(self, financial_year, rate):
+        return DividendDeclaration.objects.create(
+            sacco=self.sacco,
+            savings_type=self.savings_type,
+            financial_year=financial_year,
+            declared_rate=Decimal(rate),
+            period_start=date(2025, 1, 1),
+            period_end=date(2025, 12, 31),
+            status=DividendDeclaration.Status.DRAFT,
+        )
+
+    def test_reports_duplicates_and_raises_command_error(self):
+        with connection.schema_editor(atomic=False) as editor:
+            editor.remove_constraint(DividendDeclaration, self._constraint)
+        try:
+            self._make('2025/2026', '10.00')
+            self._make('2025/2026', '11.00')
+
+            out = StringIO()
+            with self.assertRaises(CommandError):
+                call_command(
+                    'audit_duplicate_dividend_declarations', stdout=out,
+                )
+            self.assertIn(
+                'duplicate dividend declaration group', out.getvalue(),
+            )
+            self.assertIn(str(self.sacco.id), out.getvalue())
+        finally:
+            DividendDeclaration.objects.all().delete()
+            with connection.schema_editor(atomic=False) as editor:
+                editor.add_constraint(DividendDeclaration, self._constraint)
