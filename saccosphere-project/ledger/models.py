@@ -22,6 +22,10 @@ class LedgerEntry(models.Model):
         # savings balance that predated the ledger for an account. Only
         # written by the backfill_savings_opening_balances command.
         OPENING_BALANCE = 'OPENING_BALANCE', 'Opening balance'
+        # Monthly savings-interest credit. Written only by
+        # services.engines.savings_interest.accrue_savings_interest_for_sacco
+        # (driven by the accrue_savings_interest beat task).
+        SAVINGS_INTEREST = 'SAVINGS_INTEREST', 'Savings interest'
 
     id = models.UUIDField(
         primary_key=True,
