@@ -267,6 +267,51 @@ class SavingsBreakdownTestCase(TestCase):
         response = self.client.get(url, {'sacco_id': self.sacco.id})
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_savings_breakdown_is_scoped_to_the_requesting_member_only(self):
+        """Another member's savings in the same SACCO must not leak in.
+
+        Regression guard for SavingsBreakdownView's
+        ``membership__user=request.user`` scoping: the audit lists this
+        as already-correct, so pin it.
+        """
+        # The caller's own savings.
+        Saving.objects.create(
+            membership=self.membership,
+            savings_type=self.bosa_type,
+            amount=Decimal('2000.00'),
+            status=Saving.Status.ACTIVE,
+            dividend_eligible=True,
+        )
+
+        # A second APPROVED member of the SAME SACCO with a large
+        # balance that must never be counted for self.user.
+        other_user = User.objects.create_user(
+            email='other-breakdown@example.com',
+            password='testpass123',
+        )
+        other_membership = Membership.objects.create(
+            user=other_user,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number='M002',
+        )
+        Saving.objects.create(
+            membership=other_membership,
+            savings_type=self.bosa_type,
+            amount=Decimal('999999.00'),
+            status=Saving.Status.ACTIVE,
+            dividend_eligible=True,
+        )
+
+        self.client.force_authenticate(user=self.user)
+        url = reverse('services:savings-breakdown')
+        response = self.client.get(url, {'sacco_id': self.sacco.id})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.json()['data']
+        self.assertEqual(data['bosa_total'], Decimal('2000.00'))
+        self.assertEqual(data['total'], Decimal('2000.00'))
+
 
 class SavingsTypeDeletionTests(TestCase):
     """Hard-deleting a savings type in use must be refused (409)."""
