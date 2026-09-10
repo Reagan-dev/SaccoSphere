@@ -1,19 +1,29 @@
 """Dividend calculation engine for SACCO dividend declarations."""
 
+import logging
 from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
+from django.db.models import Case, DecimalField, F, Q, Sum, When
 from django.utils import timezone
 from dateutil.relativedelta import relativedelta
 
 from ledger.models import LedgerEntry
+from saccomanagement.audit_logger import log_audit
 from services.models import DividendDeclaration, DividendPayout, Saving
 
 
+logger = logging.getLogger(__name__)
+
 MONEY_QUANTIZER = Decimal('0.01')
+ZERO = Decimal('0.00')
 ONE_HUNDRED = Decimal('100')
 TWELVE = Decimal('12')
+
+# LedgerEntry.amount is DecimalField(max_digits=12, decimal_places=2);
+# match it for the signed conditional sum below.
+_LEDGER_AMOUNT_FIELD = DecimalField(max_digits=12, decimal_places=2)
 
 
 def calculate_average_balance(saving, period_start, period_end):
@@ -60,10 +70,15 @@ def calculate_average_balance(saving, period_start, period_end):
     # the simple average. This must be reviewed against the SACCO's bylaws
     # because some SACCOs require a stricter minimum-balance or day-weighted
     # dividend method.
+    dividend_refs = _saving_dividend_ledger_refs(saving)
     balances = []
     for month_end_date in month_end_dates:
-        balance = _get_saving_balance_at_date(saving, month_end_date)
-        balances.append(Decimal(balance))
+        balance = _get_saving_balance_at_date(
+            saving,
+            month_end_date,
+            dividend_refs=dividend_refs,
+        )
+        balances.append(balance)
 
     if not balances:
         return Decimal('0.00')
@@ -74,29 +89,78 @@ def calculate_average_balance(saving, period_start, period_end):
     return average.quantize(MONEY_QUANTIZER, rounding=ROUND_HALF_UP)
 
 
-def _get_saving_balance_at_date(saving, balance_date):
-    entries = LedgerEntry.objects.filter(
+def _saving_dividend_ledger_refs(saving):
+    """Ledger references for dividend-payout rows credited to this saving.
+
+    ``LedgerEntry`` is membership-scoped with no per-savings-account FK
+    (deferred - see Prompt 7), and dividend credits are posted with
+    ``transaction=None``. ``DividendDisburseView`` writes them with the
+    deterministic reference ``DIV-<declaration>-<payout>``, so we rebuild
+    that set from the ``DividendPayout`` rows that point at this saving.
+    """
+    return [
+        f'DIV-{declaration_id}-{payout_id}'
+        for declaration_id, payout_id in (
+            DividendPayout.objects.filter(saving=saving)
+            .values_list('declaration_id', 'id')
+        )
+    ]
+
+
+def _get_saving_balance_at_date(saving, balance_date, dividend_refs=None):
+    """Reconstruct one savings account's balance as of ``balance_date``.
+
+    ``Saving.amount`` is the ledger-reconciled current balance: since
+    Prompt 7, ``ledger.utils.apply_ledger_entry`` is the only writer, and
+    ``backfill_savings_opening_balances`` + the daily
+    ``reconcile_savings_ledger`` task keep it equal to the sum of the
+    account's savings-category ledger rows (including the pre-ledger
+    opening balance, which the old M-Pesa-only reconstruction dropped -
+    the reported bug).
+
+    We anchor on that figure and unwind only this account's own
+    movements dated *after* ``balance_date``. That is arithmetically the
+    same as summing every entry up to the date, but it self-corrects to
+    the reconciled balance and needs no per-account opening-balance row.
+
+    "This account's movements" are the ledger rows we can attribute to
+    it: M-Pesa deposits / withdrawals via
+    ``transaction.mpesa.related_saving`` and dividend-payout credits
+    matched by reference. A membership-level ``ADJUSTMENT`` has no
+    per-account link, so it stays in the baseline; that is the safe
+    direction (it can never drag a reconstructed balance below the real
+    one). The exact fix for that residue is a per-entry ``saving`` FK,
+    deferred with the rest of the per-account ledger work.
+
+    All querying is scoped to ``saving.membership`` (one membership
+    belongs to exactly one SACCO), so a different tenant's ledger rows
+    are never summed here.
+    """
+    if dividend_refs is None:
+        dividend_refs = _saving_dividend_ledger_refs(saving)
+
+    later_entries = LedgerEntry.objects.filter(
         membership=saving.membership,
-        created_at__date__lte=balance_date,
-        transaction__mpesa__related_saving=saving,
+        created_at__date__gt=balance_date,
+    ).filter(
+        Q(transaction__mpesa__related_saving=saving)
+        | Q(reference__in=dividend_refs)
     )
-    credits = sum(
-        (
-            entry.amount
-            for entry in entries
-            if entry.entry_type == LedgerEntry.EntryType.CREDIT
-        ),
-        Decimal('0.00'),
-    )
-    debits = sum(
-        (
-            entry.amount
-            for entry in entries
-            if entry.entry_type == LedgerEntry.EntryType.DEBIT
-        ),
-        Decimal('0.00'),
-    )
-    return credits - debits
+    later_net = later_entries.aggregate(
+        net=Sum(
+            Case(
+                When(
+                    entry_type=LedgerEntry.EntryType.CREDIT,
+                    then=F('amount'),
+                ),
+                default=-F('amount'),
+                output_field=_LEDGER_AMOUNT_FIELD,
+            )
+        )
+    )['net'] or ZERO
+
+    balance = Decimal(saving.amount) - later_net
+    return balance.quantize(MONEY_QUANTIZER, rounding=ROUND_HALF_UP)
 
 
 def calculate_dividends_for_declaration(declaration):
@@ -168,16 +232,43 @@ def calculate_dividends_for_declaration(declaration):
                 declaration.period_end,
             )
 
-            dividend_amount = (
+            raw_dividend = (
                 average_balance
                 * declaration.declared_rate
                 / ONE_HUNDRED
                 * (months_in_period / TWELVE)
-            )
-            dividend_amount = dividend_amount.quantize(
-                MONEY_QUANTIZER,
-                rounding=ROUND_HALF_UP,
-            )
+            ).quantize(MONEY_QUANTIZER, rounding=ROUND_HALF_UP)
+
+            # Floor the payout at zero. A negative figure means the
+            # reconstructed balance went negative, which is a data
+            # problem worth a human looking at - clamp, warn and audit
+            # rather than post a negative "credit" that removes money
+            # from the member on a dividend run.
+            dividend_amount = max(ZERO, raw_dividend)
+            if raw_dividend < ZERO:
+                logger.warning(
+                    'Dividend for saving %s (declaration %s) computed '
+                    'negative (%s) from average balance %s; clamped to '
+                    '0.00.',
+                    saving.id,
+                    declaration.id,
+                    raw_dividend,
+                    average_balance,
+                )
+                log_audit(
+                    None,
+                    'DIVIDEND_NEGATIVE_CLAMPED',
+                    'Saving',
+                    saving.id,
+                    new_values={
+                        'declaration_id': str(declaration.id),
+                        'sacco_id': str(declaration.sacco_id),
+                        'average_balance': str(average_balance),
+                        'declared_rate': str(declaration.declared_rate),
+                        'raw_dividend_amount': str(raw_dividend),
+                        'clamped_to': '0.00',
+                    },
+                )
 
             payout_records.append(
                 DividendPayout(
