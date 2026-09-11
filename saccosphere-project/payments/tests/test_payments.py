@@ -1518,7 +1518,8 @@ class B2CCallbackConcurrencyRegressionTests(TransactionTestCase):
         )
         self.assertEqual(
             MpesaIdempotencyRecord.objects.filter(
-                checkout_request_id=mpesa_transaction.conversation_id,
+                kind=MpesaIdempotencyRecord.Kind.B2C,
+                external_reference_id=mpesa_transaction.conversation_id,
             ).count(),
             1,
         )

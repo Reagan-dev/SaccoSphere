@@ -362,21 +362,54 @@ class MpesaTransaction(models.Model):
 
 
 class MpesaIdempotencyRecord(models.Model):
-    checkout_request_id = models.CharField(
+    """De-duplicates M-Pesa callback/reconciliation processing.
+
+    ``external_reference_id`` is Safaricom's own identifier for the
+    request already processed - ``CheckoutRequestID`` for STK Push,
+    ``ConversationID`` for B2C. ``kind`` makes that explicit instead of
+    relying on the two ID namespaces (``ws_CO_...`` / ``AG_...``)
+    happening not to collide - that is an implementation detail of
+    Safaricom's own ID generation this app has no contract for.
+
+    Uniqueness is deliberately scoped to (kind, external_reference_id),
+    not external_reference_id alone: the two namespaces don't collide
+    today, but nothing here should keep depending on that being true
+    forever for correctness.
+    """
+
+    class Kind(models.TextChoices):
+        STK = 'STK', 'STK Push'
+        B2C = 'B2C', 'B2C'
+
+    external_reference_id = models.CharField(
         max_length=100,
-        unique=True,
-        help_text='Checkout request identifier already processed.',
+        help_text=(
+            "Safaricom's own identifier for the already-processed "
+            'request - CheckoutRequestID for STK, ConversationID for '
+            'B2C.'
+        ),
+    )
+    kind = models.CharField(
+        max_length=3,
+        choices=Kind.choices,
+        help_text='Which M-Pesa flow this identifier belongs to.',
     )
     processed_at = models.DateTimeField(
         auto_now_add=True,
-        help_text='Date and time this checkout request was processed.',
+        help_text='Date and time this request was processed.',
     )
 
     class Meta:
         ordering = ['-processed_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['kind', 'external_reference_id'],
+                name='unique_mpesa_idempotency_kind_external_reference',
+            ),
+        ]
 
     def __str__(self):
-        return self.checkout_request_id
+        return f'{self.kind}:{self.external_reference_id}'
 
 
 class SavingsWithdrawalIdempotencyKey(models.Model):

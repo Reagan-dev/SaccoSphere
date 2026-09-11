@@ -72,8 +72,9 @@ class MpesaTransactionAdmin(admin.ModelAdmin):
 
 @admin.register(MpesaIdempotencyRecord)
 class MpesaIdempotencyRecordAdmin(admin.ModelAdmin):
-    list_display = ('checkout_request_id', 'processed_at')
-    search_fields = ('checkout_request_id',)
+    list_display = ('external_reference_id', 'kind', 'processed_at')
+    list_filter = ('kind',)
+    search_fields = ('external_reference_id',)
     readonly_fields = ('processed_at',)
 
 
