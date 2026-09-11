@@ -4,6 +4,8 @@ from uuid import uuid4
 from django.conf import settings
 from django.db import models
 
+from accounts.models import EncryptedJSONField
+
 
 class PaymentProvider(models.Model):
     class ProviderType(models.TextChoices):
@@ -209,8 +211,13 @@ class Callback(models.Model):
         on_delete=models.PROTECT,
         help_text='Provider that sent this callback.',
     )
-    raw_payload = models.JSONField(
-        help_text='Raw provider callback payload.',
+    raw_payload = EncryptedJSONField(
+        help_text=(
+            'Raw provider callback payload, encrypted at rest (Fernet) - '
+            "carries the member's phone number and, for B2C, their name. "
+            'Deleted by the retention sweep once CALLBACK_RETENTION_DAYS '
+            'passes - see payments.tasks.purge_expired_callbacks.'
+        ),
     )
     processed = models.BooleanField(
         default=False,

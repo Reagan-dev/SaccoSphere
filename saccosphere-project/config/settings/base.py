@@ -313,6 +313,21 @@ CRB_RAW_RESPONSE_RETENTION_DAYS = (
     else None
 )
 
+# M-Pesa Callback.raw_payload retention. raw_payload carries the
+# member's phone number and, for B2C, their name - personal data under
+# Kenya's DPA 2019. It is encrypted at rest (accounts.models.
+# EncryptedJSONField), but encryption is not a retention policy: unlike
+# KYC_RETENTION_DAYS/CRB_RAW_RESPONSE_RETENTION_DAYS above, this one
+# defaults ON (90 days) rather than indefinite, since Callback rows
+# accumulate on every M-Pesa transaction attempt. 90 IS A PLACEHOLDER -
+# there is no retention period signed off by compliance/legal yet.
+# CONFIRM THE REAL NUMBER WITH THEM BEFORE GO-LIVE. Set to None/unset to
+# disable the sweep entirely (keeps rows indefinitely).
+_CALLBACK_RETENTION_DAYS = config('CALLBACK_RETENTION_DAYS', default='90')
+CALLBACK_RETENTION_DAYS = (
+    int(_CALLBACK_RETENTION_DAYS) if _CALLBACK_RETENTION_DAYS else None
+)
+
 # Metropol CRB Configuration
 METROPOL_API_KEY = config('METROPOL_API_KEY', default='')
 METROPOL_API_URL = config(
@@ -536,6 +551,10 @@ CELERY_BEAT_SCHEDULE = {
     'reconcile-stale-mpesa-transactions': {
         'task': 'payments.tasks.reconcile_stale_mpesa_transactions',
         'schedule': crontab(minute='*/5'),  # Every 5 minutes
+    },
+    'purge-expired-callbacks': {
+        'task': 'payments.tasks.purge_expired_callbacks',
+        'schedule': crontab(minute=30, hour=2),  # Daily, off-peak
     },
 }
 

@@ -300,6 +300,29 @@ def process_b2c_callback_task(self, callback_id):
     return True
 
 
+@shared_task(name='payments.tasks.purge_expired_callbacks')
+def purge_expired_callbacks():
+    """Delete Callback rows past CALLBACK_RETENTION_DAYS.
+
+    Thin wrapper around the purge_expired_callbacks management command,
+    mirroring services.tasks.purge_expired_crb_raw_response /
+    accounts.tasks.cleanup_expired_kyc.
+    """
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    output = StringIO()
+    try:
+        call_command('purge_expired_callbacks', stdout=output)
+        result = output.getvalue()
+        logger.info('Callback retention purge completed: %s', result)
+        return result
+    except Exception as exc:
+        logger.error('Callback retention purge failed: %s', exc)
+        raise
+
+
 @shared_task(name='payments.tasks.reconcile_stale_mpesa_transactions')
 def reconcile_stale_mpesa_transactions():
     """Reconcile stale M-Pesa STK transactions by querying Daraja status.

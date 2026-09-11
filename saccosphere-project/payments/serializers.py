@@ -208,6 +208,13 @@ class MpesaTransactionSerializer(serializers.ModelSerializer):
 
 
 class CallbackSerializer(serializers.ModelSerializer):
+    # Callback.raw_payload is an EncryptedJSONField (a TextField under
+    # the hood, for Fernet-at-rest encryption) - ModelSerializer would
+    # otherwise auto-map it to a plain CharField instead of a JSON
+    # field. Declared explicitly so this stays a dict in/out, matching
+    # the pre-encryption contract.
+    raw_payload = serializers.JSONField(write_only=True)
+
     class Meta:
         model = Callback
         fields = (
@@ -227,6 +234,3 @@ class CallbackSerializer(serializers.ModelSerializer):
             'received_at',
             'processed_at',
         )
-        extra_kwargs = {
-            'raw_payload': {'write_only': True},
-        }
