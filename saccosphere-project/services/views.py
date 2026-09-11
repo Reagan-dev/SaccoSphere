@@ -28,6 +28,7 @@ from accounts.permissions import (
     IsSuperAdmin,
 )
 from billing.serializers import DisbursementAuditSerializer
+from config.utils import get_client_ip
 from notifications.utils import create_notification
 from saccomembership.models import Membership
 from saccomanagement.audit_logger import log_audit
@@ -728,7 +729,7 @@ class ConfirmDisbursementView(APIView):
                 event='MEMBER_CONFIRMED',
                 actor=None,
                 actor_role='member',
-                ip_address=self._get_ip(request),
+                ip_address=get_client_ip(request),
                 details={
                     'confirmed_at': loan.member_confirmed_at.isoformat(),
                 },
@@ -767,12 +768,6 @@ class ConfirmDisbursementView(APIView):
             )
 
         return get_object_or_404(Loan, id=loan_id)
-
-    def _get_ip(self, request) -> str:
-        x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded:
-            return x_forwarded.split(',')[0].strip()
-        return request.META.get('REMOTE_ADDR', '')
 
 
 class DisputeDisbursementView(ConfirmDisbursementView):
@@ -843,7 +838,7 @@ class DisputeDisbursementView(ConfirmDisbursementView):
                 event='MEMBER_DISPUTED',
                 actor=None,
                 actor_role='member',
-                ip_address=self._get_ip(request),
+                ip_address=get_client_ip(request),
                 details=details,
             )
             DisbursementAuditLog.objects.create(

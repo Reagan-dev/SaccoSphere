@@ -4,6 +4,12 @@ A plain GET that mutates state is fired automatically by link-prefetch
 bots (mail scanners, chat unfurlers, antivirus), which would silently
 confirm or dispute a member's disbursement. These endpoints are now
 POST-only with the signed token carried in the request body.
+
+Also covers: ConfirmDisbursementView / DisputeDisbursementView used to
+resolve DisbursementAuditLog.ip_address with their own copy of a
+leftmost-X-Forwarded-For reader (spoofable); they now delegate to the
+canonical config.utils.get_client_ip like every other IP-resolving call
+site in the project.
 """
 
 from decimal import Decimal
@@ -100,6 +106,27 @@ class DisbursementConfirmDisputeMethodTests(TestCase):
             ).exists()
         )
 
+    @patch('services.views._record_disbursement_invoice_item')
+    def test_post_confirm_records_trusted_ip_not_spoofed_leftmost(
+        self, _invoice_mock,
+    ):
+        # ConfirmDisbursementView used to resolve ip_address with its own
+        # copy of a leftmost-X-Forwarded-For reader; it now delegates to
+        # config.utils.get_client_ip, which trusts only the rightmost
+        # (proxy-appended) entry.
+        response = self.client.post(
+            self.confirm_url,
+            {'token': self.token},
+            format='json',
+            HTTP_X_FORWARDED_FOR='41.90.64.9, 203.0.113.5',
+        )
+        self.assertEqual(response.status_code, 200)
+        audit = DisbursementAuditLog.objects.get(
+            loan=self.loan, event='MEMBER_CONFIRMED',
+        )
+        self.assertEqual(audit.ip_address, '203.0.113.5')
+        self.assertNotEqual(audit.ip_address, '41.90.64.9')
+
     def test_post_without_token_is_rejected(self):
         response = self.client.post(self.confirm_url, {}, format='json')
         self.assertEqual(response.status_code, 400)
@@ -138,3 +165,21 @@ class DisbursementConfirmDisputeMethodTests(TestCase):
                 event='MEMBER_DISPUTED',
             ).exists()
         )
+
+    @patch('services.views._notify_sacco_admins')
+    @patch('services.views._notify_superadmins')
+    def test_post_dispute_records_trusted_ip_not_spoofed_leftmost(
+        self, _super_mock, _sacco_mock,
+    ):
+        response = self.client.post(
+            self.dispute_url,
+            {'token': self.token, 'reason': 'Nothing arrived'},
+            format='json',
+            HTTP_X_FORWARDED_FOR='41.90.64.9, 203.0.113.5',
+        )
+        self.assertEqual(response.status_code, 200)
+        audit = DisbursementAuditLog.objects.get(
+            loan=self.loan, event='MEMBER_DISPUTED',
+        )
+        self.assertEqual(audit.ip_address, '203.0.113.5')
+        self.assertNotEqual(audit.ip_address, '41.90.64.9')

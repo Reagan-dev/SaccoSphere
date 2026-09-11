@@ -2,11 +2,12 @@
 
 from decimal import Decimal
 
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, User
+from saccomanagement.audit_logger import log_audit
 from saccomanagement.models import DataConsentLog, Role, SystemAuditLog
 from saccomembership.models import Membership
 from services.models import CRBCheck, Loan, LoanType
@@ -112,3 +113,55 @@ class AuditLoggingTestCase(TestCase):
                 data_type='MEMBER_PROFILE',
             ).exists()
         )
+
+
+class LogAuditClientIPTestCase(TestCase):
+    """log_audit used to resolve SystemAuditLog.ip_address with its own
+    copy of a leftmost-X-Forwarded-For reader (spoofable); it now
+    delegates to the canonical config.utils.get_client_ip."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.admin = User.objects.create_user(
+            email='audit-ip-admin@example.com',
+            password='StrongPass123',
+        )
+
+    def test_spoofed_leftmost_forwarded_for_entry_is_not_trusted(self):
+        request = self.factory.post(
+            '/', HTTP_X_FORWARDED_FOR='41.90.64.9, 203.0.113.5',
+        )
+
+        log = log_audit(
+            self.admin,
+            'LOAN_APPROVED',
+            'Loan',
+            'some-loan-id',
+            request=request,
+        )
+
+        self.assertEqual(log.ip_address, '203.0.113.5')
+        self.assertNotEqual(log.ip_address, '41.90.64.9')
+
+    def test_falls_back_to_remote_addr_without_forwarded_header(self):
+        request = self.factory.post('/', REMOTE_ADDR='192.0.2.9')
+
+        log = log_audit(
+            self.admin,
+            'LOAN_APPROVED',
+            'Loan',
+            'some-loan-id',
+            request=request,
+        )
+
+        self.assertEqual(log.ip_address, '192.0.2.9')
+
+    def test_no_request_records_no_ip(self):
+        log = log_audit(
+            self.admin,
+            'LOAN_APPROVED',
+            'Loan',
+            'some-loan-id',
+        )
+
+        self.assertIsNone(log.ip_address)

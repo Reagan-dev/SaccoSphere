@@ -1,5 +1,7 @@
 import logging
 
+from config.utils import get_client_ip
+
 from .models import SystemAuditLog
 
 
@@ -23,11 +25,7 @@ def log_audit(
         user_agent = None
 
         if request:
-            forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-            if forwarded_for:
-                ip_address = forwarded_for.split(',')[0].strip()
-            else:
-                ip_address = request.META.get('REMOTE_ADDR')
+            ip_address = get_client_ip(request)
             user_agent = request.META.get('HTTP_USER_AGENT')
 
         return SystemAuditLog.objects.create(
