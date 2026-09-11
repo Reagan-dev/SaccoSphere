@@ -6,7 +6,11 @@ from django.conf import settings
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
-from config.utils import InvalidPhoneNumberError, normalize_phone_number
+from config.utils import (
+    InvalidPhoneNumberError,
+    get_client_ip,
+    normalize_phone_number,
+)
 
 from .integrations.mpesa.daraja import (
     DarajaClient,
@@ -442,7 +446,7 @@ def initiate_b2c_loan_disbursement(
                 else 'sacco_admin' if admin_user
                 else 'system'
             ),
-            ip_address=_get_ip(request) or None,
+            ip_address=get_client_ip(request) if request else None,
             mpesa_ref=conversation_id or '',
             details={
                 'conversation_id': conversation_id,
@@ -465,7 +469,7 @@ def initiate_b2c_loan_disbursement(
                 event='B2C_ALTERNATE_NUMBER_AUTHORIZED',
                 actor=admin_user,
                 actor_role='super_admin',
-                ip_address=_get_ip(request) or None,
+                ip_address=get_client_ip(request) if request else None,
                 mpesa_ref=conversation_id or '',
                 details={
                     'member_registered_number': member.phone_number,
@@ -486,16 +490,6 @@ def initiate_b2c_loan_disbursement(
         'idempotency_key': str(idempotency_key),
         'message': 'Disbursement initiated. Awaiting M-Pesa confirmation.',
     }, 201
-
-
-def _get_ip(request) -> str:
-    """Extract client IP from request, accounting for proxies."""
-    if not request:
-        return ''
-    x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
-    if x_forwarded:
-        return x_forwarded.split(',')[0].strip()
-    return request.META.get('REMOTE_ADDR', '')
 
 
 def _mark_b2c_attempt_failed(
