@@ -31,6 +31,7 @@ from django.conf import settings
 from guarantor.utils import check_loan_guarantors_complete
 from payments.disbursements import initiate_b2c_loan_disbursement
 from payments.withdrawals import initiate_savings_withdrawal
+from saccomanagement.mixins import SaccoScopedMixin
 from services.models import Loan, Saving
 
 from .fee_calculator import SaccoInvoiceFeeCalculator

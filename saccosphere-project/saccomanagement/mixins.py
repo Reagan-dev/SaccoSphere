@@ -33,9 +33,18 @@ class SaccoScopedMixin:
     SACCO - such a request must carry ``X-Sacco-ID`` or it gets a clean
     400. Safe methods and single-SACCO admins are unaffected. Turn it on
     for every endpoint that writes or moves money.
+
+    Also set ``require_sacco_header_for_reads = True`` when a *read* on
+    the view can itself hand back another tenant's data on a silent
+    guess (e.g. B2C disbursement status/history) - this extends the same
+    check to safe methods too. Off by default: existing
+    ``require_sacco_header = True`` views (dividends, savings admin,
+    loan status) deliberately keep the fallback for their own reads, and
+    this flag never changes that.
     """
 
     require_sacco_header = False
+    require_sacco_header_for_reads = False
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
@@ -90,10 +99,16 @@ class SaccoScopedMixin:
         # only unambiguous when they have exactly one; for a write/money
         # endpoint (require_sacco_header) a multi-SACCO admin must be
         # explicit rather than have the write land on an arbitrary SACCO.
+        # require_sacco_header_for_reads additionally drops the
+        # safe-method exemption, for views where a read is itself
+        # sensitive enough that a silent guess is unacceptable.
         if (
             self.require_sacco_header
-            and self.request.method not in SAFE_METHODS
             and admin_roles.count() > 1
+            and (
+                self.require_sacco_header_for_reads
+                or self.request.method not in SAFE_METHODS
+            )
         ):
             raise SaccoHeaderRequired()
 
