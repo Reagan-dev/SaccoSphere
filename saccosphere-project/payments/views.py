@@ -1202,8 +1202,11 @@ class MPesaSTKCallbackView(APIView):
         return body.get('stkCallback') or body.get('StkCallback') or {}
 
 
-class B2CDisbursementView(APIView):
+class B2CDisbursementView(SaccoScopedMixin, APIView):
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    # A money-moving write - a multi-SACCO admin must name the tenant
+    # explicitly rather than land the disbursement on an arbitrary one.
+    require_sacco_header = True
 
     @swagger_auto_schema(
         operation_description='Initiate M-Pesa B2C loan disbursement.',
@@ -1212,10 +1215,14 @@ class B2CDisbursementView(APIView):
         security=[{'Bearer': []}],
     )
     def post(self, request):
+        response = self._set_sacco_context()
+        if response:
+            return response
+
         serializer = B2CDisbursementSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        current_sacco = getattr(request, 'current_sacco', None)
+        current_sacco = self.get_sacco_context()
 
         if current_sacco is None:
             return Response(
@@ -1562,8 +1569,15 @@ class B2CCallbackView(APIView):
         )
 
 
-class B2CStatusView(APIView):
+class B2CStatusView(SaccoScopedMixin, APIView):
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    # A silent wrong-tenant guess would hand back another SACCO's
+    # disbursement status/PII here, not just misdirect a write - so the
+    # strict check applies to this read too (require_sacco_header_for_
+    # reads), unlike the dividend/loan-status reads that keep the
+    # fallback.
+    require_sacco_header = True
+    require_sacco_header_for_reads = True
 
     @swagger_auto_schema(
         operation_description='Get B2C disbursement status by conversation id.',
@@ -1571,14 +1585,18 @@ class B2CStatusView(APIView):
         security=[{'Bearer': []}],
     )
     def get(self, request, conversation_id):
+        response = self._set_sacco_context()
+        if response:
+            return response
+
         mpesa_transaction = get_object_or_404(
-            self._get_queryset(request),
+            self._get_queryset(),
             conversation_id=conversation_id,
         )
         return Response(self._serialize_b2c(mpesa_transaction), status=200)
 
-    def _get_queryset(self, request):
-        current_sacco = getattr(request, 'current_sacco', None)
+    def _get_queryset(self):
+        current_sacco = self.get_sacco_context()
         return MpesaTransaction.objects.select_related(
             'transaction',
             'related_loan',
@@ -1612,9 +1630,13 @@ class B2CHistoryView(B2CStatusView):
         security=[{'Bearer': []}],
     )
     def get(self, request):
+        response = self._set_sacco_context()
+        if response:
+            return response
+
         history = [
             self._serialize_b2c(mpesa_transaction)
-            for mpesa_transaction in self._get_queryset(request).order_by(
+            for mpesa_transaction in self._get_queryset().order_by(
                 '-created_at'
             )
         ]
