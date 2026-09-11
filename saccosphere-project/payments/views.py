@@ -5,7 +5,6 @@ from decimal import Decimal
 from uuid import uuid4
 
 from amqp.exceptions import ConnectionError as AmqpConnectionError
-from django.core.cache import cache
 from django.db import transaction as db_transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
@@ -126,15 +125,42 @@ def _get_stk_callback_path():
     return '/api/v1/payments/callback/mpesa/stk/'
 
 
-def _clear_mpesa_replay_marker(callback_identifier):
-    try:
-        cache.delete(f'mpesa_replay:{callback_identifier}')
-    except Exception:
-        logger.warning(
-            'Failed to clear M-Pesa replay marker for %s.',
-            callback_identifier,
-            exc_info=True,
-        )
+def _earlier_delivery_already_terminal(
+    *, checkout_request_id=None, conversation_id=None,
+):
+    """Has an earlier delivery of this callback already reached a
+    terminal, successfully-processed state?
+
+    Feeds :func:`is_replay_attack`. Looks up the MpesaTransaction the
+    same way the real processing views do, then defers to
+    :func:`payments.tasks._callback_already_processed` - the exact
+    predicate the pipeline itself uses to decide there is nothing left
+    to do - so replay detection and actual processing never disagree
+    about what "done" means. No matching MpesaTransaction, or one with
+    no linked Transaction yet, is "not terminal": there is nothing to
+    have already been processed.
+    """
+    from .tasks import _callback_already_processed
+
+    if checkout_request_id:
+        lookup = {'checkout_request_id': checkout_request_id}
+    else:
+        lookup = {
+            'conversation_id': conversation_id,
+            'transaction_type': MpesaTransaction.TransactionType.B2C,
+        }
+
+    mpesa_transaction = (
+        MpesaTransaction.objects.select_related('transaction')
+        .filter(**lookup)
+        .first()
+    )
+    if mpesa_transaction is None or mpesa_transaction.transaction is None:
+        return False
+
+    return _callback_already_processed(
+        mpesa_transaction, mpesa_transaction.transaction,
+    )
 
 
 class STKPushRequestSerializer(serializers.Serializer):
@@ -1076,7 +1102,12 @@ class MPesaSTKCallbackView(APIView):
                 )
                 return JsonResponse({'detail': 'Forbidden'}, status=403)
 
-            if is_replay_attack(checkout_request_id):
+            already_terminal = _earlier_delivery_already_terminal(
+                checkout_request_id=checkout_request_id,
+            )
+            if is_replay_attack(
+                checkout_request_id, already_terminal=already_terminal,
+            ):
                 logger.warning(
                     'M-Pesa STK callback is replay attack: %s',
                     checkout_request_id,
@@ -1116,7 +1147,6 @@ class MPesaSTKCallbackView(APIView):
                     'TRANSACTION_NOT_FOUND',
                     f'No transaction for checkout_request_id: {checkout_request_id}',
                 )
-                _clear_mpesa_replay_marker(checkout_request_id)
                 return _retry_mpesa_response()
 
             # Persist callback to Callback table before enqueuing task
@@ -1140,7 +1170,6 @@ class MPesaSTKCallbackView(APIView):
                 )
                 callback.processing_error = str(exc)
                 callback.save(update_fields=['processing_error'])
-                _clear_mpesa_replay_marker(checkout_request_id)
                 return _retry_mpesa_response()
 
             logger.info(
@@ -1439,7 +1468,12 @@ class B2CCallbackView(APIView):
                 )
                 return JsonResponse({'detail': 'Forbidden'}, status=403)
 
-            if is_replay_attack(conversation_id):
+            already_terminal = _earlier_delivery_already_terminal(
+                conversation_id=conversation_id,
+            )
+            if is_replay_attack(
+                conversation_id, already_terminal=already_terminal,
+            ):
                 logger.warning(
                     'M-Pesa B2C callback is replay attack: %s',
                     conversation_id,
@@ -1482,7 +1516,6 @@ class B2CCallbackView(APIView):
                     'TRANSACTION_NOT_FOUND',
                     f'No transaction for conversation_id: {conversation_id}',
                 )
-                _clear_mpesa_replay_marker(conversation_id)
                 return _retry_mpesa_response()
 
             # Persist callback to Callback table before enqueuing task
@@ -1517,7 +1550,6 @@ class B2CCallbackView(APIView):
                 )
                 callback.processing_error = str(exc)
                 callback.save(update_fields=['processing_error'])
-                _clear_mpesa_replay_marker(conversation_id)
                 return _retry_mpesa_response()
 
             logger.info(

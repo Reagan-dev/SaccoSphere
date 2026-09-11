@@ -27,7 +27,11 @@ Covers:
     a replay attack;
   * cross-connection race between reconciliation's escalation attempt and
     a genuine callback delivery on the same transaction - mirrors
-    B2CCallbackConcurrencyRegressionTests.
+    B2CCallbackConcurrencyRegressionTests;
+  * a stuck first delivery with no redelivery ever arriving still
+    recovers via escalation - one of the two paths the replay-detection
+    state-awareness regression test covers (the other, STK redelivery
+    being accepted, lives in test_replay_recovery_regression).
 """
 
 import threading
@@ -573,3 +577,68 @@ class WithdrawalReconciliationRaceTest(TransactionTestCase):
             ).count(),
             2,  # original debit + the one reversal, never more.
         )
+
+
+class StuckWithdrawalWithNoRedeliveryStillRecoversTest(TestCase):
+    """Regression test (path 2 of 2 - see payments.tests.
+    test_replay_recovery_regression for path 1, the STK redelivery
+    case): a withdrawal whose first callback delivery's Celery
+    processing permanently failed, and for which Safaricom's own
+    redelivery is also lost (or never sent) - the system must not leave
+    it silently stuck forever with the balance debited and no path
+    forward. Reconciliation is that path: it escalates the transaction
+    to UNDER_REVIEW once reconciliation attempts are exhausted,
+    independently of whether a Callback row for the stuck first delivery
+    ever resolves.
+    """
+
+    def setUp(self):
+        (
+            self.sacco,
+            self.user,
+            self.membership,
+            self.saving,
+            self.provider,
+        ) = _make_withdrawal_ready_sacco(
+            'WDR04', 'wdr-stuck@example.com', '254712270004',
+        )
+
+    def test_reconciliation_escalates_when_no_redelivery_ever_arrives(self):
+        payment, mpesa = _reserve_withdrawal_fixture(
+            membership=self.membership,
+            saving=self.saving,
+            provider=self.provider,
+            reference='WDR-STUCK-001',
+            conversation_id='CONV-STUCK-001',
+        )
+        # A callback arrived once and got stuck in Celery (retries
+        # exhausted) - the real exception handler in
+        # process_b2c_callback_task never marks a Callback processed on
+        # a final failure, so this is exactly the state it leaves
+        # behind. No redelivery ever follows.
+        Callback.objects.create(
+            transaction=payment,
+            provider=self.provider,
+            raw_payload={
+                'Result': {'ConversationID': mpesa.conversation_id},
+            },
+            processed=False,
+        )
+
+        escalated = _reconcile_stale_b2c_withdrawals(
+            timezone.now() + timedelta(minutes=1), max_attempts=1,
+        )
+
+        self.assertEqual(escalated, 1)
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, Transaction.Status.UNDER_REVIEW)
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                action='SAVINGS_WITHDRAWAL_UNDER_REVIEW',
+                resource_id=str(self.saving.id),
+            ).exists()
+        )
+        # Still not a lock: a genuinely late callback (the redelivery
+        # finally arriving, or a reconciled state) would still resolve
+        # it cleanly from here - see B2CCallbackConcurrencyRegressionTests
+        # and test_late_callback_after_escalation_still_resolves above.
