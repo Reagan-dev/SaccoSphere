@@ -18,6 +18,16 @@ from .models import Callback, MpesaIdempotencyRecord, MpesaTransaction, Transact
 logger = logging.getLogger('saccosphere.payments')
 
 
+class SaccoPaymentConfigUnavailable(Exception):
+    """A transaction's SACCO has no active SaccoPaymentConfig.
+
+    Raised by the Daraja-client resolver below. Callers in the
+    reconciliation / status-query paths catch this and fail just the
+    affected transaction into manual review, without aborting the rest of
+    the batch.
+    """
+
+
 @shared_task(
     bind=True,
     name='payments.tasks.process_stk_callback',
@@ -328,12 +338,15 @@ def reconcile_stale_mpesa_transactions():
     ).select_related(
         'transaction',
         'transaction__user',
+        'transaction__sacco',
         'related_saving',
         'related_saving__membership',
+        'related_saving__membership__sacco',
         'related_loan',
         'related_loan__membership',
+        'related_loan__membership__sacco',
     )
-    
+
     reconciled_count = 0
     failed_count = 0
     
@@ -367,11 +380,16 @@ def reconcile_stale_mpesa_transactions():
             continue
         
         try:
-            # Query Daraja for status
-            daraja_response = DarajaClient().query_stk_status(
-                checkout_request_id,
-            )
-            
+            # Query Daraja as the SACCO that started this payment, not with
+            # platform-global credentials. If the SACCO's payment config is
+            # missing/inactive by now, get_daraja_client_for_transaction
+            # raises SaccoPaymentConfigUnavailable, which the except-clause
+            # below turns into a per-transaction failure (attempt counter +
+            # last_reconciliation_error) without aborting the batch.
+            daraja_response = get_daraja_client_for_transaction(
+                mpesa_transaction,
+            ).query_stk_status(checkout_request_id)
+
             # Process response using shared function
             with db_transaction.atomic():
                 mpesa_transaction = MpesaTransaction.objects.select_for_update(
@@ -863,6 +881,68 @@ def _get_related_sacco(mpesa_transaction):
         return mpesa_transaction.related_loan.membership.sacco
 
     return None
+
+
+def get_daraja_client_for_sacco(sacco):
+    """Build a DarajaClient from a SACCO's own active payment config.
+
+    This mirrors, field for field, how the STK Push initiation path in
+    ``payments.views`` builds its client (consumer key/secret, shortcode,
+    STK passkey, environment), so a status query or reconciliation call
+    authenticates as the exact shortcode that started the payment instead
+    of the platform-global ``settings.MPESA_*`` fallback.
+
+    The config is resolved here, at call time, never from an
+    initiation-time snapshot. Raises :class:`SaccoPaymentConfigUnavailable`
+    when the SACCO has no ``SaccoPaymentConfig`` or it is inactive.
+    """
+    from accounts.models import SaccoPaymentConfig
+
+    try:
+        payment_config = SaccoPaymentConfig.objects.get(sacco=sacco)
+    except SaccoPaymentConfig.DoesNotExist as exc:
+        raise SaccoPaymentConfigUnavailable(
+            f'SACCO {sacco.id} has no SaccoPaymentConfig; cannot build a '
+            f'SACCO-scoped Daraja client.'
+        ) from exc
+
+    if not payment_config.is_active:
+        raise SaccoPaymentConfigUnavailable(
+            f'SaccoPaymentConfig for SACCO {sacco.id} is inactive; cannot '
+            f'build a SACCO-scoped Daraja client.'
+        )
+
+    return DarajaClient(
+        consumer_key=payment_config.daraja_consumer_key,
+        consumer_secret=payment_config.daraja_consumer_secret,
+        shortcode=payment_config.shortcode,
+        passkey=payment_config.stk_passkey,
+        environment=payment_config.environment,
+    )
+
+
+def get_daraja_client_for_transaction(mpesa_transaction):
+    """Build a DarajaClient scoped to the SACCO that owns this transaction.
+
+    Resolves the transaction's SACCO the same way the money-movement code
+    does -- related saving/loan membership first, then the ``Transaction``
+    row's own ``sacco`` -- then defers to :func:`get_daraja_client_for_sacco`.
+
+    Raises :class:`SaccoPaymentConfigUnavailable` when neither a SACCO nor
+    an active payment config can be resolved.
+    """
+    sacco = _get_related_sacco(mpesa_transaction)
+    if sacco is None:
+        sacco = getattr(mpesa_transaction.transaction, 'sacco', None)
+
+    if sacco is None:
+        raise SaccoPaymentConfigUnavailable(
+            f'Could not resolve a SACCO for MpesaTransaction '
+            f'{mpesa_transaction.id}; cannot build a SACCO-scoped Daraja '
+            f'client.'
+        )
+
+    return get_daraja_client_for_sacco(sacco)
 
 
 def _process_failed_callback(

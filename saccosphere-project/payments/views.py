@@ -845,7 +845,12 @@ class STKStatusView(APIView):
     )
     def get(self, request, checkout_request_id):
         mpesa_transaction = get_object_or_404(
-            MpesaTransaction.objects.select_related('transaction'),
+            MpesaTransaction.objects.select_related(
+                'transaction',
+                'transaction__sacco',
+                'related_saving__membership__sacco',
+                'related_loan__membership__sacco',
+            ),
             checkout_request_id=checkout_request_id,
             transaction__user=request.user,
         )
@@ -862,13 +867,20 @@ class STKStatusView(APIView):
             
             if transaction.created_at < cutoff:
                 try:
-                    from .integrations.mpesa.daraja import DarajaClient
-                    from .tasks import _process_daraja_status_response
-                    
-                    daraja_response = DarajaClient().query_stk_status(
-                        checkout_request_id,
+                    from .tasks import (
+                        _process_daraja_status_response,
+                        get_daraja_client_for_transaction,
                     )
-                    
+
+                    # Query as the SACCO that owns this transaction, not
+                    # with platform-global credentials. A missing/inactive
+                    # config raises SaccoPaymentConfigUnavailable, caught
+                    # below like any other query failure (fall back to
+                    # local state).
+                    daraja_response = get_daraja_client_for_transaction(
+                        mpesa_transaction,
+                    ).query_stk_status(checkout_request_id)
+
                     # Process response using shared function
                     with db_transaction.atomic():
                         mpesa_transaction = MpesaTransaction.objects.select_for_update(
