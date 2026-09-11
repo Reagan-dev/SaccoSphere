@@ -8,8 +8,15 @@ record are all created inside ONE ``transaction.atomic()`` block, and the
 locked row's balance is re-read there - an instance handed in from the
 view is never trusted for the check. The outbound Daraja B2C call runs
 *after* that block commits (holding a DB row lock across a slow network
-call is its own hazard); if it fails, ``_reverse_withdrawal`` re-credits
-the balance and writes an offsetting ledger entry.
+call is its own hazard).
+
+A hard ``DarajaError`` (bad credentials, a 4xx/5xx from Daraja) means the
+payout was rejected - ``_reverse_withdrawal`` re-credits the balance and
+writes an offsetting ledger entry. A *timeout* is different: Safaricom's
+response never reached us, not that the payout failed. The balance stays
+reserved and the transaction is left ``PENDING_CONFIRMATION`` for a later
+callback (success or failure) to resolve - mirrors how B2C loan
+disbursement (``payments.disbursements``) already handles this ambiguity.
 
 Idempotency mirrors ``STKPushView``: an optional client-supplied
 ``idempotency_key`` forms a unique ``member:saving:gross:key`` row that is
@@ -56,6 +63,13 @@ WITHDRAWAL_IDEMPOTENCY_WINDOW = timedelta(minutes=10)
 _NON_TERMINAL_STATUSES = (
     Transaction.Status.PENDING,
     Transaction.Status.SENT,
+    # An ambiguous timeout outcome is still live - the balance is reserved
+    # and unresolved, so it must count as un-retryable exactly like SENT.
+    Transaction.Status.PENDING_CONFIRMATION,
+    # Escalated by reconciliation after repeated attempts with no result
+    # callback. Still unresolved money-wise (nothing was reversed), so
+    # still un-retryable - see _reconcile_stale_b2c_withdrawals.
+    Transaction.Status.UNDER_REVIEW,
 )
 
 
@@ -400,6 +414,37 @@ def initiate_savings_withdrawal(
             security_credential=payment_config.b2c_security_credential,
         )
     except DarajaError as exc:
+        if exc.is_timeout:
+            # Ambiguous: our client gave up waiting, but Safaricom may
+            # still have received and processed the request. The balance
+            # is already debited and stays that way - reversing it here
+            # could hand the member a re-credited balance on top of a
+            # payout that actually went through, with the SACCO absorbing
+            # the loss. Leave it for a genuine callback to resolve.
+            logger.error(
+                'Savings withdrawal B2C initiation status unknown '
+                '(timeout): %s (code=%s). %s',
+                exc.message,
+                exc.response_code,
+                {**log_ctx, 'transaction_id': str(payment.id)},
+                exc_info=True,
+            )
+            _mark_withdrawal_pending_confirmation(
+                payment,
+                reason=exc.message,
+                response_code=exc.response_code,
+            )
+            return False, {
+                'error': (
+                    'M-Pesa withdrawal status is unknown. The balance '
+                    'remains reserved and the attempt will be reconciled '
+                    'once M-Pesa confirms the outcome.'
+                ),
+                'response_code': exc.response_code,
+                'transaction_id': str(payment.id),
+                'status': Transaction.Status.PENDING_CONFIRMATION,
+            }, 202
+
         logger.error(
             'Savings withdrawal B2C initiation failed: %s (code=%s). %s',
             exc.message,
@@ -625,6 +670,88 @@ def _reverse_withdrawal(payment, *, reason, response_code=None):
     )
 
 
+def _mark_withdrawal_pending_confirmation(payment, *, reason, response_code):
+    """Record an ambiguous B2C withdrawal outcome without touching the
+    balance.
+
+    Used only from the timeout branch of the ``DarajaError`` handler in
+    :func:`initiate_savings_withdrawal`. The balance was already debited
+    when the ``Transaction`` was created and stays that way; this just
+    marks the outcome as unresolved (``PENDING_CONFIRMATION``) so a later
+    callback - success or failure - can settle it. Mirrors
+    ``payments.disbursements._mark_b2c_attempt_failed``'s ``is_timeout``
+    branch for B2C loan disbursement.
+    """
+    with db_transaction.atomic():
+        payment = Transaction.objects.select_for_update().get(id=payment.id)
+
+        # A genuine callback may have already resolved this while our
+        # client was waiting on the request that then timed out - never
+        # clobber a terminal outcome with the ambiguous one.
+        if payment.status in (
+            Transaction.Status.COMPLETED,
+            Transaction.Status.FAILED,
+        ):
+            return
+
+        try:
+            mpesa_transaction = (
+                MpesaTransaction.objects.select_for_update()
+                .select_related('related_saving__membership')
+                .get(transaction=payment)
+            )
+        except MpesaTransaction.DoesNotExist:
+            logger.error(
+                'Cannot record pending-confirmation withdrawal %s: no '
+                'MpesaTransaction.',
+                payment.id,
+            )
+            mpesa_transaction = None
+
+        previous_status = payment.status
+        payment.status = Transaction.Status.PENDING_CONFIRMATION
+        payment.metadata = {
+            **payment.metadata,
+            'daraja_error': {
+                'message': reason,
+                'response_code': response_code,
+                'status_unknown': True,
+            },
+        }
+        payment.save(update_fields=['status', 'metadata', 'updated_at'])
+
+        if (
+            mpesa_transaction is not None
+            and mpesa_transaction.result_code is None
+        ):
+            mpesa_transaction.result_code = (
+                str(response_code) if response_code is not None else None
+            )
+            mpesa_transaction.result_description = reason
+            mpesa_transaction.save(
+                update_fields=[
+                    'result_code',
+                    'result_description',
+                    'updated_at',
+                ],
+            )
+
+        if mpesa_transaction is not None:
+            _audit_withdrawal_pending_confirmation(
+                mpesa_transaction,
+                payment,
+                previous_status=previous_status,
+                reason=reason,
+                response_code=response_code,
+            )
+
+    logger.info(
+        'Savings withdrawal %s left pending confirmation: %s',
+        payment.id,
+        reason,
+    )
+
+
 def _safe_emit_metric(event, **tags):
     """Counter-increment log line via the project metrics helper.
 
@@ -752,4 +879,88 @@ def _audit_savings_withdrawal_failed(
         response_code=(
             str(response_code) if response_code is not None else 'none'
         ),
+    )
+
+
+def _audit_withdrawal_pending_confirmation(
+    mpesa_transaction, payment, *, previous_status, reason, response_code,
+):
+    """SystemAuditLog for a B2C withdrawal whose initiation timed out.
+
+    Not a terminal outcome - the balance stays reserved and nothing is
+    reversed. Same payload shape as ``_audit_savings_withdrawal_failed``
+    so the two can be correlated by ``transaction_id``, but records that
+    no funds moved.
+
+    Called from :func:`_mark_withdrawal_pending_confirmation`.
+    """
+    from saccomanagement.audit_logger import log_audit
+
+    saving = mpesa_transaction.related_saving
+    gross_amount = payment.gross_amount or payment.amount
+
+    log_audit(
+        payment.user,
+        'SAVINGS_WITHDRAWAL_PENDING_CONFIRMATION',
+        'Saving',
+        saving.id,
+        old_values={'transaction_status': previous_status},
+        new_values={
+            'sacco_id': str(saving.membership.sacco_id),
+            'membership_id': str(saving.membership_id),
+            'transaction_id': str(payment.id),
+            'gross_amount': str(gross_amount),
+            'reason': reason,
+            'response_code': (
+                str(response_code) if response_code is not None else None
+            ),
+            'balance_reserved_not_reversed': True,
+        },
+    )
+    _safe_emit_metric(
+        'savings_withdrawal_pending_confirmation',
+        sacco_id=str(saving.membership.sacco_id),
+        gross_amount=str(gross_amount),
+    )
+
+
+def _audit_withdrawal_escalated_to_review(
+    mpesa_transaction, payment, *, previous_status, attempts,
+):
+    """SystemAuditLog for a B2C withdrawal escalated to UNDER_REVIEW.
+
+    Written once, when reconcile_stale_mpesa_transactions
+    (payments.tasks._reconcile_stale_b2c_withdrawals) exhausts
+    MPESA_MAX_RECONCILIATION_ATTEMPTS with no M-Pesa result callback ever
+    arriving. Not a terminal outcome and never touches the balance or the
+    ledger - a genuine callback that lands afterwards still resolves the
+    transaction normally through the existing idempotent processors in
+    payments.tasks. Tagged with sacco_id, matching every other
+    SAVINGS_WITHDRAWAL_* audit event, so it is queryable the same way.
+    """
+    from saccomanagement.audit_logger import log_audit
+
+    saving = mpesa_transaction.related_saving
+    gross_amount = payment.gross_amount or payment.amount
+
+    log_audit(
+        payment.user,
+        'SAVINGS_WITHDRAWAL_UNDER_REVIEW',
+        'Saving',
+        saving.id,
+        old_values={'transaction_status': previous_status},
+        new_values={
+            'sacco_id': str(saving.membership.sacco_id),
+            'membership_id': str(saving.membership_id),
+            'transaction_id': str(payment.id),
+            'gross_amount': str(gross_amount),
+            'conversation_id': mpesa_transaction.conversation_id,
+            'reconciliation_attempts': attempts,
+            'reason': 'b2c_result_callback_never_arrived',
+        },
+    )
+    _safe_emit_metric(
+        'savings_withdrawal_escalated_to_review',
+        sacco_id=str(saving.membership.sacco_id),
+        gross_amount=str(gross_amount),
     )

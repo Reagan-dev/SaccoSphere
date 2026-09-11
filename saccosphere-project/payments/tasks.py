@@ -478,19 +478,25 @@ def reconcile_stale_mpesa_transactions():
             failed_count += 1
     
     b2c_escalated = _reconcile_stale_b2c_disbursements(cutoff, max_attempts)
+    b2c_withdrawals_escalated = _reconcile_stale_b2c_withdrawals(
+        cutoff, max_attempts,
+    )
 
     logger.info(
         'M-Pesa reconciliation completed: %d reconciled, %d failed, '
-        '%d B2C disbursements escalated for manual confirmation.',
+        '%d B2C disbursements escalated, %d B2C withdrawals escalated '
+        'for manual confirmation.',
         reconciled_count,
         failed_count,
         b2c_escalated,
+        b2c_withdrawals_escalated,
     )
 
     return {
         'reconciled': reconciled_count,
         'failed': failed_count,
         'b2c_escalated': b2c_escalated,
+        'b2c_withdrawals_escalated': b2c_withdrawals_escalated,
     }
 
 
@@ -605,6 +611,119 @@ def _reconcile_stale_b2c_disbursements(cutoff, max_attempts):
             logger.exception(
                 'Failed to reconcile stale B2C disbursement for loan %s.',
                 loan_id,
+            )
+
+    return escalated_count
+
+
+def _reconcile_stale_b2c_withdrawals(cutoff, max_attempts):
+    """Surface B2C savings withdrawals stuck in SENT/PENDING_CONFIRMATION.
+
+    A withdrawal whose result callback never arrives - or whose Celery
+    processing fails permanently after retries - would otherwise stay
+    ambiguous forever, balance already debited. Like
+    _reconcile_stale_b2c_disbursements, this never calls Daraja: B2C has
+    no synchronous transaction-status query (Safaricom's real
+    TransactionStatusQuery API only acknowledges the request; the actual
+    outcome arrives later at a ResultURL callback), and a
+    PENDING_CONFIRMATION withdrawal - whose initiate call itself timed out
+    - has no conversation_id to query with in the first place. The only
+    thing that can ever resolve the money outcome is a genuine result
+    callback (early or late) landing on the existing idempotent processors
+    (_process_successful_b2c_callback / _process_failed_b2c_callback).
+
+    What this does: after `max_attempts` reconciliation passes with no
+    callback, it moves the transaction to UNDER_REVIEW - never touching
+    the balance or the ledger - and writes an append-only SystemAuditLog
+    entry tagged with sacco_id, the same way every other
+    SAVINGS_WITHDRAWAL_* event is. UNDER_REVIEW is a queue marker, not a
+    lock: a genuine callback that lands afterwards still resolves the
+    transaction normally, through the same unchanged processors.
+
+    Returns the number of withdrawals escalated this run.
+    """
+    from payments.withdrawals import _audit_withdrawal_escalated_to_review
+
+    stale_withdrawals = MpesaTransaction.objects.filter(
+        transaction_type=MpesaTransaction.TransactionType.B2C,
+        related_saving__isnull=False,
+        transaction__status__in=(
+            Transaction.Status.SENT,
+            Transaction.Status.PENDING_CONFIRMATION,
+        ),
+        created_at__lt=cutoff,
+    ).select_related(
+        'transaction',
+        'related_saving',
+        'related_saving__membership',
+        'related_saving__membership__sacco',
+    )
+
+    escalated_count = 0
+
+    for mpesa_transaction in stale_withdrawals:
+        payment = mpesa_transaction.transaction
+
+        try:
+            with db_transaction.atomic():
+                payment = Transaction.objects.select_for_update(
+                    of=('self',),
+                ).get(id=payment.id)
+
+                # A late callback may have resolved it already.
+                if payment.status not in (
+                    Transaction.Status.SENT,
+                    Transaction.Status.PENDING_CONFIRMATION,
+                ):
+                    continue
+
+                previous_status = payment.status
+                attempts = payment.metadata.get(
+                    'reconciliation_attempts',
+                    0,
+                ) + 1
+                payment.metadata = {
+                    **payment.metadata,
+                    'reconciliation_attempts': attempts,
+                    'last_reconciled_at': timezone.now().isoformat(),
+                }
+                payment.save(update_fields=['metadata', 'updated_at'])
+
+                if attempts < max_attempts:
+                    logger.warning(
+                        'B2C withdrawal %s still awaiting an M-Pesa result '
+                        'callback (reconciliation attempt %d/%d, '
+                        'conversation_id=%s).',
+                        payment.id,
+                        attempts,
+                        max_attempts,
+                        mpesa_transaction.conversation_id,
+                    )
+                    continue
+
+                payment.status = Transaction.Status.UNDER_REVIEW
+                payment.save(update_fields=['status', 'updated_at'])
+
+                _audit_withdrawal_escalated_to_review(
+                    mpesa_transaction,
+                    payment,
+                    previous_status=previous_status,
+                    attempts=attempts,
+                )
+                escalated_count += 1
+
+            logger.error(
+                'B2C withdrawal %s timed out unresolved after %d '
+                'reconciliation attempts. Moved to UNDER_REVIEW. Manual '
+                'confirmation required (conversation_id=%s).',
+                payment.id,
+                attempts,
+                mpesa_transaction.conversation_id,
+            )
+        except Exception:
+            logger.exception(
+                'Failed to reconcile stale B2C withdrawal %s.',
+                payment.id,
             )
 
     return escalated_count
@@ -732,6 +851,12 @@ def _process_successful_callback(
 
     expected_amount = _get_expected_gross_amount(transaction)
     amount_difference = abs(callback_amount - expected_amount)
+    # expected_amount is SaccoInvoiceFeeCalculator's already-rounded
+    # whole-shilling gross_amount (see fee_calculator.py's whole-shilling
+    # policy), so a genuine STK callback should match it exactly. This
+    # tolerance exists only for residual float/JSON precision noise in
+    # callback_amount - it must stay small: widening it would start
+    # masking real short-payments instead of catching them.
     if amount_difference > Decimal('0.01'):
         _handle_amount_mismatch(
             mpesa_transaction,
