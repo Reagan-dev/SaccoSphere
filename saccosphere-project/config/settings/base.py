@@ -433,6 +433,17 @@ MPESA_MAX_RECONCILIATION_ATTEMPTS = config(
     cast=int,
     default=3,
 )
+# Upper bound on how many stale STK transactions
+# reconcile_stale_mpesa_transactions will query Daraja for in a single run.
+# Each one is a synchronous outbound HTTP call, so this keeps one run's
+# wall-clock time bounded regardless of how large the stale backlog grows;
+# whatever doesn't fit is picked up by the next scheduled run (oldest
+# first - see the task's order_by('created_at')).
+MPESA_RECONCILIATION_BATCH_SIZE = config(
+    'MPESA_RECONCILIATION_BATCH_SIZE',
+    cast=int,
+    default=200,
+)
 
 # M-Pesa IP Allowlist Configuration
 # Production: Only Safaricom production IPs (no private/sandbox ranges)

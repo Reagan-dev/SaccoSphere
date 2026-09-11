@@ -328,11 +328,24 @@ def purge_expired_callbacks():
 @shared_task(name='payments.tasks.reconcile_stale_mpesa_transactions')
 def reconcile_stale_mpesa_transactions():
     """Reconcile stale M-Pesa STK transactions by querying Daraja status.
-    
+
     Finds M-Pesa transactions stuck in PENDING/PROCESSING status
     older than the configured threshold and queries Daraja for their
     actual status. Uses the same idempotency checks as callback processing
     to prevent duplicate crediting.
+
+    Batch size / backlog
+    ---------------------
+    Each stale transaction costs one synchronous outbound Daraja HTTP
+    call, so a single run only ever queries up to
+    ``MPESA_RECONCILIATION_BATCH_SIZE`` of them (oldest first, by
+    ``created_at``), fetched via ``.iterator()`` rather than loading the
+    whole matching queryset into memory at once. A backlog bigger than
+    the cap is not lost: whatever doesn't fit this run is simply the
+    oldest-first head of the queryset on the *next* scheduled run (this
+    task is on a 5-minute Celery beat schedule - see
+    config/settings/base.py), so the backlog drains monotonically instead
+    of the same newest rows being reconsidered indefinitely.
     """
     threshold_minutes = getattr(
         settings,
@@ -344,15 +357,20 @@ def reconcile_stale_mpesa_transactions():
         'MPESA_MAX_RECONCILIATION_ATTEMPTS',
         3,
     )
-    
+    batch_size = getattr(
+        settings,
+        'MPESA_RECONCILIATION_BATCH_SIZE',
+        200,
+    )
+
     cutoff = timezone.now() - timezone.timedelta(minutes=threshold_minutes)
-    
+
     # Find STK transactions in non-terminal states older than threshold.
     # B2C disbursements are handled separately, below, by
     # _reconcile_stale_b2c_disbursements: Daraja has no synchronous B2C
     # status query, so the STK query_stk_status path here cannot resolve
     # them.
-    stale_stk_transactions = MpesaTransaction.objects.filter(
+    stale_stk_base = MpesaTransaction.objects.filter(
         transaction_type=MpesaTransaction.TransactionType.STK_PUSH,
         transaction__status__in={
             Transaction.Status.PENDING,
@@ -372,13 +390,31 @@ def reconcile_stale_mpesa_transactions():
         'related_loan__membership__sacco',
     )
 
+    # A plain count() - no rows fetched - so we can log how much backlog
+    # is left beyond this run's cap without materialising it.
+    total_eligible = stale_stk_base.count()
+
+    # order_by('created_at') overrides the model's default '-created_at'
+    # ordering deliberately: oldest-first means the cap makes forward
+    # progress through the backlog run over run, instead of always
+    # reprocessing whichever rows happen to be newest.
+    stale_stk_transactions = stale_stk_base.order_by('created_at')[
+        :batch_size
+    ]
+
+    found_count = 0
+    processed_count = 0
+    skipped_count = 0
     reconciled_count = 0
     failed_count = 0
-    
-    for mpesa_transaction in stale_stk_transactions:
+
+    for mpesa_transaction in stale_stk_transactions.iterator(
+        chunk_size=batch_size,
+    ):
+        found_count += 1
         transaction = mpesa_transaction.transaction
         checkout_request_id = mpesa_transaction.checkout_request_id
-        
+
         # Check reconciliation attempt counter
         reconciliation_attempts = transaction.metadata.get(
             'reconciliation_attempts',
@@ -393,8 +429,9 @@ def reconcile_stale_mpesa_transactions():
                 max_attempts,
             )
             failed_count += 1
+            skipped_count += 1
             continue
-        
+
         # Skip if already processed via callback
         if _callback_already_processed(mpesa_transaction, transaction):
             logger.info(
@@ -402,8 +439,15 @@ def reconcile_stale_mpesa_transactions():
                 'skipping reconciliation.',
                 transaction.id,
             )
+            skipped_count += 1
             continue
-        
+
+        # From here on we are actively querying Daraja for this
+        # transaction (or attempting to, if credential resolution itself
+        # fails) - counted as "processed" regardless of the outcome,
+        # distinct from the "skipped" cases above which never reach
+        # Daraja at all.
+        processed_count += 1
         try:
             # Query Daraja as the SACCO that started this payment, not with
             # platform-global credentials. If the SACCO's payment config is
@@ -502,24 +546,39 @@ def reconcile_stale_mpesa_transactions():
             )
             failed_count += 1
     
+    # total_eligible was counted before this run's cap was applied, so
+    # anything beyond found_count is backlog left for a later run.
+    remaining_count = max(total_eligible - found_count, 0)
+
     b2c_escalated = _reconcile_stale_b2c_disbursements(cutoff, max_attempts)
     b2c_withdrawals_escalated = _reconcile_stale_b2c_withdrawals(
         cutoff, max_attempts,
     )
 
     logger.info(
-        'M-Pesa reconciliation completed: %d reconciled, %d failed, '
-        '%d B2C disbursements escalated, %d B2C withdrawals escalated '
-        'for manual confirmation.',
+        'M-Pesa STK reconciliation: %d found (of %d eligible, batch cap '
+        '%d), %d processed, %d skipped, %d reconciled, %d failed, %d '
+        'left for a later run. %d B2C disbursements escalated, %d B2C '
+        'withdrawals escalated for manual confirmation.',
+        found_count,
+        total_eligible,
+        batch_size,
+        processed_count,
+        skipped_count,
         reconciled_count,
         failed_count,
+        remaining_count,
         b2c_escalated,
         b2c_withdrawals_escalated,
     )
 
     return {
+        'found': found_count,
+        'processed': processed_count,
+        'skipped': skipped_count,
         'reconciled': reconciled_count,
         'failed': failed_count,
+        'remaining': remaining_count,
         'b2c_escalated': b2c_escalated,
         'b2c_withdrawals_escalated': b2c_withdrawals_escalated,
     }
