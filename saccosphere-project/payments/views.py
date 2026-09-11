@@ -24,7 +24,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsSaccoAdmin
+from accounts.permissions import IsSaccoAdmin, IsSuperAdmin
 from config.response import StandardResponseMixin
 from config.utils import get_client_ip
 from django.conf import settings
@@ -203,6 +203,45 @@ class STKPushRequestSerializer(serializers.Serializer):
 
 
 class B2CDisbursementSerializer(serializers.Serializer):
+    """The normal disbursement request. phone_number is optional and,
+    per initiate_b2c_loan_disbursement's contract, is only ever accepted
+    when it matches the member's own registered number - the payout
+    defaults to that number regardless. This field exists only so an
+    existing caller that already sends the member's own number keeps
+    working; it is not a way to redirect a payout. See
+    B2CDisbursementAlternateNumberView for the distinct, elevated-
+    permission-gated action that pays a genuinely different number.
+    """
+
+    loan_id = serializers.UUIDField()
+    phone_number = serializers.CharField(required=False, default=None)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    remarks = serializers.CharField(
+        default='Loan Disbursement',
+        required=False,
+    )
+
+    def validate_phone_number(self, value):
+        if value is None:
+            return value
+        return validate_mpesa_phone(value)
+
+    def validate_amount(self, value):
+        if value <= Decimal('0.00'):
+            raise serializers.ValidationError(
+                'Amount must be greater than zero.'
+            )
+
+        return value
+
+
+class B2CDisbursementAlternateNumberSerializer(serializers.Serializer):
+    """The distinct, elevated-permission-gated action that pays a
+    number other than the member's own registered one (lost SIM, etc.).
+    phone_number and reason are both required - see
+    B2CDisbursementAlternateNumberView.
+    """
+
     loan_id = serializers.UUIDField()
     phone_number = serializers.CharField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
@@ -210,6 +249,7 @@ class B2CDisbursementSerializer(serializers.Serializer):
         default='Loan Disbursement',
         required=False,
     )
+    reason = serializers.CharField()
 
     def validate_phone_number(self, value):
         return validate_mpesa_phone(value)
@@ -218,6 +258,16 @@ class B2CDisbursementSerializer(serializers.Serializer):
         if value <= Decimal('0.00'):
             raise serializers.ValidationError(
                 'Amount must be greater than zero.'
+            )
+
+        return value
+
+    def validate_reason(self, value):
+        value = value.strip()
+        if len(value) < 10:
+            raise serializers.ValidationError(
+                'A reason of at least 10 characters is required to '
+                'disburse to a number other than the member\'s own.'
             )
 
         return value
@@ -1195,11 +1245,85 @@ class B2CDisbursementView(APIView):
 
         _success, payload, http_status = initiate_b2c_loan_disbursement(
             loan=loan,
-            phone_number=data['phone_number'],
+            phone_number=data.get('phone_number'),
             amount=data['amount'],
             remarks=remarks,
             admin_user=request.user,
             request=request,
+        )
+
+        return Response(payload, status=http_status)
+
+
+class B2CDisbursementAlternateNumberView(APIView):
+    """Disburse to a phone number other than the member's own registered
+    number - a genuine business need (lost SIM, etc.), not a quiet field
+    on the normal disbursement request. Distinct from B2CDisbursementView
+    on purpose:
+
+    - IsSuperAdmin, not IsSaccoAdmin: a SACCO admin (or anyone who
+      compromises one) cannot authorize this alone.
+    - A mandatory written reason (B2CDisbursementAlternateNumberSerializer).
+    - Both are recorded on a dedicated DisbursementAuditLog row
+      (B2C_ALTERNATE_NUMBER_AUTHORIZED) alongside the existing actor+IP
+      fields - see initiate_b2c_loan_disbursement.
+
+    Not SACCO-scoped by current_sacco/X-Sacco-ID: IsSuperAdmin is a
+    platform-wide role by design (mirrors IsSaccoAdminOrSuperAdmin's
+    "SUPER_ADMIN bypasses sacco check" elsewhere), and loan_id already
+    resolves to exactly one SACCO regardless.
+    """
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    @swagger_auto_schema(
+        operation_description=(
+            'Initiate M-Pesa B2C loan disbursement to a phone number '
+            "other than the member's own registered number. Requires "
+            'super admin authorization and a reason.'
+        ),
+        request_body=B2CDisbursementAlternateNumberSerializer,
+        responses={
+            201: openapi.Response('Created'),
+            400: 'Bad Request',
+            401: 'Unauthorized',
+            403: 'Forbidden',
+        },
+        security=[{'Bearer': []}],
+    )
+    def post(self, request):
+        serializer = B2CDisbursementAlternateNumberSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        loan = get_object_or_404(
+            Loan.objects.select_related('membership', 'membership__sacco'),
+            id=data['loan_id'],
+        )
+
+        if loan.status != Loan.Status.APPROVED:
+            return Response(
+                {'detail': 'Only approved loans can be disbursed.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        is_complete, reason = check_loan_guarantors_complete(loan)
+        if not is_complete:
+            return Response(
+                {'detail': reason},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        _success, payload, http_status = initiate_b2c_loan_disbursement(
+            loan=loan,
+            phone_number=data['phone_number'],
+            amount=data['amount'],
+            remarks=data['remarks'],
+            admin_user=request.user,
+            request=request,
+            override_reason=data['reason'],
         )
 
         return Response(payload, status=http_status)

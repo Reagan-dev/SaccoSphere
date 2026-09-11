@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     B2CCallbackView,
+    B2CDisbursementAlternateNumberView,
     B2CDisbursementView,
     B2CHistoryView,
     B2CStatusView,
@@ -72,6 +73,11 @@ urlpatterns = [
         'mpesa/b2c/disburse/',
         B2CDisbursementView.as_view(),
         name='mpesa-b2c-disburse',
+    ),
+    path(
+        'mpesa/b2c/disburse/alternate-number/',
+        B2CDisbursementAlternateNumberView.as_view(),
+        name='mpesa-b2c-disburse-alternate-number',
     ),
     path(
         'mpesa/b2c/withdraw/',

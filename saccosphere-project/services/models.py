@@ -868,6 +868,10 @@ class DisbursementAuditLog(models.Model):
         ('ESCALATED_TO_SUPERADMIN', 'Escalated to Super Admin'),
         ('RESOLVED_BY_ADMIN', 'Dispute Resolved by Super Admin'),
         ('DISBURSEMENT_FAILED', 'B2C Payment Failed'),
+        (
+            'B2C_ALTERNATE_NUMBER_AUTHORIZED',
+            'Disbursement Authorized to Alternate Number',
+        ),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
