@@ -42,7 +42,8 @@ B2C (Loan Disbursement) Callback:
 
 Security Checks:
 1. IP Allowlisting: Requests from Safaricom IPs only
-2. Replay Detection: Cache-based check for duplicate callbacks
+2. Replay Detection: rejects a redelivery only once the earlier delivery
+   reached a terminal, successfully-processed state - not "seen before"
 3. Signature Verification: Daraja does NOT sign callbacks (verified against
    the Daraja contract - see verify_mpesa_signature). Password/Timestamp
    belong only to the STK Push *initiate request*, never to a callback, so
@@ -54,7 +55,6 @@ import ipaddress
 import logging
 
 from django.conf import settings
-from django.core.cache import cache
 
 from config.utils import get_client_ip
 
@@ -151,17 +151,35 @@ def is_safaricom_ip(request):
     return False
 
 
-def is_replay_attack(checkout_request_id):
-    cache_key = f'mpesa_replay:{checkout_request_id}'
-    if cache.get(cache_key):
-        logger.warning(
-            'M-Pesa callback replay detected for checkout_request_id=%s.',
-            checkout_request_id,
-        )
-        return True
+def is_replay_attack(identifier, *, already_terminal):
+    """True only if an earlier delivery of this callback already reached
+    a terminal, successfully-processed state - not just "we've seen this
+    ID before".
 
-    cache.set(cache_key, True, timeout=86400)
-    return False
+    ``already_terminal`` is supplied by the caller (payments.views),
+    computed with the same predicate the processing pipeline itself uses
+    to decide there is nothing left to do -
+    ``payments.tasks._callback_already_processed``. A callback whose
+    earlier delivery is still in flight, or whose Celery processing
+    permanently failed (retries exhausted), is not a replay - it is
+    exactly the case a genuine Safaricom redelivery needs to get through
+    to recover, so it must not be blocked here.
+
+    This is intentionally not the thing standing between two racing
+    deliveries and a double financial effect: the idempotency guards
+    deeper in the pipeline (``MpesaIdempotencyRecord`` /
+    ``_callback_already_processed`` itself, re-checked under a row lock)
+    are what actually prevent that, regardless of what this function
+    returns.
+    """
+    if not already_terminal:
+        return False
+
+    logger.warning(
+        'M-Pesa callback replay detected for identifier=%s.',
+        identifier,
+    )
+    return True
 
 
 def _get_client_ip(request):
