@@ -78,7 +78,6 @@ def _resolve_disbursement_phone_number(
 def initiate_b2c_loan_disbursement(
     *,
     loan,
-    amount,
     remarks,
     phone_number=None,
     admin_user=None,
@@ -89,6 +88,16 @@ def initiate_b2c_loan_disbursement(
     Create a local B2C attempt, then initiate the outbound Daraja request.
 
     Includes fraud-aware fee calculation and audit logging.
+
+    Disbursement amount
+    --------------------
+    There is no ``amount`` parameter: the disbursed amount is always
+    ``loan.amount``, the approved principal - partial disbursement is
+    not a supported feature. A caller-facing "amount" field (the normal
+    disbursement request carries one, as a confirm-what-you're-about-to-
+    disburse safety check) must be validated against ``loan.amount`` by
+    the caller *before* reaching this function, and rejected on
+    mismatch - not passed through here to be silently ignored.
 
     Payout phone number
     --------------------

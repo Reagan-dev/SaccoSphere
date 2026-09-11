@@ -1231,6 +1231,36 @@ class MPesaSTKCallbackView(APIView):
         return body.get('stkCallback') or body.get('StkCallback') or {}
 
 
+def _disbursement_amount_mismatch_response(*, requested_amount, loan):
+    """Reject a disbursement request whose declared amount does not
+    match the approved loan principal.
+
+    initiate_b2c_loan_disbursement always disburses loan.amount - it has
+    no amount parameter, precisely so a caller-supplied figure can never
+    be silently ignored. The request body still carries one (a
+    confirm-what-you're-about-to-disburse safety check), and this is
+    where it is actually enforced, before initiate_b2c_loan_disbursement
+    is ever called. Partial disbursement is not a supported feature; if
+    it becomes one, that is its own project, not a relaxation of this
+    check.
+
+    Returns a 400 Response to return immediately, or None to proceed.
+    """
+    if requested_amount == loan.amount:
+        return None
+
+    return Response(
+        {
+            'detail': (
+                'Requested amount does not match the approved loan '
+                f'amount (KES {loan.amount:,.2f}). Partial disbursement '
+                'is not supported.'
+            ),
+        },
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
 class B2CDisbursementView(SaccoScopedMixin, APIView):
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
     # A money-moving write - a multi-SACCO admin must name the tenant
@@ -1271,6 +1301,12 @@ class B2CDisbursementView(SaccoScopedMixin, APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        amount_mismatch = _disbursement_amount_mismatch_response(
+            requested_amount=data['amount'], loan=loan,
+        )
+        if amount_mismatch:
+            return amount_mismatch
+
         is_complete, reason = check_loan_guarantors_complete(loan)
         if not is_complete:
             return Response(
@@ -1283,7 +1319,6 @@ class B2CDisbursementView(SaccoScopedMixin, APIView):
         _success, payload, http_status = initiate_b2c_loan_disbursement(
             loan=loan,
             phone_number=data.get('phone_number'),
-            amount=data['amount'],
             remarks=remarks,
             admin_user=request.user,
             request=request,
@@ -1346,6 +1381,12 @@ class B2CDisbursementAlternateNumberView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        amount_mismatch = _disbursement_amount_mismatch_response(
+            requested_amount=data['amount'], loan=loan,
+        )
+        if amount_mismatch:
+            return amount_mismatch
+
         is_complete, reason = check_loan_guarantors_complete(loan)
         if not is_complete:
             return Response(
@@ -1356,7 +1397,6 @@ class B2CDisbursementAlternateNumberView(APIView):
         _success, payload, http_status = initiate_b2c_loan_disbursement(
             loan=loan,
             phone_number=data['phone_number'],
-            amount=data['amount'],
             remarks=data['remarks'],
             admin_user=request.user,
             request=request,

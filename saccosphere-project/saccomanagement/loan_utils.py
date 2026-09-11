@@ -127,7 +127,6 @@ def initiate_loan_disbursement(loan, admin_user=None, request=None):
     return initiate_b2c_loan_disbursement(
         loan=loan,
         phone_number=member.phone_number,
-        amount=loan.amount,
         remarks='Loan Disbursement',
         admin_user=admin_user,
         request=request,

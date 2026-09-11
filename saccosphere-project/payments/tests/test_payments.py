@@ -1230,7 +1230,6 @@ class B2CDisbursementHardeningTests(TestCase):
         success, payload, http_status = initiate_b2c_loan_disbursement(
             loan=self.loan,
             phone_number='+254712200001',
-            amount=Decimal('500.00'),
             remarks='Loan Disbursement',
         )
 
@@ -1272,7 +1271,6 @@ class B2CDisbursementHardeningTests(TestCase):
         success, payload, http_status = initiate_b2c_loan_disbursement(
             loan=self.loan,
             phone_number='254712200001',
-            amount=Decimal('500.00'),
             remarks='Loan Disbursement',
         )
 
@@ -1598,7 +1596,6 @@ class B2CDisbursementIdempotencyTests(TestCase):
         return initiate_b2c_loan_disbursement(
             loan=self.loan,
             phone_number='+254712230001',
-            amount=Decimal('500.00'),
             remarks='Loan Disbursement',
         )
 
@@ -1769,7 +1766,6 @@ class B2CInitiationConcurrencyRegressionTests(TransactionTestCase):
                         initiate_b2c_loan_disbursement(
                             loan=self.loan,
                             phone_number='+254712240001',
-                            amount=Decimal('500.00'),
                             remarks='Loan Disbursement',
                         )
                     )

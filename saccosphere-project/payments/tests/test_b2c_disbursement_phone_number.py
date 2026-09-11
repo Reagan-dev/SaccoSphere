@@ -119,7 +119,6 @@ class DefaultDisbursementPhoneNumberTest(TestCase):
 
             success, _payload, http_status = initiate_b2c_loan_disbursement(
                 loan=self.loan,
-                amount=Decimal('500.00'),
                 remarks='Loan Disbursement',
             )
 
@@ -141,7 +140,6 @@ class DefaultDisbursementPhoneNumberTest(TestCase):
             success, payload, http_status = initiate_b2c_loan_disbursement(
                 loan=self.loan,
                 phone_number='+254799999999',
-                amount=Decimal('500.00'),
                 remarks='Loan Disbursement',
             )
 
@@ -169,7 +167,6 @@ class DefaultDisbursementPhoneNumberTest(TestCase):
             success, _payload, http_status = initiate_b2c_loan_disbursement(
                 loan=self.loan,
                 phone_number='0712290001',
-                amount=Decimal('500.00'),
                 remarks='Loan Disbursement',
             )
 
