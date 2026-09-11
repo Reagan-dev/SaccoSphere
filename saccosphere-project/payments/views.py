@@ -443,6 +443,63 @@ class MpesaTransactionDetailView(StandardResponseMixin, RetrieveAPIView):
         return self.ok(serializer.data)
 
 
+def _alert_stk_initiation_failed(
+    payment, mpesa_transaction, exc, *, status_unknown,
+):
+    """Counter + Sentry alert for an STK Push initiation failure.
+
+    The counter always fires, including for an ambiguous Daraja timeout
+    (status_unknown=True) - trend visibility on how often initiations
+    time out is useful on its own. The Sentry alert is deliberately
+    skipped for that case: a timeout is left for
+    reconcile_stale_mpesa_transactions to resolve and is not, by this
+    project's own convention (see payments.disbursements'
+    _mark_b2c_attempt_failed), treated as a failure needing a human to
+    drop what they're doing. A genuine Daraja error (bad credentials,
+    malformed response, 4xx/5xx) still alerts.
+    """
+    try:
+        from config.utils import emit_metric
+
+        emit_metric(
+            'mpesa_stk_initiation_failed',
+            sacco_id=(
+                str(payment.sacco_id) if payment.sacco_id else 'unknown'
+            ),
+            transaction_type=payment.transaction_type,
+            mpesa_transaction_type=mpesa_transaction.transaction_type,
+            status_unknown=str(status_unknown).lower(),
+        )
+    except Exception:
+        logger.exception('Failed to emit mpesa_stk_initiation_failed metric.')
+
+    if status_unknown:
+        return
+
+    try:
+        import sentry_sdk
+
+        sentry_sdk.set_context('mpesa_stk_initiation_failed', {
+            'transaction_id': str(payment.id),
+            'sacco_id': (
+                str(payment.sacco_id) if payment.sacco_id else None
+            ),
+            'transaction_type': payment.transaction_type,
+            'response_code': exc.response_code,
+            'message': exc.message,
+        })
+        sentry_sdk.capture_message(
+            f'M-Pesa STK initiation failed for transaction {payment.id} '
+            f'(SACCO {payment.sacco_id}): {exc.message} '
+            f'(code={exc.response_code}).',
+            level='error',
+        )
+    except Exception:
+        logger.exception(
+            'Failed to send mpesa_stk_initiation_failed Sentry alert.'
+        )
+
+
 class STKPushView(APIView):
     IDEMPOTENCY_WINDOW = timedelta(minutes=2)
     permission_classes = [IsAuthenticated]
@@ -840,6 +897,13 @@ class STKPushView(APIView):
                     'updated_at',
                 ]
             )
+
+        _alert_stk_initiation_failed(
+            payment,
+            mpesa_transaction,
+            exc,
+            status_unknown=status_unknown,
+        )
 
     def _amount_description(self, transaction_type):
         if transaction_type == Transaction.TransactionType.DEPOSIT:
