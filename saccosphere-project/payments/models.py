@@ -62,6 +62,11 @@ class Transaction(models.Model):
         PROCESSING = 'PROCESSING', 'Processing'
         SENT = 'SENT', 'Sent'
         INITIATION_FAILED = 'INITIATION_FAILED', 'Initiation failed'
+        PENDING_CONFIRMATION = (
+            'PENDING_CONFIRMATION',
+            'M-Pesa Response Unknown (Timed Out)',
+        )
+        UNDER_REVIEW = 'UNDER_REVIEW', 'Under Admin Review'
         COMPLETED = 'COMPLETED', 'Completed'
         FAILED = 'FAILED', 'Failed'
         AMOUNT_MISMATCH = 'AMOUNT_MISMATCH', 'Amount mismatch'

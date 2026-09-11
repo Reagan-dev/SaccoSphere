@@ -776,3 +776,156 @@ class SavingsWithdrawalB2CCallbackTest(_FixtureMixin, TestCase):
                 reference=f'{payment.id}-REV',
             ).exists()
         )
+
+
+class SavingsWithdrawalTimeoutAmbiguityTest(_FixtureMixin, TestCase):
+    """A timed-out B2C initiate is ambiguous, not a clean failure.
+
+    Covers the distinction mirrored from B2C loan disbursement: a timeout
+    must never trigger _reverse_withdrawal (the payout may have actually
+    gone through), the transaction is left PENDING_CONFIRMATION, and a
+    later callback - success or failure - resolves it exactly like it
+    would from SENT.
+    """
+
+    def _initiate_with_timeout(self, **overrides):
+        with patch('payments.withdrawals.DarajaClient') as client_cls:
+            client = client_cls.return_value
+            client._build_callback_url.return_value = 'https://cb.test/b2c'
+            client.initiate_b2c.side_effect = DarajaError(
+                'Timed out waiting for Daraja', is_timeout=True,
+            )
+            kwargs = {
+                'saving': Saving.objects.get(id=self.saving.id),
+                'phone_number': '+254712240001',
+                'requested_amount': Decimal('5000.00'),
+            }
+            kwargs.update(overrides)
+            result = initiate_savings_withdrawal(**kwargs)
+        return result, client
+
+    def test_timeout_leaves_balance_debited_not_reversed(self):
+        with self.assertLogs('saccosphere.payments', level='ERROR') as logs:
+            (ok, payload, http_status), client = self._initiate_with_timeout(
+                idempotency_key='timeout-1',
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(http_status, 202)
+        self.assertEqual(
+            payload['status'], Transaction.Status.PENDING_CONFIRMATION,
+        )
+        error_line = '\n'.join(
+            m for m in logs.output if m.startswith('ERROR')
+        )
+        self.assertIn('status unknown', error_line)
+
+        # Balance stays debited - the whole point of this fix.
+        self.saving.refresh_from_db()
+        self.assertEqual(self.saving.amount, Decimal('5000.00'))
+        self.assertEqual(self.saving.total_withdrawals, Decimal('5000.00'))
+
+        payment = Transaction.objects.get(
+            transaction_type=Transaction.TransactionType.WITHDRAWAL,
+        )
+        self.assertEqual(
+            payment.status, Transaction.Status.PENDING_CONFIRMATION,
+        )
+        self.assertFalse(
+            LedgerEntry.objects.filter(
+                reference=f'{payment.id}-REV',
+            ).exists()
+        )
+        self.assertTrue(
+            SystemAuditLog.objects.filter(
+                action='SAVINGS_WITHDRAWAL_PENDING_CONFIRMATION',
+                resource_type='Saving',
+                resource_id=str(self.saving.id),
+            ).exists()
+        )
+
+    def test_failure_callback_after_timeout_still_reverses(self):
+        self._initiate_with_timeout(idempotency_key='timeout-fail-1')
+
+        payment = Transaction.objects.get(
+            transaction_type=Transaction.TransactionType.WITHDRAWAL,
+        )
+        self.assertEqual(
+            payment.status, Transaction.Status.PENDING_CONFIRMATION,
+        )
+        mpesa = MpesaTransaction.objects.get(transaction=payment)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            _process_failed_b2c_callback(
+                mpesa,
+                payment,
+                _b2c_result_failed('CONV-TIMEOUT-FAIL'),
+                2001,
+            )
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, Transaction.Status.FAILED)
+
+        self.saving.refresh_from_db()
+        self.assertEqual(self.saving.amount, Decimal('10000.00'))
+        self.assertEqual(self.saving.total_withdrawals, Decimal('0.00'))
+
+        debit = LedgerEntry.objects.get(reference=str(payment.id))
+        credit = LedgerEntry.objects.get(reference=f'{payment.id}-REV')
+        self.assertEqual(debit.amount, credit.amount)
+
+    def test_success_callback_after_timeout_completes_once(self):
+        self._initiate_with_timeout(idempotency_key='timeout-success-1')
+
+        payment = Transaction.objects.get(
+            transaction_type=Transaction.TransactionType.WITHDRAWAL,
+        )
+        self.assertEqual(
+            payment.status, Transaction.Status.PENDING_CONFIRMATION,
+        )
+        mpesa = MpesaTransaction.objects.get(transaction=payment)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            _process_successful_b2c_callback(
+                mpesa,
+                payment,
+                _b2c_result_ok('CONV-TIMEOUT-OK'),
+            )
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.status, Transaction.Status.COMPLETED)
+
+        # Debited exactly once at initiation - the success path never
+        # re-touches the balance.
+        self.saving.refresh_from_db()
+        self.assertEqual(self.saving.amount, Decimal('5000.00'))
+        self.assertEqual(
+            LedgerEntry.objects.filter(
+                category=LedgerEntry.Category.SAVING_WITHDRAWAL,
+            ).count(),
+            1,
+        )
+
+    def test_retry_while_pending_confirmation_rejected_like_sent(self):
+        (ok_1, _p1, s1), client = self._initiate_with_timeout()
+
+        # Same net amount + phone, no client key - the in-flight window
+        # guard must still catch this, exactly as it would for SENT.
+        ok_2, p2, s2 = initiate_savings_withdrawal(
+            saving=Saving.objects.get(id=self.saving.id),
+            phone_number='+254712240001',
+            requested_amount=Decimal('5000.00'),
+        )
+
+        self.assertEqual(client.initiate_b2c.call_count, 1)
+        self.assertFalse(ok_1)
+        self.assertEqual(s1, 202)
+        self.assertTrue(ok_2)
+        self.assertEqual(s2, 200)
+        self.assertTrue(p2['duplicate'])
+        self.assertEqual(
+            Transaction.objects.filter(
+                transaction_type=Transaction.TransactionType.WITHDRAWAL,
+            ).count(),
+            1,
+        )
