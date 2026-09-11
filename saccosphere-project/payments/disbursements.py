@@ -1,5 +1,6 @@
 """Shared M-Pesa B2C disbursement initiation helpers."""
 
+import logging
 from uuid import uuid4
 
 from django.conf import settings
@@ -18,6 +19,9 @@ from .integrations.mpesa.daraja import (
     format_phone_for_daraja,
 )
 from .models import MpesaTransaction, PaymentProvider, Transaction
+
+
+logger = logging.getLogger('saccosphere.payments')
 
 
 def _get_b2c_callback_path():
@@ -564,3 +568,30 @@ def _mark_b2c_attempt_failed(
                 ),
             },
         )
+
+    if is_timeout:
+        # Only the timeout branch actually sets INITIATION_FAILED (see
+        # docstring) - counter only, no Sentry alert: this is the same
+        # ambiguous, self-healing outcome
+        # payments.views._alert_stk_initiation_failed also declines to
+        # page on, left for reconcile_stale_mpesa_transactions to
+        # resolve. The hard_failure branch (Transaction.Status.FAILED)
+        # is out of this metric's scope - it already has its own
+        # DisbursementAuditLog/UNDER_REVIEW escalation path.
+        try:
+            from config.utils import emit_metric
+
+            emit_metric(
+                'mpesa_b2c_initiation_failed',
+                sacco_id=(
+                    str(payment.sacco_id) if payment.sacco_id
+                    else 'unknown'
+                ),
+                transaction_type=payment.transaction_type,
+                mpesa_transaction_type=mpesa_transaction.transaction_type,
+                status_unknown='true',
+            )
+        except Exception:
+            logger.exception(
+                'Failed to emit mpesa_b2c_initiation_failed metric.'
+            )

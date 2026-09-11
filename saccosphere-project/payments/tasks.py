@@ -1040,12 +1040,75 @@ def _handle_amount_mismatch(
         ]
     )
 
+    _alert_amount_mismatch(
+        mpesa_transaction,
+        transaction,
+        callback_amount,
+        expected_amount,
+        amount_difference,
+    )
+
     _notify_sacco_admin_amount_mismatch(
         mpesa_transaction,
         transaction,
         callback_amount,
         expected_amount,
     )
+
+
+def _alert_amount_mismatch(
+    mpesa_transaction,
+    transaction,
+    callback_amount,
+    expected_amount,
+    amount_difference,
+):
+    """Counter + Sentry alert for an M-Pesa callback amount mismatch.
+
+    A mismatch always needs a human to look at it (it is already routed
+    to the SACCO's own admins via _notify_sacco_admin_amount_mismatch;
+    this is the engineering-facing side) - unlike an ambiguous Daraja
+    timeout, there is no self-healing reconciliation path for a payment
+    that plainly does not match what was invoiced. Wrapped so an
+    observability hiccup can never affect the transaction it is
+    reporting on - this always runs after the status write above.
+    """
+    try:
+        from config.utils import emit_metric
+
+        emit_metric(
+            'mpesa_amount_mismatch',
+            sacco_id=(
+                str(transaction.sacco_id) if transaction.sacco_id
+                else 'unknown'
+            ),
+            transaction_type=transaction.transaction_type,
+            mpesa_transaction_type=mpesa_transaction.transaction_type,
+        )
+    except Exception:
+        logger.exception('Failed to emit mpesa_amount_mismatch metric.')
+
+    try:
+        import sentry_sdk
+
+        sentry_sdk.set_context('mpesa_amount_mismatch', {
+            'transaction_id': str(transaction.id),
+            'sacco_id': (
+                str(transaction.sacco_id) if transaction.sacco_id else None
+            ),
+            'transaction_type': transaction.transaction_type,
+            'callback_amount': str(callback_amount),
+            'expected_amount': str(expected_amount),
+            'difference': str(amount_difference),
+        })
+        sentry_sdk.capture_message(
+            f'M-Pesa amount mismatch on transaction {transaction.id}: '
+            f'callback KES {callback_amount} vs expected KES '
+            f'{expected_amount} (SACCO {transaction.sacco_id}).',
+            level='error',
+        )
+    except Exception:
+        logger.exception('Failed to send mpesa_amount_mismatch Sentry alert.')
 
 
 def _notify_sacco_admin_amount_mismatch(
