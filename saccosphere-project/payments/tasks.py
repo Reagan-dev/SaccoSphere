@@ -97,7 +97,8 @@ def process_stk_callback_task(self, callback_id):
 
             # Check MpesaIdempotencyRecord before crediting
             idempotency_record, created = MpesaIdempotencyRecord.objects.get_or_create(
-                checkout_request_id=checkout_request_id,
+                kind=MpesaIdempotencyRecord.Kind.STK,
+                external_reference_id=checkout_request_id,
             )
             if not created:
                 logger.warning(
@@ -249,7 +250,8 @@ def process_b2c_callback_task(self, callback_id):
 
             # Check MpesaIdempotencyRecord before crediting
             idempotency_record, created = MpesaIdempotencyRecord.objects.get_or_create(
-                checkout_request_id=conversation_id,
+                kind=MpesaIdempotencyRecord.Kind.B2C,
+                external_reference_id=conversation_id,
             )
             if not created:
                 logger.warning(
@@ -796,11 +798,15 @@ def _process_daraja_status_response(
         )
         return False
 
-    # Check idempotency before processing
+    # Check idempotency before processing. This function only ever
+    # handles STK query-status responses (reconcile_stale_mpesa_
+    # transactions and STKStatusView's live-query fallback - B2C has no
+    # equivalent synchronous status query, see payments.disbursements).
     checkout_request_id = mpesa_transaction.checkout_request_id
     if checkout_request_id:
         idempotency_record, created = MpesaIdempotencyRecord.objects.get_or_create(
-            checkout_request_id=checkout_request_id,
+            kind=MpesaIdempotencyRecord.Kind.STK,
+            external_reference_id=checkout_request_id,
         )
         if not created:
             logger.info(
