@@ -6,6 +6,8 @@ from django.conf import settings
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
+from config.utils import InvalidPhoneNumberError, normalize_phone_number
+
 from .integrations.mpesa.daraja import (
     DarajaClient,
     DarajaError,
@@ -22,19 +24,85 @@ def _get_b2c_callback_path():
     return '/api/v1/payments/callback/mpesa/b2c/'
 
 
+def _resolve_disbursement_phone_number(
+    *,
+    member_phone_number,
+    requested_phone_number,
+    override_reason,
+):
+    """Resolve and gate the phone number a B2C payout will be sent to.
+
+    Defaults to ``member_phone_number`` - the member's own stored
+    (OTP-verified) number, which the caller must source from the normal
+    tenant-scoped ``loan.membership`` lookup, never from client input.
+
+    A caller-supplied ``requested_phone_number`` that does not match it
+    is only accepted when ``override_reason`` is a genuine, non-empty
+    reason: the elevated-permission-gated alternate-number path
+    (``B2CDisbursementAlternateNumberView``) is the only caller that
+    should ever pass one. Any other caller sending a mismatched number
+    without a reason is rejected - this is the fix for a SACCO admin (or
+    anyone who compromises one) being able to silently redirect a payout.
+
+    Returns ``(resolved_phone_number, is_alternate_number)`` - always
+    E.164 (``+254...``), regardless of how ``member_phone_number`` happens
+    to be stored - or ``(None, False)`` when the request must be
+    rejected.
+    """
+    try:
+        normalized_member_number = normalize_phone_number(
+            member_phone_number,
+        )
+    except InvalidPhoneNumberError:
+        return None, False
+
+    if not requested_phone_number:
+        return normalized_member_number, False
+
+    try:
+        normalized_requested_number = normalize_phone_number(
+            requested_phone_number,
+        )
+    except InvalidPhoneNumberError:
+        normalized_requested_number = None
+
+    if normalized_requested_number == normalized_member_number:
+        return normalized_member_number, False
+
+    if normalized_requested_number and (override_reason or '').strip():
+        return normalized_requested_number, True
+
+    return None, False
+
+
 def initiate_b2c_loan_disbursement(
     *,
     loan,
-    phone_number,
     amount,
     remarks,
+    phone_number=None,
     admin_user=None,
     request=None,
+    override_reason=None,
 ):
     """
     Create a local B2C attempt, then initiate the outbound Daraja request.
 
     Includes fraud-aware fee calculation and audit logging.
+
+    Payout phone number
+    --------------------
+    ``phone_number`` is normally omitted: the payout goes to the member's
+    own stored (OTP-verified) ``phone_number``, resolved here from the
+    same tenant-scoped ``loan.membership`` lookup everything else in this
+    function already uses. Passing a *different* number requires
+    ``override_reason`` to be a genuine, non-empty reason - callers
+    without one who supply a mismatched number are rejected outright. The
+    normal ``B2CDisbursementView`` never passes ``override_reason``; only
+    the elevated-permission-gated (``IsSuperAdmin``)
+    ``B2CDisbursementAlternateNumberView`` does, and it is responsible
+    for enforcing that permission before this function is ever called.
+    See ``_resolve_disbursement_phone_number``.
 
     Concurrency / idempotency contract
     ----------------------------------
@@ -120,6 +188,24 @@ def initiate_b2c_loan_disbursement(
         if not member.phone_number:
             return False, {
                 'error': 'Member phone number is required before disbursement.'
+            }, 400
+
+        target_phone_number, is_alternate_number = (
+            _resolve_disbursement_phone_number(
+                member_phone_number=member.phone_number,
+                requested_phone_number=phone_number,
+                override_reason=override_reason,
+            )
+        )
+        if target_phone_number is None:
+            return False, {
+                'error': (
+                    "Disbursement phone number does not match the "
+                    "member's own registered number. Use the alternate-"
+                    'number disbursement action to pay a different '
+                    'number - it requires super admin authorization and '
+                    'a reason.'
+                ),
             }, 400
 
         # Validate guarantor approval
@@ -232,7 +318,7 @@ def initiate_b2c_loan_disbursement(
 
         mpesa_transaction = MpesaTransaction.objects.create(
             transaction=payment,
-            phone_number=phone_number,
+            phone_number=target_phone_number,
             transaction_type=MpesaTransaction.TransactionType.B2C,
             related_loan=loan,
         )
@@ -249,7 +335,7 @@ def initiate_b2c_loan_disbursement(
 
     try:
         daraja_response = daraja_client.initiate_b2c(
-            phone_number=format_phone_for_daraja(phone_number),
+            phone_number=format_phone_for_daraja(target_phone_number),
             amount=breakdown['net_amount'],
             occasion='Loan Disbursement',
             remarks=remarks,
@@ -342,7 +428,11 @@ def initiate_b2c_loan_disbursement(
             loan=loan,
             event='B2C_INITIATED',
             actor=admin_user,
-            actor_role='sacco_admin' if admin_user else 'system',
+            actor_role=(
+                'super_admin' if is_alternate_number
+                else 'sacco_admin' if admin_user
+                else 'system'
+            ),
             ip_address=_get_ip(request) or None,
             mpesa_ref=conversation_id or '',
             details={
@@ -351,8 +441,35 @@ def initiate_b2c_loan_disbursement(
                 'platform_fee': str(breakdown['platform_fee']),
                 'net_amount_sent': str(breakdown['net_amount']),
                 'idempotency_key': str(idempotency_key),
+                'alternate_number': is_alternate_number,
             },
         )
+
+        # A second, distinctly-named row whenever this payout went to a
+        # number other than the member's own - reason + approver
+        # (actor/actor_role above already carry who and when) are the
+        # evidence trail a compliance review needs without opening every
+        # B2C_INITIATED row's details to find these.
+        if is_alternate_number:
+            DisbursementAuditLog.objects.create(
+                loan=loan,
+                event='B2C_ALTERNATE_NUMBER_AUTHORIZED',
+                actor=admin_user,
+                actor_role='super_admin',
+                ip_address=_get_ip(request) or None,
+                mpesa_ref=conversation_id or '',
+                details={
+                    'member_registered_number': member.phone_number,
+                    'alternate_number': target_phone_number,
+                    'reason': override_reason,
+                    'approver_id': (
+                        str(admin_user.id) if admin_user else None
+                    ),
+                    'approver_email': (
+                        admin_user.email if admin_user else None
+                    ),
+                },
+            )
 
     return True, {
         'status': loan.DisbursementStatus.INITIATED,
