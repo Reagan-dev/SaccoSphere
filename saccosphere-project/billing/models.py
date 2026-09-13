@@ -261,6 +261,16 @@ class Invoice(models.Model):
     pdf_path = models.CharField(max_length=500, blank=True)
     payment_reference = models.CharField(max_length=100, blank=True)
     notes = models.TextField(blank=True)
+    suspension_warning_sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            'Set once billing.tasks.send_billing_suspension_warnings '
+            'notifies this invoice\'s SACCO that suspension is '
+            'approaching, so the daily sweep does not re-notify for the '
+            'same invoice every day it stays overdue.'
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

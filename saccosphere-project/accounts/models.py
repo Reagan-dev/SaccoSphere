@@ -663,6 +663,18 @@ class Sacco(models.Model):
 
     suspension_reason = models.TextField(blank=True)
 
+    billing_exempt = models.BooleanField(
+        default=False,
+        help_text=(
+            'When true, billing.tasks.suspend_overdue_saccos skips this '
+            'SACCO regardless of overdue invoices (e.g. a pilot deal or '
+            'a billing dispute in progress). Set/cleared by a super '
+            'admin via SaccoBillingExemptionView, never automatically.'
+        ),
+    )
+
+    billing_exempt_reason = models.TextField(blank=True)
+
     default_interest_rate = models.DecimalField(
 
         max_digits=5,

@@ -10,7 +10,10 @@ unified OTP delivery backend system.
 """
 import logging
 
+import requests
 from django.conf import settings
+
+from config.utils import sanitize_pii
 
 try:
     import africastalking
@@ -49,6 +52,23 @@ class ATSMSRateLimitError(ATSMSError):
     """Africa's Talking is throttling this account."""
 
     retryable = True
+
+
+class ATSMSDeliveryUncertainError(ATSMSError):
+    """The HTTP request may have reached Africa's Talking before failing.
+
+    ``africastalking``'s SDK (``Service._make_request``) calls
+    ``requests.post()`` directly with no internal retry or error
+    handling, so a read-phase timeout or dropped connection here means
+    the request body - including the message - may already have been
+    transmitted and queued by Africa's Talking even though we never saw
+    the response. Retrying would risk sending the same SMS twice and
+    double-charging the SACCO, so this is deliberately not retryable;
+    callers should surface it for a manual delivery-report check instead
+    of an automatic resend.
+    """
+
+    retryable = False
 
 
 class ATSMSClient:
@@ -276,17 +296,31 @@ class ATSMSClient:
             )
             self._classify_response(response)
             logger.info(
-                'SMS sent successfully to %s. response=%s',
-                normalized_phone,
-                response,
+                'SMS sent successfully to %s.',
+                sanitize_pii(normalized_phone),
             )
             return True
         except ATSMSError:
             logger.error(
                 'Africa\'s Talking rejected SMS for %s.',
-                normalized_phone,
+                sanitize_pii(normalized_phone),
             )
             raise
+        except requests.exceptions.ConnectionError as exc:
+            # Connection never completed (DNS failure, refused
+            # connection, or a connect-phase timeout) - no bytes of the
+            # message reached Africa's Talking, so this is safe to
+            # retry.
+            error_msg = f'Africa\'s Talking SMS connection error: {exc}'
+            logger.warning(error_msg)
+            raise ATSMSError(error_msg) from exc
+        except requests.exceptions.RequestException as exc:
+            error_msg = (
+                f'Africa\'s Talking SMS outcome uncertain for '
+                f'{sanitize_pii(normalized_phone)}: {exc}'
+            )
+            logger.error(error_msg)
+            raise ATSMSDeliveryUncertainError(error_msg) from exc
         except Exception as e:
             error_msg = f'Africa\'s Talking SMS error: {str(e)}'
             logger.error(error_msg)

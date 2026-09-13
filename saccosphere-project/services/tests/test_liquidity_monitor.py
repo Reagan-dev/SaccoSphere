@@ -1,7 +1,9 @@
 from decimal import Decimal
 from unittest.mock import patch
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, SaccoSettings, User
@@ -182,4 +184,101 @@ class LiquidityMonitorTests(TestCase):
             interest_rate=Decimal('12.00'),
             term_months=12,
             status=status,
+        )
+
+
+def _make_at_risk_sacco(name, member_tag):
+    """A SACCO with one APPROVED loan and no reserves - always at_risk."""
+    sacco = Sacco.objects.create(
+        name=name, sector=Sacco.Sector.FINANCE, county='Nairobi',
+    )
+    SaccoSettings.objects.create(
+        sacco=sacco, liquidity_threshold_percentage=Decimal('80.00'),
+    )
+    admin = User.objects.create_user(
+        email=f'{member_tag}-admin@example.com', password='secret',
+    )
+    Role.objects.create(user=admin, sacco=sacco, name=Role.SACCO_ADMIN)
+    member = User.objects.create_user(
+        email=f'{member_tag}-member@example.com', password='secret',
+    )
+    membership = Membership.objects.create(
+        user=member,
+        sacco=sacco,
+        status=Membership.Status.APPROVED,
+        member_number=f'{member_tag.upper()}-001',
+    )
+    Loan.objects.create(
+        membership=membership,
+        amount=Decimal('100.00'),
+        interest_rate=Decimal('12.00'),
+        term_months=12,
+        status=Loan.Status.APPROVED,
+    )
+    return sacco
+
+
+class LiquidityMonitorBatchingTests(TestCase):
+    """check_all_sacco_liquidity must scale with at-risk SACCOs, not with
+    the total number of active SACCOs - the sweep runs hourly across
+    every one of them (services.engines.npl_monitor's batching was
+    already applied to the NPL sweep for the same reason)."""
+
+    @patch('services.tasks.send_sms_notification')
+    def test_query_count_is_independent_of_healthy_sacco_count(self, _sms):
+        risky = _make_at_risk_sacco('Risky SACCO', 'risky')
+        check_all_sacco_liquidity()  # stage the alert once
+
+        counter = iter(range(1000))
+
+        def healthy_sacco():
+            Sacco.objects.create(
+                name=f'Healthy SACCO {next(counter)}',
+                sector=Sacco.Sector.FINANCE,
+                county='Nairobi',
+            )
+
+        for _ in range(3):
+            healthy_sacco()
+        with CaptureQueriesContext(connection) as small:
+            check_all_sacco_liquidity()
+
+        for _ in range(25):
+            healthy_sacco()
+        with CaptureQueriesContext(connection) as large:
+            check_all_sacco_liquidity()
+
+        self.assertEqual(
+            len(large.captured_queries),
+            len(small.captured_queries),
+            msg=(
+                'Liquidity sweep query count grew with healthy-SACCO '
+                f'count: {len(small.captured_queries)} -> '
+                f'{len(large.captured_queries)}'
+            ),
+        )
+        self.assertTrue(
+            LiquidityAlert.objects.filter(sacco=risky, resolved=False)
+            .exists()
+        )
+
+
+class LiquidityMonitorFailureIsolationTests(TestCase):
+    def setUp(self):
+        self.sacco_a = _make_at_risk_sacco('Failing SACCO', 'fail')
+        self.sacco_b = _make_at_risk_sacco('OK SACCO', 'ok')
+
+    @patch('services.tasks._notify_sacco_admins_of_liquidity_risk')
+    def test_one_saccos_failure_does_not_block_the_others(self, mock_notify):
+        def side_effect(sacco, risk, alert):
+            if sacco.id == self.sacco_a.id:
+                raise RuntimeError('boom')
+
+        mock_notify.side_effect = side_effect
+
+        result = check_all_sacco_liquidity()
+
+        self.assertEqual(result['failed_sacco_ids'], [str(self.sacco_a.id)])
+        self.assertTrue(
+            LiquidityAlert.objects.filter(sacco=self.sacco_b).exists()
         )

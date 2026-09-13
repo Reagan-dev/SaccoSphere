@@ -33,6 +33,12 @@ class SaccoPaymentConfigUnavailable(Exception):
     name='payments.tasks.process_stk_callback',
     max_retries=3,
     default_retry_delay=60,
+    # A worker killed mid-callback must not silently drop the message -
+    # redeliver it instead (task_reject_on_worker_lost, config/celery.py)
+    # and re-ack only after this function returns. Safe to redeliver: the
+    # Callback.processed flag and MpesaIdempotencyRecord unique
+    # constraint below both make re-processing the same callback a no-op.
+    acks_late=True,
 )
 def process_stk_callback_task(self, callback_id):
     """Process M-Pesa STK callback from durable Callback storage."""
@@ -181,6 +187,10 @@ def reconcile_pending_transactions():
     name='payments.tasks.process_b2c_callback',
     max_retries=3,
     default_retry_delay=60,
+    # Same reasoning as process_stk_callback_task above: redeliver on a
+    # lost worker rather than drop, relying on the same idempotency
+    # guards to make redelivery a safe no-op.
+    acks_late=True,
 )
 def process_b2c_callback_task(self, callback_id):
     """Process M-Pesa B2C callback from durable Callback storage."""
@@ -325,7 +335,34 @@ def purge_expired_callbacks():
         raise
 
 
-@shared_task(name='payments.tasks.reconcile_stale_mpesa_transactions')
+@shared_task(name='payments.tasks.purge_expired_idempotency_records')
+def purge_expired_idempotency_records():
+    """Delete idempotency-record rows past MPESA_IDEMPOTENCY_RETENTION_DAYS.
+
+    Thin wrapper around the purge_expired_idempotency_records management
+    command, mirroring purge_expired_callbacks above.
+    """
+    from io import StringIO
+
+    from django.core.management import call_command
+
+    output = StringIO()
+    try:
+        call_command('purge_expired_idempotency_records', stdout=output)
+        result = output.getvalue()
+        logger.info('Idempotency record retention purge completed: %s', result)
+        return result
+    except Exception as exc:
+        logger.error('Idempotency record retention purge failed: %s', exc)
+        raise
+
+
+@shared_task(
+    name='payments.tasks.reconcile_stale_mpesa_transactions',
+    # Redeliver on a lost worker instead of silently skipping a run - the
+    # per-transaction idempotency checks below make redelivery safe.
+    acks_late=True,
+)
 def reconcile_stale_mpesa_transactions():
     """Reconcile stale M-Pesa STK transactions by querying Daraja status.
 
@@ -346,7 +383,35 @@ def reconcile_stale_mpesa_transactions():
     task is on a 5-minute Celery beat schedule - see
     config/settings/base.py), so the backlog drains monotonically instead
     of the same newest rows being reconsidered indefinitely.
+
+    Writes a JobHeartbeat on every run (health.monitored_jobs) so
+    ``/health/jobs/`` can page if this 5-minute sweep stalls - the same
+    pattern used by flag_npl_arrears and reconcile_savings_ledger.
     """
+    from health.models import JobHeartbeat
+
+    try:
+        result = _run_mpesa_reconciliation_sweep()
+    except Exception as exc:
+        logger.exception('M-Pesa stale-transaction reconciliation failed.')
+        try:
+            JobHeartbeat.record(
+                'reconcile_stale_mpesa_transactions',
+                status=JobHeartbeat.Status.ERROR,
+                detail={'error': str(exc)},
+            )
+        except Exception:
+            logger.exception(
+                'Could not record M-Pesa reconciliation failure heartbeat.',
+            )
+        raise
+
+    JobHeartbeat.record('reconcile_stale_mpesa_transactions', detail=result)
+    return result
+
+
+def _run_mpesa_reconciliation_sweep():
+    """Do the actual reconciliation sweep described above."""
     threshold_minutes = getattr(
         settings,
         'MPESA_RECONCILIATION_THRESHOLD_MINUTES',

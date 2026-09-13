@@ -1641,6 +1641,7 @@ class B2CCallbackView(APIView):
                     on_disbursement_b2c_callback.delay(
                         str(mpesa_transaction.related_loan_id),
                         result,
+                        callback_id=str(callback.id),
                     )
                 else:
                     from .tasks import process_b2c_callback_task

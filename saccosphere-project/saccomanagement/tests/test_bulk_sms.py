@@ -454,6 +454,42 @@ class BulkSMSTests(TestCase):
         self.assertNotEqual(campaign.status, SMSCampaign.Status.SENDING)
         self.assertEqual(campaign.status, SMSCampaign.Status.FAILED)
 
+    @patch('accounts.integrations.otp_service.ATSMSClient')
+    def test_soft_time_limit_is_finalized_like_any_other_failure(
+        self, client_mock,
+    ):
+        """The task's soft_time_limit (config/celery.py hardening) must
+        not slip past the existing exhausted-retries handling - a
+        SoftTimeLimitExceeded raised mid-send should still leave the
+        campaign in a terminal status, not stuck in SENDING forever."""
+        from celery.exceptions import SoftTimeLimitExceeded
+
+        from notifications.tasks import send_bulk_sms_campaign_task
+
+        campaign = self._campaign(status=SMSCampaign.Status.SENDING)
+        member = self._membership(
+            email='soft-time-limit@example.com',
+            phone_number='254712345051',
+            member_number='SMS-STL001',
+        )
+        SMSCampaignRecipient.objects.create(
+            campaign=campaign,
+            membership=member,
+            phone_number=member.user.phone_number,
+        )
+        campaign.total_recipients = 1
+        campaign.save(update_fields=['total_recipients'])
+        client_mock.return_value.send_sms.side_effect = (
+            SoftTimeLimitExceeded()
+        )
+
+        with patch.object(send_bulk_sms_campaign_task, 'max_retries', 0):
+            with self.assertRaises(SoftTimeLimitExceeded):
+                send_bulk_sms_campaign_task(str(campaign.id))
+
+        campaign.refresh_from_db()
+        self.assertNotEqual(campaign.status, SMSCampaign.Status.SENDING)
+
     def test_stuck_campaign_sweep_flags_campaign_past_timeout(self):
         from saccomanagement.tasks import flag_stuck_sms_campaigns
 

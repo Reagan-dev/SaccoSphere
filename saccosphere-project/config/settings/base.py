@@ -367,6 +367,27 @@ NOTIFICATION_CONTENT_RETENTION_DAYS = (
     else None
 )
 
+# MpesaIdempotencyRecord / SavingsWithdrawalIdempotencyKey retention.
+# Neither table holds PII beyond opaque identifiers (Safaricom's own
+# CheckoutRequestID/ConversationID, or a member/saving/amount/request_id
+# composite key), so - unlike CALLBACK_RETENTION_DAYS above - this is a
+# table-growth control, not a DPA one: one row is written per
+# successfully processed STK/B2C callback or withdrawal initiation,
+# forever, unless swept. Retained well past both the reconciliation
+# lookback (minutes) and CALLBACK_RETENTION_DAYS, since a delayed or
+# replayed webhook arriving after the raw Callback was already purged
+# still needs an idempotency record on hand to catch it. Set to
+# None/unset to disable the sweep entirely (keeps rows indefinitely).
+_MPESA_IDEMPOTENCY_RETENTION_DAYS = config(
+    'MPESA_IDEMPOTENCY_RETENTION_DAYS',
+    default='180',
+)
+MPESA_IDEMPOTENCY_RETENTION_DAYS = (
+    int(_MPESA_IDEMPOTENCY_RETENTION_DAYS)
+    if _MPESA_IDEMPOTENCY_RETENTION_DAYS
+    else None
+)
+
 # Metropol CRB Configuration
 METROPOL_API_KEY = config('METROPOL_API_KEY', default='')
 METROPOL_API_URL = config(
@@ -590,9 +611,21 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'billing.generate_monthly_invoices',
         'schedule': crontab(minute=0, hour=0, day_of_month=1),
     },
+    # Platform fee report (MonthlySaccoInvoice), a separate concern from
+    # the per-SACCO Invoice above - was implemented and tested but never
+    # actually scheduled. Runs after the invoice-generation run above so
+    # the two monthly jobs don't compete for DB load at the same minute.
+    'generate-and-send-monthly-fee-reports': {
+        'task': 'billing.tasks.generate_and_send_monthly_fee_reports',
+        'schedule': crontab(minute=45, hour=0, day_of_month=1),
+    },
     'check-overdue-invoices': {
         'task': 'billing.update_overdue_invoices',
         'schedule': crontab(minute=0, hour=8),
+    },
+    'send-billing-suspension-warnings': {
+        'task': 'billing.send_billing_suspension_warnings',
+        'schedule': crontab(minute=30, hour=8),
     },
     'suspend-overdue-saccos': {
         'task': 'billing.suspend_overdue_saccos',
@@ -605,6 +638,10 @@ CELERY_BEAT_SCHEDULE = {
     'purge-expired-callbacks': {
         'task': 'payments.tasks.purge_expired_callbacks',
         'schedule': crontab(minute=30, hour=2),  # Daily, off-peak
+    },
+    'purge-expired-idempotency-records': {
+        'task': 'payments.tasks.purge_expired_idempotency_records',
+        'schedule': crontab(minute=15, hour=3),  # Daily, off-peak
     },
 }
 

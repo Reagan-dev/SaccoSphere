@@ -14,6 +14,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.integrations.otp_service import (
+    ATSMSDeliveryUncertainError,
     ATSMSError,
     ATSMSInvalidRecipientError,
 )
@@ -415,6 +416,24 @@ class NotifyUserTaskTests(TestCase):
         push_signature.assert_called_once()
         sms_signature.assert_not_called()
 
+    @patch('notifications.tasks.send_push_notification_task.s')
+    @patch('notifications.tasks.chain')
+    def test_push_signature_carries_the_in_app_notification_id(
+        self, mock_chain, push_signature,
+    ):
+        notify_user_task(
+            str(self.user.id),
+            'Title',
+            'Message',
+            Notification.Category.LOAN,
+        )
+
+        notification = Notification.objects.get()
+        self.assertEqual(
+            push_signature.call_args.kwargs['notification_id'],
+            str(notification.id),
+        )
+
     @patch('notifications.tasks.send_sms_task.s')
     @patch('notifications.tasks.send_push_notification_task.s')
     @patch('notifications.tasks.chain')
@@ -459,6 +478,71 @@ class NotifyUserTaskTests(TestCase):
         )
 
         self.assertIsNone(result)
+
+    @patch.object(notify_user_task, 'retry')
+    @patch('notifications.tasks.chain')
+    def test_dispatch_failure_retries_with_notification_id_to_avoid_dup(
+        self, mock_chain, mock_retry,
+    ):
+        """A retry must carry the already-created Notification's id so a
+        re-run of this task (after the push/SMS dispatch step failed)
+        does not create a second in-app row."""
+        mock_chain.return_value.delay.side_effect = RuntimeError(
+            'broker down',
+        )
+        mock_retry.side_effect = RuntimeError('broker down')
+
+        with self.assertRaises(RuntimeError):
+            notify_user_task(
+                str(self.user.id),
+                'Title',
+                'Message',
+                Notification.Category.LOAN,
+            )
+
+        notification = Notification.objects.get()
+        mock_retry.assert_called_once()
+        self.assertEqual(
+            mock_retry.call_args.kwargs['kwargs']['_notification_id'],
+            str(notification.id),
+        )
+
+    @patch('notifications.tasks.chain')
+    def test_retry_with_existing_notification_id_reuses_it(
+        self, mock_chain,
+    ):
+        existing = Notification.objects.create(
+            user=self.user,
+            title='Title',
+            message='Message',
+            category=Notification.Category.LOAN,
+        )
+
+        result = notify_user_task(
+            str(self.user.id),
+            'Title',
+            'Message',
+            Notification.Category.LOAN,
+            _notification_id=str(existing.id),
+        )
+
+        self.assertEqual(result, str(existing.id))
+        self.assertEqual(Notification.objects.count(), 1)
+
+    @patch('notifications.tasks.chain')
+    def test_dispatch_exhausted_retries_raises(self, mock_chain):
+        mock_chain.return_value.delay.side_effect = RuntimeError(
+            'broker down',
+        )
+
+        with patch.object(notify_user_task, 'max_retries', 0):
+            with self.assertRaises(RuntimeError):
+                notify_user_task(
+                    str(self.user.id),
+                    'Title',
+                    'Message',
+                    Notification.Category.LOAN,
+                )
 
 
 class SendSmsTaskTests(TestCase):
@@ -523,6 +607,29 @@ class SendSmsTaskTests(TestCase):
             'exhausted',
         )
 
+    @patch('notifications.tasks.emit_metric')
+    @patch('accounts.integrations.otp_service.ATSMSClient')
+    def test_uncertain_delivery_returns_false_without_retrying(
+        self, client_class, emit_metric_mock,
+    ):
+        """A read-phase timeout means Africa's Talking may already have
+        queued the message - send_sms_task must not retry (that would
+        risk a duplicate, chargeable SMS) and must report it distinctly
+        from a clean rejection."""
+        client_class.return_value.send_sms.side_effect = (
+            ATSMSDeliveryUncertainError('read timeout')
+        )
+
+        result = send_sms_task('254712345678', 'hello')
+
+        self.assertFalse(result)
+        emit_metric_mock.assert_called_once_with(
+            'sms_notification_failed',
+            reason='ATSMSDeliveryUncertainError',
+            retryable=False,
+            outcome='uncertain',
+        )
+
 
 class SendEmailTaskTests(TestCase):
     def test_success_sends_mail(self):
@@ -548,6 +655,48 @@ class SendEmailTaskTests(TestCase):
         self.assertEqual(
             emit_metric_mock.call_args.kwargs.get('outcome'),
             'exhausted',
+        )
+
+    @patch('notifications.tasks.emit_metric')
+    @patch('notifications.tasks.send_mail')
+    def test_server_disconnected_mid_send_returns_false_without_retrying(
+        self, send_mail_mock, emit_metric_mock,
+    ):
+        """The SMTP session can drop after the message body was already
+        flushed to the server but before we see the final response - a
+        retry here could send the same email twice, so this must not be
+        retried."""
+        import smtplib
+
+        send_mail_mock.side_effect = smtplib.SMTPServerDisconnected(
+            'connection lost',
+        )
+
+        result = send_email_task('admin@example.com', 'Subject', 'Body')
+
+        self.assertFalse(result)
+        emit_metric_mock.assert_called_once_with(
+            'email_notification_failed',
+            reason='SMTPServerDisconnected',
+            retryable=False,
+            outcome='uncertain',
+        )
+
+    @patch('notifications.tasks.emit_metric')
+    @patch('notifications.tasks.send_mail')
+    def test_timeout_returns_false_without_retrying(
+        self, send_mail_mock, emit_metric_mock,
+    ):
+        send_mail_mock.side_effect = TimeoutError('read timed out')
+
+        result = send_email_task('admin@example.com', 'Subject', 'Body')
+
+        self.assertFalse(result)
+        emit_metric_mock.assert_called_once_with(
+            'email_notification_failed',
+            reason='TimeoutError',
+            retryable=False,
+            outcome='uncertain',
         )
 
 
@@ -579,6 +728,51 @@ class SendPushNotificationTaskTests(TestCase):
             )
 
         self.assertEqual(sent_count, 1)
+
+    def test_marks_notification_push_sent_on_success(self):
+        DeviceToken.objects.create(
+            user=self.user, token='active-1',
+            platform=DeviceToken.Platform.ANDROID,
+        )
+        notification = Notification.objects.create(
+            user=self.user,
+            title='Title',
+            message='Body',
+            category=Notification.Category.LOAN,
+        )
+        self.assertFalse(notification.push_sent)
+
+        with patch(
+            'notifications.integrations.fcm_push.FCMPushClient',
+        ) as client_class:
+            client_class.return_value.send.return_value = {'success': 1}
+            send_push_notification_task(
+                str(self.user.id),
+                'Title',
+                'Body',
+                notification_id=str(notification.id),
+            )
+
+        notification.refresh_from_db()
+        self.assertTrue(notification.push_sent)
+
+    def test_does_not_mark_push_sent_when_no_device_received_it(self):
+        notification = Notification.objects.create(
+            user=self.user,
+            title='Title',
+            message='Body',
+            category=Notification.Category.LOAN,
+        )
+
+        send_push_notification_task(
+            str(self.user.id),
+            'Title',
+            'Body',
+            notification_id=str(notification.id),
+        )
+
+        notification.refresh_from_db()
+        self.assertFalse(notification.push_sent)
 
     def test_deactivates_token_on_invalid_registration_without_raising(self):
         token = DeviceToken.objects.create(

@@ -524,3 +524,62 @@ class InvoiceMarkPaidView(APIView):
                 'Failed to enqueue payment received notice for invoice %s.',
                 invoice_id,
             )
+
+
+class SaccoBillingExemptionView(APIView):
+    """Grant or lift a SACCO's exemption from automatic billing
+    suspension (billing.tasks.suspend_overdue_saccos) - e.g. a pilot
+    deal or a billing dispute in progress. Never set automatically."""
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def post(self, request, sacco_id):
+        exempt = request.data.get('exempt')
+        if not isinstance(exempt, bool):
+            return Response(
+                {'exempt': 'This field is required and must be a boolean.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reason = request.data.get('reason', '').strip()
+        if exempt and not reason:
+            return Response(
+                {'reason': 'A reason is required when granting exemption.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        sacco = get_object_or_404(Sacco, id=sacco_id)
+        old_values = {
+            'billing_exempt': sacco.billing_exempt,
+            'billing_exempt_reason': sacco.billing_exempt_reason,
+        }
+
+        sacco.billing_exempt = exempt
+        sacco.billing_exempt_reason = reason if exempt else ''
+        sacco.save(
+            update_fields=[
+                'billing_exempt', 'billing_exempt_reason', 'updated_at',
+            ],
+        )
+
+        log_audit(
+            request.user,
+            'SACCO_BILLING_EXEMPTION_CHANGED',
+            'Sacco',
+            sacco.id,
+            old_values=old_values,
+            new_values={
+                'billing_exempt': sacco.billing_exempt,
+                'billing_exempt_reason': sacco.billing_exempt_reason,
+            },
+            request=request,
+        )
+
+        return Response(
+            {
+                'sacco_id': str(sacco.id),
+                'billing_exempt': sacco.billing_exempt,
+                'billing_exempt_reason': sacco.billing_exempt_reason,
+            },
+            status=status.HTTP_200_OK,
+        )

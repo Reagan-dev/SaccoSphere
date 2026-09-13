@@ -15,6 +15,12 @@ MONITORED_JOBS = {
     'flag_npl_arrears': timedelta(days=2),
     # config/celery.py: 'reconcile-savings-ledger', crontab 06:45 daily.
     'reconcile_savings_ledger': timedelta(days=2),
+    # config/settings/base.py: 'reconcile-stale-mpesa-transactions',
+    # crontab every 5 minutes. Six missed cycles (30 min) is well past
+    # what a single slow run explains and worth paging on immediately -
+    # this sweep is the only automated path back to a resolved state for
+    # M-Pesa transactions whose callback was lost or never arrived.
+    'reconcile_stale_mpesa_transactions': timedelta(minutes=30),
     # NOTE: 'accrue_savings_interest' (config/celery.py, monthly on the
     # 1st) deliberately writes a JobHeartbeat but is NOT registered here.
     # A once-a-month cadence would leave /health/jobs/ reporting it
@@ -26,6 +32,9 @@ MONITORED_JOBS = {
     'update_overdue_invoices': timedelta(days=2),
     # config/settings/base.py: 'suspend-overdue-saccos', crontab 09:00 daily.
     'suspend_overdue_saccos': timedelta(days=2),
+    # config/settings/base.py: 'send-billing-suspension-warnings',
+    # crontab 08:30 daily - runs just before the suspension sweep above.
+    'send_billing_suspension_warnings': timedelta(days=2),
     # NOTE: 'generate_monthly_invoices' (config/settings/base.py, monthly
     # on the 1st) deliberately writes a JobHeartbeat but is NOT registered
     # here, for the same reason as 'accrue_savings_interest' above -- a

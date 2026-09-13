@@ -78,6 +78,10 @@ class MemberImportCreateView(SaccoScopedMixin, APIView):
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
     parser_classes = [MultiPartParser]
+    # A multi-SACCO admin who omits X-Sacco-ID must not silently import
+    # members into an arbitrary one of their SACCOs - force the explicit
+    # header instead of guessing (see mixins.py).
+    require_sacco_header = True
 
     def post(self, request):
         response = self._set_sacco_context()

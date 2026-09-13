@@ -11,12 +11,14 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from django.urls import reverse
 from rest_framework.test import APIClient
 
 from accounts.models import Sacco, SaccoPaymentConfig, User
 from payments.models import MpesaTransaction, PaymentProvider, Transaction
-from saccomanagement.models import Role
+from saccomanagement.models import MemberImportJob, Role
 from saccomembership.models import Membership
 from services.models import (
     DividendDeclaration,
@@ -508,3 +510,106 @@ class B2CStrictSaccoHeaderTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()), 1)
+
+
+class MemberImportStrictSaccoHeaderTests(TestCase):
+    """A multi-SACCO admin must not silently import members into an
+    arbitrary one of their SACCOs - this is a write/data-injection
+    endpoint with real blast radius, same class of risk as the dividend
+    and B2C write views above.
+    """
+
+    CSV_HEADER = (
+        'first_name,last_name,email,phone_number,employment_status,'
+        'monthly_income\n'
+    )
+
+    def setUp(self):
+        self.client = APIClient()
+        self.sacco_a = Sacco.objects.create(
+            name='Import Strict A',
+            registration_number='IMPHDR-A',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+        )
+        self.sacco_b = Sacco.objects.create(
+            name='Import Strict B',
+            registration_number='IMPHDR-B',
+            sector=Sacco.Sector.FINANCE,
+            county='Kiambu',
+        )
+
+        self.multi_admin = User.objects.create_user(
+            email='imphdr-multi@example.com', password='StrongPass1',
+        )
+        Role.objects.create(
+            user=self.multi_admin, sacco=self.sacco_a,
+            name=Role.SACCO_ADMIN,
+        )
+        Role.objects.create(
+            user=self.multi_admin, sacco=self.sacco_b,
+            name=Role.SACCO_ADMIN,
+        )
+
+        self.single_admin = User.objects.create_user(
+            email='imphdr-single@example.com', password='StrongPass1',
+        )
+        Role.objects.create(
+            user=self.single_admin, sacco=self.sacco_a,
+            name=Role.SACCO_ADMIN,
+        )
+
+    def _upload(self):
+        csv_content = (
+            f'{self.CSV_HEADER}'
+            'Jane,Doe,imphdr.jane@example.com,254712345678,Employed,50000\n'
+        )
+        return SimpleUploadedFile(
+            'members.csv',
+            csv_content.encode('utf-8'),
+            content_type='text/csv',
+        )
+
+    def test_multi_admin_without_header_is_400_no_job_created(self):
+        self.client.force_authenticate(self.multi_admin)
+
+        response = self.client.post(
+            reverse('management:member-import'),
+            {'file': self._upload()},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['errors']['detail'], HEADER_DETAIL)
+        self.assertFalse(MemberImportJob.objects.exists())
+
+    @patch('saccomanagement.import_views.process_import_job.delay')
+    def test_multi_admin_with_header_works(self, delay_task):
+        delay_task.return_value.id = 'task-imphdr'
+        self.client.force_authenticate(self.multi_admin)
+
+        response = self.client.post(
+            reverse('management:member-import'),
+            {'file': self._upload()},
+            format='multipart',
+            HTTP_X_SACCO_ID=str(self.sacco_a.id),
+        )
+
+        self.assertEqual(response.status_code, 202)
+        job = MemberImportJob.objects.get()
+        self.assertEqual(job.sacco_id, self.sacco_a.id)
+
+    @patch('saccomanagement.import_views.process_import_job.delay')
+    def test_single_admin_without_header_still_works(self, delay_task):
+        delay_task.return_value.id = 'task-imphdr-single'
+        self.client.force_authenticate(self.single_admin)
+
+        response = self.client.post(
+            reverse('management:member-import'),
+            {'file': self._upload()},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 202)
+        job = MemberImportJob.objects.get()
+        self.assertEqual(job.sacco_id, self.sacco_a.id)
