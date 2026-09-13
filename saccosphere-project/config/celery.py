@@ -93,6 +93,13 @@ app.conf.beat_schedule = {
         'task': 'services.tasks.accrue_savings_interest',
         'schedule': crontab(minute=30, hour=1, day_of_month=1),
     },
+    # Backstop for /health/jobs/: pages admins directly if a monitored
+    # job's heartbeat goes stale or errored, in case the external
+    # uptime monitor watching that endpoint is missing or misconfigured.
+    'check-job-heartbeats': {
+        'task': 'health.check_job_heartbeats',
+        'schedule': crontab(minute='*/30'),
+    },
 }
 app.conf.task_serializer = 'json'
 app.conf.result_expires = 3600

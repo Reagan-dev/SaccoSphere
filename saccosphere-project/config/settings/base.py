@@ -242,6 +242,16 @@ DEFAULT_FROM_EMAIL = config(
     'DEFAULT_FROM_EMAIL',
     default='SaccoSphere <no-reply@saccosphere.local>',
 )
+
+# mail_admins() (billing failure alerts, superadmin notifications) delivers
+# to settings.ADMINS. Django defaults ADMINS to an empty list, so without
+# this, those alerts send successfully to zero recipients.
+ADMIN_EMAILS = config('ADMIN_EMAILS', default='', cast=Csv())
+ADMINS = [
+    (email.strip(), email.strip())
+    for email in ADMIN_EMAILS
+    if email.strip()
+]
 OTP_EMAIL_ENABLED = config('OTP_EMAIL_ENABLED', default=False, cast=bool)
 
 # OTP Configuration
@@ -614,13 +624,22 @@ LOGGING = {
         },
         'json': {
             '()': 'pythonjsonlogger.jsonlogger.JsonFormatter',
-            'format': '%(asctime)s %(name)s %(levelname)s %(message)s',
+            'format': (
+                '%(asctime)s %(name)s %(levelname)s '
+                '%(correlation_id)s %(sacco_id)s %(message)s'
+            ),
+        },
+    },
+    'filters': {
+        'request_context': {
+            '()': 'config.middleware.RequestContextFilter',
         },
     },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
             'formatter': 'json',
+            'filters': ['request_context'],
         },
     },
     'root': {

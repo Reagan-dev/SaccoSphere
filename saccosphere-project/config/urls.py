@@ -39,6 +39,11 @@ api_v1_patterns = [
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/v1/', include(api_v1_patterns)),
+    # Deliberately duplicated at the unversioned root, in addition to
+    # /api/v1/health/... above: orchestrators/uptime monitors (Railway,
+    # Kubernetes) are typically configured against a bare /health/ path,
+    # while API clients use the versioned one. Both resolve to the same
+    # view classes, so there is no behavioural drift between them.
     path('health/', HealthCheckView.as_view(), name='health-check'),
     path(
         'health/ready/',
