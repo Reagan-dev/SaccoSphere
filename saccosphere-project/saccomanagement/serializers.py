@@ -6,6 +6,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.models import SaccoSettings
+from payments.models import Transaction
 from saccomembership.models import SaccoApplication, Membership
 from services.models import RepaymentSchedule, Saving, SavingsType
 
@@ -121,13 +122,20 @@ class AdminMemberDetailSerializer(serializers.ModelSerializer):
         if value is not None:
             return value
 
+        # total_contributions on Saving is a lifetime running total, not a
+        # per-period figure, so it cannot answer "how much was deposited in
+        # the last 30 days" - that has to come from the deposits actually
+        # made in the window.
         start_date = timezone.localdate() - timezone.timedelta(days=30)
-        return Saving.objects.filter(
-            membership=obj,
-            last_transaction_date__gte=start_date,
+        return Transaction.objects.filter(
+            user=obj.user,
+            sacco=obj.sacco,
+            status=Transaction.Status.COMPLETED,
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            created_at__date__gte=start_date,
         ).aggregate(
             total=Coalesce(
-                Sum('total_contributions'),
+                Sum('amount'),
                 Value(Decimal('0.00')),
             )
         )['total']
@@ -167,6 +175,8 @@ class AdminMemberDetailSerializer(serializers.ModelSerializer):
 
 
 class AdminSaccoStatsSerializer(serializers.Serializer):
+    sacco_id = serializers.UUIDField()
+    sacco_name = serializers.CharField()
     total_members = serializers.IntegerField()
     pending_applications = serializers.IntegerField()
     total_savings_portfolio = serializers.DecimalField(

@@ -17,6 +17,7 @@ from payments.models import Transaction
 from saccomembership.models import Membership
 from services.models import Loan
 
+from .audit_logger import log_audit
 from .mixins import SaccoScopedMixin
 
 
@@ -32,6 +33,11 @@ class SaccoReportView(SaccoScopedMixin, APIView):
     """
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    # A multi-SACCO admin who omits X-Sacco-ID must not silently pull a
+    # report for the wrong tenant - force the explicit header instead of
+    # guessing (see mixins.py).
+    require_sacco_header = True
+    require_sacco_header_for_reads = True
 
     def get(self, request):
         response = self._set_sacco_context()
@@ -64,6 +70,18 @@ class SaccoReportView(SaccoScopedMixin, APIView):
         else:
             payload = self._members_report(sacco, from_date, to_date)
 
+        log_audit(
+            request.user,
+            'VIEW',
+            'SaccoReport',
+            sacco.id,
+            new_values={
+                'type': report_type,
+                'from_date': from_date.isoformat(),
+                'to_date': to_date.isoformat(),
+            },
+            request=request,
+        )
         return Response(
             {
                 'success': True,

@@ -171,7 +171,16 @@ class BalanceView(APIView):
 
 
 class StatementView(APIView):
-    """Return a paginated ledger statement for a SACCO membership."""
+    """Return a paginated ledger statement for a SACCO membership.
+
+    Cached per (membership, from_date, to_date) for 300 seconds - unlike
+    the member dashboard caches (see dashboard/signals.py), this is
+    deliberately TTL-only rather than invalidated on write: a statement is
+    keyed by an explicit historical date range chosen by the caller, so
+    there is no small, fixed set of cache keys a new ledger entry could
+    invalidate, and 5 minutes of staleness on a backward-looking report is
+    an accepted tradeoff.
+    """
 
     permission_classes = [IsAuthenticated]
 

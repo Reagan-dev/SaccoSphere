@@ -110,6 +110,78 @@ class SaccoAdminDashboardViewsTestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['total_members'], 5)
 
+    def test_stats_loans_portfolio_includes_defaulted_balance(self):
+        """Defaulted loans are still owed and must count as outstanding."""
+        membership = self._create_membership('borrower@example.com')
+        Loan.objects.create(
+            membership=membership,
+            amount=Decimal('10000.00'),
+            interest_rate=Decimal('12.00'),
+            term_months=12,
+            outstanding_balance=Decimal('8000.00'),
+            status=Loan.Status.ACTIVE,
+        )
+        Loan.objects.create(
+            membership=membership,
+            amount=Decimal('5000.00'),
+            interest_rate=Decimal('12.00'),
+            term_months=6,
+            outstanding_balance=Decimal('4500.00'),
+            status=Loan.Status.DEFAULTED,
+        )
+        Loan.objects.create(
+            membership=membership,
+            amount=Decimal('2000.00'),
+            interest_rate=Decimal('12.00'),
+            term_months=6,
+            outstanding_balance=Decimal('2000.00'),
+            status=Loan.Status.PENDING_APPROVAL,
+        )
+
+        response = self.client.get(
+            '/api/v1/management/stats/',
+            HTTP_X_SACCO_ID=str(self.sacco.id),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data['total_loans_portfolio'],
+            '12500.00',
+        )
+        self.assertEqual(response.data['active_loans_count'], 1)
+
+    def test_stats_savings_portfolio_excludes_closed_accounts(self):
+        """A closed savings account's leftover balance is not portfolio."""
+        membership = self._create_membership('saver@example.com')
+        savings_type = SavingsType.objects.create(
+            sacco=self.sacco,
+            name=SavingsType.Name.BOSA,
+            minimum_contribution=Decimal('500.00'),
+        )
+        Saving.objects.create(
+            membership=membership,
+            savings_type=savings_type,
+            amount=Decimal('5000.00'),
+            status=Saving.Status.ACTIVE,
+        )
+        Saving.objects.create(
+            membership=membership,
+            savings_type=savings_type,
+            amount=Decimal('750.00'),
+            status=Saving.Status.CLOSED,
+        )
+
+        response = self.client.get(
+            '/api/v1/management/stats/',
+            HTTP_X_SACCO_ID=str(self.sacco.id),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data['total_savings_portfolio'],
+            '5000.00',
+        )
+
     def test_member_list_includes_top_level_user_id(self):
         """Ensure admin member list exposes user_id for frontend mapping."""
         user = User.objects.create_user(
@@ -162,7 +234,7 @@ class SaccoAdminDashboardViewsTestCase(TestCase):
             membership=membership,
             savings_type=bosa_type,
             amount=Decimal('2500.00'),
-            total_contributions=Decimal('1200.00'),
+            total_contributions=Decimal('9000.00'),
             last_transaction_date=timezone.localdate(),
             status=Saving.Status.ACTIVE,
         )
@@ -170,9 +242,33 @@ class SaccoAdminDashboardViewsTestCase(TestCase):
             membership=membership,
             savings_type=share_type,
             amount=Decimal('3000.00'),
-            total_contributions=Decimal('3000.00'),
+            total_contributions=Decimal('9000.00'),
             last_transaction_date=timezone.localdate(),
             status=Saving.Status.ACTIVE,
+        )
+        Transaction.objects.create(
+            user=user,
+            sacco=self.sacco,
+            reference='TXN-DETAIL-THIS-MONTH',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=Decimal('4200.00'),
+            status=Transaction.Status.COMPLETED,
+        )
+        # Same member also belongs to another SACCO - this deposit must
+        # never leak into Alpha SACCO's view of this member.
+        Membership.objects.create(
+            user=user,
+            sacco=self.other_sacco,
+            status=Membership.Status.APPROVED,
+            member_number='BETA-M101',
+        )
+        Transaction.objects.create(
+            user=user,
+            sacco=self.other_sacco,
+            reference='TXN-DETAIL-OTHER-SACCO',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=Decimal('50000.00'),
+            status=Transaction.Status.COMPLETED,
         )
         loan = Loan.objects.create(
             membership=membership,
@@ -202,6 +298,64 @@ class SaccoAdminDashboardViewsTestCase(TestCase):
         )
         self.assertEqual(response.data['share_capital'], Decimal('3000.00'))
         self.assertEqual(response.data['repayment_rate_pct'], 66.67)
+        transaction_references = {
+            item['reference'] for item in response.data['recent_transactions']
+        }
+        self.assertIn('TXN-DETAIL-THIS-MONTH', transaction_references)
+        self.assertNotIn('TXN-DETAIL-OTHER-SACCO', transaction_references)
+
+    def test_stats_excludes_other_sacco_transactions(self):
+        """A member's other-SACCO deposits must not leak into these stats."""
+        shared_user = User.objects.create_user(
+            email='shared-member@example.com',
+            password='StrongPass123',
+            first_name='Shared',
+            last_name='Member',
+        )
+        Membership.objects.create(
+            user=shared_user,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number='ALPHA-M500',
+        )
+        Membership.objects.create(
+            user=shared_user,
+            sacco=self.other_sacco,
+            status=Membership.Status.APPROVED,
+            member_number='BETA-M500',
+        )
+        Transaction.objects.create(
+            user=shared_user,
+            sacco=self.sacco,
+            reference='TXN-STATS-ALPHA',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=Decimal('1000.00'),
+            status=Transaction.Status.COMPLETED,
+        )
+        Transaction.objects.create(
+            user=shared_user,
+            sacco=self.other_sacco,
+            reference='TXN-STATS-BETA',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=Decimal('75000.00'),
+            status=Transaction.Status.COMPLETED,
+        )
+
+        response = self.client.get(
+            '/api/v1/management/stats/',
+            HTTP_X_SACCO_ID=str(self.sacco.id),
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data['monthly_contributions'],
+            '1000.00',
+        )
+        references = {
+            item['reference'] for item in response.data['recent_transactions']
+        }
+        self.assertIn('TXN-STATS-ALPHA', references)
+        self.assertNotIn('TXN-STATS-BETA', references)
 
     def test_disbursements_dashboard_returns_sacco_scoped_summary(self):
         """Ensure disbursement dashboard returns only current SACCO data."""
