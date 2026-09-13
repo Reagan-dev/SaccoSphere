@@ -1,4 +1,8 @@
 import json
+import os
+import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 from io import StringIO
@@ -6,8 +10,9 @@ from unittest.mock import patch
 
 from django.core import mail
 from django.core.management import call_command
+from django.db import OperationalError, connection
 from django.http import JsonResponse
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -33,10 +38,12 @@ from billing.tasks import (
     generate_monthly_invoices,
     send_invoice_email,
     suspend_overdue_saccos,
+    update_overdue_invoices,
 )
+from health.models import JobHeartbeat
 from payments.models import PaymentProvider, PlatformFee, Transaction
-from saccomanagement.models import Role
 from saccomanagement.middleware import BillingSuspensionMiddleware
+from saccomanagement.models import Role, SystemAuditLog
 from saccomembership.models import Membership
 
 
@@ -217,6 +224,40 @@ class BillingAutomationTests(TestCase):
         self.assertEqual(invoice.status, 'draft')
         self.assertIsNone(invoice.sent_at)
 
+    def test_send_invoice_email_retries_and_recovers_on_smtp_failure(self):
+        """A transient SMTP failure must be retried and recovered from,
+        not left as a permanently failed invoice."""
+        with tempfile.NamedTemporaryFile(
+            suffix='.pdf', delete=False,
+        ) as tmp_pdf:
+            tmp_pdf.write(b'%PDF-1.4 test')
+            tmp_path = tmp_pdf.name
+
+        invoice = Invoice.objects.create(
+            sacco=self.sacco,
+            invoice_number='SS-SMTP-FAIL-001',
+            billing_month=timezone.localdate().replace(day=1),
+            total_amount=Decimal('50.00'),
+            line_items_count=1,
+            status='draft',
+            due_date=timezone.localdate() + timedelta(days=7),
+            pdf_path=tmp_path,
+        )
+
+        try:
+            with patch(
+                'billing.tasks.EmailMessage.send',
+                side_effect=[OSError('smtp unavailable'), 1],
+            ):
+                result = send_invoice_email.apply(args=[str(invoice.id)])
+        finally:
+            os.unlink(tmp_path)
+
+        self.assertFalse(result.failed())
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, 'sent')
+
+    @patch('config.utils.emit_metric')
     @patch('billing.tasks.update_overdue_invoices.delay')
     @patch('billing.tasks.send_invoice_email.delay')
     @patch('billing.pdf_generator.InvoicePDFGenerator.save')
@@ -227,6 +268,7 @@ class BillingAutomationTests(TestCase):
         pdf_save_mock,
         email_delay_mock,
         overdue_delay_mock,
+        emit_metric_mock,
     ):
         """New invoice task totals platform_fee from append-only line items."""
         today = timezone.localdate()
@@ -271,6 +313,86 @@ class BillingAutomationTests(TestCase):
         self.assertFalse(result.failed())
         email_delay_mock.assert_called_once_with(str(invoice.id))
         overdue_delay_mock.assert_called_once_with()
+        emit_metric_mock.assert_called_once()
+        metric_call_args, metric_call_kwargs = emit_metric_mock.call_args
+        self.assertEqual(metric_call_args, ('billing_invoice_generated',))
+        self.assertEqual(metric_call_kwargs['sacco_id'], str(self.sacco.id))
+        self.assertEqual(
+            metric_call_kwargs['invoice_number'], invoice.invoice_number,
+        )
+        self.assertEqual(
+            Decimal(metric_call_kwargs['amount']), invoice.total_amount,
+        )
+        heartbeat = JobHeartbeat.objects.get(
+            job_name='generate_monthly_invoices',
+        )
+        self.assertEqual(heartbeat.last_status, JobHeartbeat.Status.OK)
+        self.assertEqual(heartbeat.detail['invoices_generated'], 1)
+        self.assertEqual(heartbeat.detail['failures'], 0)
+
+    @patch('config.utils.emit_metric')
+    @patch('billing.tasks.notify_superadmin.delay')
+    def test_update_overdue_invoices_records_heartbeat_and_metric(
+        self,
+        notify_delay_mock,
+        emit_metric_mock,
+    ):
+        Invoice.objects.create(
+            sacco=self.sacco,
+            invoice_number='SS-OVERDUE-001',
+            billing_month=timezone.localdate().replace(day=1),
+            total_amount=Decimal('100.00'),
+            line_items_count=1,
+            status='sent',
+            due_date=timezone.localdate() - timedelta(days=1),
+        )
+
+        update_overdue_invoices.apply()
+
+        emit_metric_mock.assert_called_once_with(
+            'billing_invoices_marked_overdue', count=1,
+        )
+        notify_delay_mock.assert_called_once()
+        heartbeat = JobHeartbeat.objects.get(
+            job_name='update_overdue_invoices',
+        )
+        self.assertEqual(heartbeat.last_status, JobHeartbeat.Status.OK)
+        self.assertEqual(heartbeat.detail['invoices_marked_overdue'], 1)
+
+    @patch('billing.tasks.notify_superadmin.delay')
+    def test_update_overdue_invoices_retries_and_recovers_on_transient_db_error(
+        self,
+        notify_delay_mock,
+    ):
+        """A transient DB error must be retried and recovered from, not
+        left as a silently-stuck sweep."""
+        invoice = Invoice.objects.create(
+            sacco=self.sacco,
+            invoice_number='SS-DB-RETRY-001',
+            billing_month=timezone.localdate().replace(day=1),
+            total_amount=Decimal('50.00'),
+            line_items_count=1,
+            status='sent',
+            due_date=timezone.localdate() - timedelta(days=1),
+        )
+        real_filter = Invoice.objects.filter
+        attempts = {'count': 0}
+
+        def flaky_filter(*args, **kwargs):
+            attempts['count'] += 1
+            if attempts['count'] == 1:
+                raise OperationalError('db unavailable')
+            return real_filter(*args, **kwargs)
+
+        with patch(
+            'billing.tasks.Invoice.objects.filter',
+            side_effect=flaky_filter,
+        ):
+            result = update_overdue_invoices.apply()
+
+        self.assertFalse(result.failed())
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, 'overdue')
 
 
 class MonthlyInvoiceAccessTests(TestCase):
@@ -452,7 +574,8 @@ class MonthlyInvoiceAccessTests(TestCase):
         response = self.client.get(reverse('billing:invoice-list'))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        invoice_ids = {item['id'] for item in response.data}
+        results = response.data['data']['results']
+        invoice_ids = {item['id'] for item in results}
         self.assertIn(str(self.invoice_a.id), invoice_ids)
         self.assertNotIn(str(self.invoice_b_new.id), invoice_ids)
 
@@ -465,8 +588,23 @@ class MonthlyInvoiceAccessTests(TestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]['id'], str(self.invoice_b_new.id))
+        results = response.data['data']['results']
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['id'], str(self.invoice_b_new.id))
+
+    def test_invoice_list_response_is_paginated(self):
+        """InvoiceListView must no longer return an unbounded bare array."""
+        self.client.force_authenticate(user=self.super_admin)
+
+        response = self.client.get(reverse('billing:invoice-list'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['success'])
+        data = response.data['data']
+        self.assertIn('count', data)
+        self.assertIn('total_pages', data)
+        self.assertIn('current_page', data)
+        self.assertIn('results', data)
 
     def test_invoice_detail_returns_line_items_and_by_type_summary(self):
         self.client.force_authenticate(user=self.admin_a)
@@ -571,10 +709,12 @@ class BillingSuspensionTests(TestCase):
             due_date=timezone.localdate() - timedelta(days=9),
         )
 
+    @patch('config.utils.emit_metric')
     @patch('billing.tasks.send_suspension_notice.delay')
     def test_suspend_overdue_saccos_locks_sacco_admin_writes(
         self,
         notice_delay_mock,
+        emit_metric_mock,
     ):
         count = suspend_overdue_saccos()
 
@@ -593,6 +733,25 @@ class BillingSuspensionTests(TestCase):
             str(self.sacco.id),
             str(self.invoice.id),
         )
+        emit_metric_mock.assert_called_once_with(
+            'billing_sacco_suspended',
+            sacco_id=str(self.sacco.id),
+            invoice_number=self.invoice.invoice_number,
+        )
+        audit_entry = SystemAuditLog.objects.get(
+            action='SACCO_BILLING_SUSPENDED',
+            resource_type='Sacco',
+            resource_id=str(self.sacco.id),
+        )
+        self.assertIsNone(audit_entry.user)
+        self.assertEqual(
+            audit_entry.new_values['invoice_number'],
+            self.invoice.invoice_number,
+        )
+        heartbeat = JobHeartbeat.objects.get(
+            job_name='suspend_overdue_saccos',
+        )
+        self.assertEqual(heartbeat.detail['saccos_suspended'], 1)
 
     def test_billing_suspension_blocks_admin_write_with_402(self):
         self.sacco.is_billing_suspended = True
@@ -661,10 +820,12 @@ class BillingSuspensionTests(TestCase):
 
         self.assertEqual(response.status_code, 402)
 
+    @patch('config.utils.emit_metric')
     @patch('billing.views.send_payment_received_notice.delay')
     def test_mark_paid_records_payment_and_restores_sacco(
         self,
         notice_delay_mock,
+        emit_metric_mock,
     ):
         self.sacco.is_billing_suspended = True
         self.sacco.suspended_at = timezone.now()
@@ -713,6 +874,21 @@ class BillingSuspensionTests(TestCase):
             str(self.sacco.id),
             str(self.invoice.id),
         )
+        emit_metric_mock.assert_called_once_with(
+            'billing_invoice_marked_paid',
+            sacco_id=str(self.sacco.id),
+            invoice_number=self.invoice.invoice_number,
+            amount=str(Decimal('5000.00')),
+        )
+        audit_entry = SystemAuditLog.objects.get(
+            action='INVOICE_MARKED_PAID',
+            resource_type='Invoice',
+            resource_id=str(self.invoice.id),
+        )
+        self.assertEqual(audit_entry.user, self.super_admin)
+        self.assertEqual(audit_entry.old_values['invoice_status'], 'overdue')
+        self.assertEqual(audit_entry.new_values['invoice_status'], 'paid')
+        self.assertEqual(audit_entry.new_values['payment_ref'], 'MPESA_REF')
 
     @patch('billing.views.send_payment_received_notice.delay')
     def test_mark_paid_rejects_underpayment(self, notice_delay_mock):
@@ -833,3 +1009,155 @@ class ReconcileUncollectedFeesCommandTests(TestCase):
 
         self.uncollected_revenue.refresh_from_db()
         self.assertFalse(self.uncollected_revenue.is_collected)
+
+
+class InvoiceLineItemImmutabilityTest(TestCase):
+    """InvoiceLineItem is append-only at the model layer (mirrors
+    ledger.tests.test_immutability.LedgerEntryImmutabilityTest)."""
+
+    def setUp(self):
+        self.sacco = Sacco.objects.create(
+            name='Immutable Line Item SACCO',
+            registration_number='IMM001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        self.user = User.objects.create_user(
+            email='immutable-line-item@example.com',
+            first_name='Immutable',
+            last_name='Member',
+            phone_number='254700001200',
+            password='StrongPass1',
+        )
+        provider, _ = PaymentProvider.objects.get_or_create(
+            name='M-Pesa',
+            defaults={
+                'provider_type': PaymentProvider.ProviderType.MPESA,
+                'is_active': True,
+            },
+        )
+        transaction = Transaction.objects.create(
+            provider=provider,
+            user=self.user,
+            reference='IMM-TXN-001',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=Decimal('1000.00'),
+            status=Transaction.Status.COMPLETED,
+            sacco=self.sacco,
+        )
+        self.line_item = InvoiceLineItem.objects.create(
+            sacco=self.sacco,
+            transaction=transaction,
+            transaction_type='deposit',
+            gross_amount=Decimal('1010.00'),
+            net_amount=Decimal('1000.00'),
+            platform_fee=Decimal('10.00'),
+            fee_model='percentage',
+            rate_applied='1.0% of deposit amount',
+            billing_month=timezone.localdate().replace(day=1),
+            invoiced=False,
+        )
+
+    def test_posted_line_item_cannot_be_saved_again(self):
+        self.line_item.platform_fee = Decimal('999.00')
+        with self.assertRaises(PermissionError):
+            self.line_item.save()
+
+        self.line_item.refresh_from_db()
+        self.assertEqual(self.line_item.platform_fee, Decimal('10.00'))
+
+    def test_posted_line_item_cannot_be_deleted(self):
+        with self.assertRaises(PermissionError):
+            self.line_item.delete()
+
+        self.assertTrue(
+            InvoiceLineItem.objects.filter(pk=self.line_item.pk).exists()
+        )
+
+    def test_bulk_update_to_mark_invoiced_still_works(self):
+        """InvoiceGenerator.generate() marks items invoiced via a bulk
+        QuerySet.update(), which bypasses save() and must keep working."""
+        InvoiceLineItem.objects.filter(pk=self.line_item.pk).update(
+            invoiced=True,
+        )
+
+        self.line_item.refresh_from_db()
+        self.assertTrue(self.line_item.invoiced)
+
+
+class InvoiceMarkPaidConcurrencyTests(TransactionTestCase):
+    """Two simultaneous mark-paid requests for one invoice must not both
+    succeed. The threaded case needs real row-level locking, so it runs
+    on PostgreSQL and skips on SQLite (select_for_update is a no-op
+    there), matching services.tests.test_concurrency_limits.
+    """
+
+    def setUp(self):
+        self.sacco = Sacco.objects.create(
+            name='Mark-Paid Race SACCO',
+            registration_number='MPR001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        self.super_admin = User.objects.create_user(
+            email='mark-paid-race-admin@example.com',
+            first_name='Race',
+            last_name='Admin',
+            phone_number='254700001199',
+            password='StrongPass1',
+            is_staff=True,
+        )
+        self.invoice = Invoice.objects.create(
+            sacco=self.sacco,
+            invoice_number='SS-2026-07-RACE',
+            billing_month=timezone.datetime(2026, 7, 1).date(),
+            total_amount=Decimal('5000.00'),
+            line_items_count=1,
+            status='overdue',
+            due_date=timezone.localdate() - timedelta(days=9),
+        )
+        self.url = reverse(
+            'billing:invoice-mark-paid',
+            kwargs={'invoice_id': self.invoice.id},
+        )
+
+    def _mark_paid(self):
+        client = APIClient()
+        client.force_authenticate(user=self.super_admin)
+        return client.post(
+            self.url,
+            {
+                'payment_ref': 'MPESA_REF',
+                'amount': '5000.00',
+                'payment_method': 'mpesa',
+            },
+            format='json',
+        )
+
+    def test_concurrent_mark_paid_admits_exactly_one(self):
+        if connection.vendor == 'sqlite':
+            self.skipTest(
+                'SQLite select_for_update is a no-op; run on PostgreSQL.'
+            )
+
+        barrier = threading.Barrier(2)
+        results = []
+
+        def worker(_):
+            barrier.wait()
+            try:
+                results.append(self._mark_paid().status_code)
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(worker, range(2)))
+
+        self.assertEqual(sorted(results), [200, 409])
+        self.assertEqual(
+            InvoicePayment.objects.filter(invoice=self.invoice).count(), 1,
+        )
+        self.invoice.refresh_from_db()
+        self.assertEqual(self.invoice.status, 'paid')
