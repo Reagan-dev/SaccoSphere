@@ -303,11 +303,17 @@ def send_invoice_to_sacco(invoice):
         content=csv_content,
         mimetype='text/csv',
     )
-    email.attach(
-        filename=f'invoice-{invoice.id}.pdf',
-        content=pdf_content,
-        mimetype='application/pdf',
-    )
+    if pdf_content is not None:
+        email.attach(
+            filename=f'invoice-{invoice.id}.pdf',
+            content=pdf_content,
+            mimetype='application/pdf',
+        )
+    else:
+        logger.warning(
+            'PDF unavailable for invoice %s -- sending CSV attachment only.',
+            invoice.id,
+        )
     email.send(fail_silently=False)
 
     invoice.status = MonthlySaccoInvoice.Status.SENT
@@ -337,12 +343,20 @@ def build_invoice_csv(invoice):
 
 
 def build_invoice_pdf(invoice):
-    """Build simple PDF bytes report for invoice download/email attachment."""
+    """Build PDF bytes for invoice download/email attachment.
+
+    Returns None if WeasyPrint is unavailable in this environment, rather
+    than silently returning CSV bytes mislabeled as a PDF -- callers must
+    treat None as "no PDF attachment this time", not attach it anyway.
+    """
     try:
         from weasyprint import HTML
     except Exception:
-        # Fallback to plain-text bytes if PDF generator unavailable.
-        return build_invoice_csv(invoice).encode('utf-8')
+        logger.error(
+            'WeasyPrint unavailable -- cannot build PDF for invoice %s.',
+            invoice.id,
+        )
+        return None
 
     payload = invoice.report_payload
     html = f"""

@@ -1,8 +1,11 @@
 import json
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from io import StringIO
 from unittest.mock import patch
 
+from django.core import mail
+from django.core.management import call_command
 from django.http import JsonResponse
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
@@ -19,13 +22,16 @@ from billing.models import (
     PlatformRevenue,
 )
 from billing.services import (
+    build_invoice_pdf,
     generate_monthly_sacco_invoice,
     previous_month_period,
     record_transaction_fee,
+    send_invoice_to_sacco,
 )
 from billing.tasks import (
     generate_and_send_monthly_fee_reports,
     generate_monthly_invoices,
+    send_invoice_email,
     suspend_overdue_saccos,
 )
 from payments.models import PaymentProvider, PlatformFee, Transaction
@@ -140,6 +146,76 @@ class BillingAutomationTests(TestCase):
         )
         self.assertEqual(invoice.status, MonthlySaccoInvoice.Status.SENT)
         email_send_mock.assert_called()
+
+    def test_build_invoice_pdf_returns_none_when_weasyprint_unavailable(self):
+        """A missing WeasyPrint must not fall back to CSV bytes mislabeled as a PDF."""
+        record_transaction_fee(self.transaction, self.sacco)
+        period_start, period_end = previous_month_period(timezone.localdate())
+        PlatformFee.objects.filter(transaction=self.transaction).update(
+            created_at=timezone.make_aware(
+                datetime.combine(period_end, time.min)
+            ),
+        )
+        invoice = generate_monthly_sacco_invoice(
+            sacco=self.sacco,
+            period_start=period_start,
+            period_end=period_end,
+        )
+
+        with patch.dict('sys.modules', {'weasyprint': None}):
+            pdf_content = build_invoice_pdf(invoice)
+
+        self.assertIsNone(pdf_content)
+
+    def test_send_invoice_to_sacco_omits_pdf_attachment_when_unavailable(self):
+        """Email must carry only the real CSV, never a CSV mislabeled as PDF."""
+        record_transaction_fee(self.transaction, self.sacco)
+        period_start, period_end = previous_month_period(timezone.localdate())
+        PlatformFee.objects.filter(transaction=self.transaction).update(
+            created_at=timezone.make_aware(
+                datetime.combine(period_end, time.min)
+            ),
+        )
+        invoice = generate_monthly_sacco_invoice(
+            sacco=self.sacco,
+            period_start=period_start,
+            period_end=period_end,
+        )
+
+        mail.outbox = []
+        with patch.dict('sys.modules', {'weasyprint': None}):
+            sent = send_invoice_to_sacco(invoice)
+
+        self.assertTrue(sent)
+        self.assertEqual(len(mail.outbox), 1)
+        attachment_mimetypes = {
+            attachment[2] for attachment in mail.outbox[0].attachments
+        }
+        self.assertEqual(attachment_mimetypes, {'text/csv'})
+
+    @patch('billing.tasks.notify_superadmin.delay')
+    def test_send_invoice_email_skips_and_alerts_when_pdf_missing(
+        self,
+        notify_mock,
+    ):
+        """A missing/unsaved PDF must not crash the Celery task."""
+        invoice = Invoice.objects.create(
+            sacco=self.sacco,
+            invoice_number='SS-MISSING-PDF-001',
+            billing_month=timezone.localdate().replace(day=1),
+            total_amount=Decimal('50.00'),
+            line_items_count=1,
+            status='draft',
+            due_date=timezone.localdate() + timedelta(days=7),
+            pdf_path='',
+        )
+
+        send_invoice_email(str(invoice.id))
+
+        notify_mock.assert_called_once()
+        invoice.refresh_from_db()
+        self.assertEqual(invoice.status, 'draft')
+        self.assertIsNone(invoice.sent_at)
 
     @patch('billing.tasks.update_overdue_invoices.delay')
     @patch('billing.tasks.send_invoice_email.delay')
@@ -553,7 +629,10 @@ class BillingSuspensionTests(TestCase):
         self.assertEqual(member_response.status_code, 200)
         self.assertEqual(admin_read_response.status_code, 200)
 
-    def test_billing_suspension_blocks_admin_invoice_write_subactions(self):
+    def test_billing_suspension_exempts_invoice_write_subactions(self):
+        """A suspended SACCO admin must still be able to act on their own
+        invoices (e.g. resend) in order to resolve the suspension -- the
+        exemption is a path prefix, not just the bare list endpoint."""
         self.sacco.is_billing_suspended = True
         self.sacco.save(update_fields=['is_billing_suspended'])
         middleware = BillingSuspensionMiddleware(
@@ -562,6 +641,20 @@ class BillingSuspensionTests(TestCase):
         request = self.factory.post(
             f'/api/v1/billing/invoices/{self.invoice.id}/resend/',
         )
+        request.user = self.admin
+
+        response = middleware(request)
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_billing_suspension_still_blocks_unrelated_write_paths(self):
+        """The invoices/ prefix exemption must not widen into a blanket bypass."""
+        self.sacco.is_billing_suspended = True
+        self.sacco.save(update_fields=['is_billing_suspended'])
+        middleware = BillingSuspensionMiddleware(
+            lambda request: JsonResponse({'ok': True}),
+        )
+        request = self.factory.post('/api/v1/billing/other-endpoint/')
         request.user = self.admin
 
         response = middleware(request)
@@ -643,3 +736,100 @@ class BillingSuspensionTests(TestCase):
         self.assertEqual(self.invoice.status, 'overdue')
         self.assertFalse(InvoicePayment.objects.exists())
         notice_delay_mock.assert_not_called()
+
+    @patch('billing.views.send_payment_received_notice.delay')
+    def test_mark_paid_rejects_duplicate_call_on_already_paid_invoice(
+        self,
+        notice_delay_mock,
+    ):
+        """A retried/duplicate mark-paid call must not create a second payment."""
+        self.client.force_authenticate(user=self.super_admin)
+        payload = {
+            'payment_ref': 'MPESA_REF',
+            'amount': '5000.00',
+            'payment_method': 'mpesa',
+        }
+        url = reverse(
+            'billing:invoice-mark-paid',
+            kwargs={'invoice_id': self.invoice.id},
+        )
+
+        first_response = self.client.post(url, payload, format='json')
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+
+        second_response = self.client.post(url, payload, format='json')
+
+        self.assertEqual(second_response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(InvoicePayment.objects.filter(invoice=self.invoice).count(), 1)
+        notice_delay_mock.assert_called_once()
+
+
+class ReconcileUncollectedFeesCommandTests(TestCase):
+    """Regression coverage for the reconcile_uncollected_fees command."""
+
+    def setUp(self):
+        self.sacco = Sacco.objects.create(
+            name='Reconcile SACCO',
+            registration_number='RECON001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        self.user = User.objects.create_user(
+            email='reconcile.member@example.com',
+            first_name='Reconcile',
+            last_name='Member',
+            phone_number='254700001188',
+            password='StrongPass1',
+        )
+        provider, _ = PaymentProvider.objects.get_or_create(
+            name='M-Pesa',
+            defaults={
+                'provider_type': PaymentProvider.ProviderType.MPESA,
+                'is_active': True,
+            },
+        )
+        pre_fix_transaction = Transaction.objects.create(
+            provider=provider,
+            user=self.user,
+            reference='RECON-TXN-PRE-FIX',
+            transaction_type=Transaction.TransactionType.DEPOSIT,
+            amount=Decimal('1000.00'),
+            status=Transaction.Status.COMPLETED,
+            description='Pre-fix transaction with no gross_amount metadata',
+            metadata={},
+        )
+        self.uncollected_revenue = PlatformRevenue.objects.create(
+            sacco=self.sacco,
+            transaction=pre_fix_transaction,
+            revenue_type=PlatformRevenue.RevenueType.TRANSACTION_FEE,
+            amount=Decimal('20.00'),
+        )
+
+    def test_command_identifies_uncollected_records_without_crashing(self):
+        """Regression test: a NameError (sacacco_name typo) previously crashed
+        the command on this exact path -- any run that found an uncollected
+        record."""
+        out = StringIO()
+
+        # No --before given -> command defaults the cutoff to timezone.now(),
+        # which is what exercises the breakdown-by-sacco branch that the
+        # sacacco_name typo used to crash on for any matching record.
+        call_command('reconcile_uncollected_fees', stdout=out)
+
+        output = out.getvalue()
+        self.assertIn('Uncollected fee records identified: 1', output)
+        self.assertIn(self.sacco.name, output)
+
+    def test_command_flags_records_only_when_executed(self):
+        out = StringIO()
+
+        call_command(
+            'reconcile_uncollected_fees',
+            '--mark-uncollected',
+            '--execute',
+            stdout=out,
+        )
+
+        self.uncollected_revenue.refresh_from_db()
+        self.assertFalse(self.uncollected_revenue.is_collected)

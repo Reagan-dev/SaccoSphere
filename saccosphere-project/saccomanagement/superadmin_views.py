@@ -23,7 +23,7 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsSuperAdmin
 from accounts.models import Sacco, User
-from billing.models import PlatformRevenue, MonthlySaccoInvoice
+from billing.models import InvoiceLineItem
 from payments.models import Transaction, MpesaTransaction
 from saccomembership.models import Membership
 
@@ -92,11 +92,14 @@ class SystemOverviewView(APIView):
             approved_date__gte=current_month_start,
         ).count()
 
-        # Platform revenue MTD
-        platform_revenue_mtd = PlatformRevenue.objects.filter(
-            recorded_at__gte=current_month_start,
+        # Platform revenue MTD -- sourced from InvoiceLineItem, the table
+        # real fee-recording actually writes to (payments/tasks.py,
+        # services/tasks.py). PlatformRevenue is not populated in
+        # production and must not be used here.
+        platform_revenue_mtd = InvoiceLineItem.objects.filter(
+            created_at__gte=current_month_start,
         ).aggregate(
-            total=Coalesce(Sum('amount'), Value(ZERO))
+            total=Coalesce(Sum('platform_fee'), Value(ZERO))
         )['total']
 
         # All systems operational
@@ -141,22 +144,18 @@ class PlatformRevenueChartView(APIView):
             month_start = (now.replace(day=1) - timedelta(days=32 * i)).replace(day=1)
             month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(seconds=1)
 
-            # SaaS fees from subscriptions
-            saas_fees = PlatformRevenue.objects.filter(
-                revenue_type=PlatformRevenue.RevenueType.SUBSCRIPTION,
-                recorded_at__gte=month_start,
-                recorded_at__lte=month_end,
-            ).aggregate(
-                total=Coalesce(Sum('amount'), Value(ZERO))
-            )['total']
+            # SaaS fees from subscriptions -- SACCO subscription billing is
+            # not active yet (see billing.models.SaccoSubscription), so
+            # there is no source of real subscription revenue to sum.
+            saas_fees = ZERO
 
-            # Transaction fees
-            transaction_fees = PlatformRevenue.objects.filter(
-                revenue_type=PlatformRevenue.RevenueType.TRANSACTION_FEE,
-                recorded_at__gte=month_start,
-                recorded_at__lte=month_end,
+            # Transaction fees, sourced from InvoiceLineItem (see comment
+            # in SystemOverviewView.get for why PlatformRevenue isn't used).
+            transaction_fees = InvoiceLineItem.objects.filter(
+                created_at__gte=month_start,
+                created_at__lte=month_end,
             ).aggregate(
-                total=Coalesce(Sum('amount'), Value(ZERO))
+                total=Coalesce(Sum('platform_fee'), Value(ZERO))
             )['total']
 
             total_mrr = saas_fees + transaction_fees
@@ -189,15 +188,15 @@ class TopSaccosView(APIView):
 
         saccos = Sacco.objects.filter(is_active=True).annotate(
             member_count=Count(
-                'saccomembership',
-                filter=Q(saccomembership__status=Membership.Status.APPROVED),
+                'membership',
+                filter=Q(membership__status=Membership.Status.APPROVED),
             ),
             txn_volume_this_month=Coalesce(
                 Sum(
-                    'saccomembership__user__transactions__amount',
+                    'membership__user__transaction__amount',
                     filter=Q(
-                        saccomembership__user__transactions__status=Transaction.Status.COMPLETED,
-                        saccomembership__user__transactions__created_at__gte=current_month_start,
+                        membership__user__transaction__status=Transaction.Status.COMPLETED,
+                        membership__user__transaction__created_at__gte=current_month_start,
                     ),
                 ),
                 Value(ZERO),
@@ -206,12 +205,14 @@ class TopSaccosView(APIView):
 
         top_saccos = []
         for sacco in saccos:
-            # Platform fee this month
-            platform_fee = PlatformRevenue.objects.filter(
+            # Platform fee this month, sourced from InvoiceLineItem (see
+            # comment in SystemOverviewView.get for why PlatformRevenue
+            # isn't used).
+            platform_fee = InvoiceLineItem.objects.filter(
                 sacco=sacco,
-                recorded_at__gte=current_month_start,
+                created_at__gte=current_month_start,
             ).aggregate(
-                total=Coalesce(Sum('amount'), Value(ZERO))
+                total=Coalesce(Sum('platform_fee'), Value(ZERO))
             )['total']
 
             # Health status
