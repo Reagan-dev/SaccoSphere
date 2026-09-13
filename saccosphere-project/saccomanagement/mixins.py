@@ -1,6 +1,7 @@
 from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.permissions import SAFE_METHODS
 
+from config.middleware import set_current_sacco_id
 from saccomanagement.models import Role
 
 
@@ -68,6 +69,7 @@ class SaccoScopedMixin:
             name=Role.SUPER_ADMIN, is_active=True,
         ).exists():
             self.request.current_sacco = None
+            set_current_sacco_id(None)
             return
 
         # Get all SACCO_ADMIN roles
@@ -93,6 +95,7 @@ class SaccoScopedMixin:
                     'You do not have access to this SACCO.'
                 )
             self.request.current_sacco = role.sacco
+            set_current_sacco_id(str(role.sacco.id))
             return
 
         # No header sent. Falling back to the admin's SACCO_ADMIN role is
@@ -115,6 +118,7 @@ class SaccoScopedMixin:
         role = admin_roles.first()
         if role:
             self.request.current_sacco = role.sacco
+            set_current_sacco_id(str(role.sacco.id))
             return
 
         # This should not be reached due to the admin_roles.exists() check

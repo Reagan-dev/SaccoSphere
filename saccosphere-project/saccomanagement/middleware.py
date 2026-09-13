@@ -3,6 +3,7 @@ import logging
 from django.http import JsonResponse
 from django.utils.deprecation import MiddlewareMixin
 
+from config.middleware import set_current_sacco_id
 from saccomanagement.models import Role
 
 
@@ -13,14 +14,17 @@ class SaccoContextMiddleware(MiddlewareMixin):
     """
     Multi-tenant SACCO context middleware.
 
-    Determines and validates the current SACCO context for authenticated users.
-    Enforces data isolation by setting request.current_sacco.
+    Determines and validates the current SACCO context for
+    authenticated users. Enforces data isolation by setting
+    request.current_sacco.
 
     Rules:
     - Unauthenticated: current_sacco = None
     - SUPER_ADMIN: current_sacco = None (sees all data)
-    - SACCO_ADMIN: current_sacco = Sacco from X-Sacco-ID header or first active role
-    - MEMBER: current_sacco = None (filtered by own memberships in views)
+    - SACCO_ADMIN: current_sacco = Sacco from X-Sacco-ID header or
+      first active role
+    - MEMBER: current_sacco = None (filtered by own memberships in
+      views)
 
     X-Sacco-ID header must match a SACCO_ADMIN role for that user.
     """
@@ -31,9 +35,20 @@ class SaccoContextMiddleware(MiddlewareMixin):
 
         Called for every request. Runs after authentication middleware.
         """
-        # Initialize as None
         request.current_sacco = None
+        try:
+            return self._resolve_sacco_context(request)
+        finally:
+            # Always refreshed here (to a real id or None), so a thread
+            # reused for a later request never sees a stale sacco_id in
+            # its logs.
+            set_current_sacco_id(
+                str(request.current_sacco.id)
+                if request.current_sacco
+                else None,
+            )
 
+    def _resolve_sacco_context(self, request):
         # Unauthenticated users get no SACCO context
         if not request.user or not request.user.is_authenticated:
             return None
