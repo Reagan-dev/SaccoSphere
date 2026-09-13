@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from ledger.engines.balance_calculator import get_balance_at_date
 from ledger.models import LedgerEntry
+from ledger.utils import SAVINGS_LEDGER_CATEGORIES
 
 
 ZERO = Decimal('0.00')
@@ -13,9 +14,13 @@ ZERO = Decimal('0.00')
 
 def build_statement(membership, from_date, to_date, requesting_user=None):
     """
-    Build a member financial statement for a SACCO and date range.
+    Build a member savings statement for a SACCO and date range.
 
-    The returned dictionary is ready for API serialization and PDF generation.
+    The returned dictionary is ready for API serialization and PDF
+    generation. Scoped to ``SAVINGS_LEDGER_CATEGORIES``, matching
+    ``get_balance_at_date`` - loan, fee, penalty and cash-dividend rows
+    are excluded so the opening/closing balance and the listed entries
+    stay internally consistent (closing == opening + credits - debits).
     """
     opening_balance = get_balance_at_date(
         membership,
@@ -23,6 +28,7 @@ def build_statement(membership, from_date, to_date, requesting_user=None):
     )
     entries = LedgerEntry.objects.filter(
         membership=membership,
+        category__in=SAVINGS_LEDGER_CATEGORIES,
         created_at__date__gte=from_date,
         created_at__date__lte=to_date,
     ).order_by('created_at').select_related('transaction')
@@ -53,7 +59,7 @@ def build_statement(membership, from_date, to_date, requesting_user=None):
         'entries': [_serialize_entry(entry) for entry in entries],
         'currency': 'KES',
     }
-    _record_statement_access(membership, requesting_user)
+    record_statement_access(membership, requesting_user)
     return statement
 
 
@@ -80,7 +86,14 @@ def _get_sacco_logo_url(membership):
         return None
 
 
-def _record_statement_access(membership, requesting_user=None):
+def record_statement_access(membership, requesting_user=None):
+    """Log an ODPC access record for one member-statement view.
+
+    Called both when a statement is freshly built and, by the view, when
+    a cached statement is served - a statement served from cache must be
+    logged too, since it is still a distinct access to the member's
+    personal financial data.
+    """
     try:
         from saccomanagement import create_data_consent_log
         from saccomanagement.odpc_logging import ConsentLogWriteError

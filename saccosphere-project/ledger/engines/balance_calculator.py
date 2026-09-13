@@ -12,11 +12,23 @@ ZERO = Decimal('0.00')
 
 def get_running_balance(membership, as_of_date=None):
     """
-    Calculate a member's ledger balance up to a given date.
+    Calculate a member's savings balance up to a given date.
 
-    LedgerEntry is the source of truth for this calculation, not Saving.amount.
+    LedgerEntry is the source of truth for this calculation, not
+    Saving.amount. Scoped to ``ledger.utils.SAVINGS_LEDGER_CATEGORIES`` -
+    loan, fee, penalty and cash-dividend rows share the same
+    membership-level ledger but must not be netted against savings, or a
+    member with an active loan would see their savings balance reduced
+    by their loan principal. Imported locally to avoid a circular import
+    with ``ledger.utils`` (which imports ``generate_reference`` from this
+    module).
     """
-    queryset = LedgerEntry.objects.filter(membership=membership)
+    from ledger.utils import SAVINGS_LEDGER_CATEGORIES
+
+    queryset = LedgerEntry.objects.filter(
+        membership=membership,
+        category__in=SAVINGS_LEDGER_CATEGORIES,
+    )
     if as_of_date:
         queryset = queryset.filter(created_at__date__lte=as_of_date)
 
@@ -35,7 +47,7 @@ def get_running_balance(membership, as_of_date=None):
 
 
 def get_balance_at_date(membership, date):
-    """Return a member's ledger balance at a specific date."""
+    """Return a member's savings balance at a specific date."""
     return get_running_balance(membership, as_of_date=date)
 
 
