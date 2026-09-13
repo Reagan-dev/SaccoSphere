@@ -34,7 +34,11 @@ from config.response import StandardResponseMixin
 from django.db import IntegrityError, transaction
 from saccomanagement.audit_logger import log_audit
 from saccomanagement.models import DataConsentLog
-from saccomanagement.odpc_logging import DataAccessMixin
+from saccomanagement.odpc_logging import (
+    ConsentLogWriteError,
+    DataAccessMixin,
+    create_data_consent_log,
+)
 
 from .integrations.iprs_client import IPRSClient, IPRSError
 
@@ -1253,6 +1257,7 @@ class OTPResendView(APIView):
 class PasswordResetRequestView(APIView):
     """Request password reset via OTP."""
     permission_classes = [AllowAny]
+    throttle_classes = [OTPSendThrottle, OTPSendIPThrottle]
 
     @swagger_auto_schema(
         operation_summary='Request password reset',
@@ -1323,6 +1328,7 @@ class PasswordResetRequestView(APIView):
 class PasswordResetConfirmView(APIView):
     """Verify OTP and return a short-lived password reset token."""
     permission_classes = [AllowAny]
+    throttle_classes = [OTPVerifyThrottle]
 
     @swagger_auto_schema(
         operation_summary='Verify OTP for password reset',
@@ -1778,6 +1784,22 @@ class KYCDocumentServeView(APIView):
                 },
                 request=request,
             )
+
+            # ODPC data-access log: a staff member viewing another
+            # member's raw ID/passport imagery, not a member viewing
+            # their own upload. Best-effort - a write failure must not
+            # block a document the viewer is otherwise authorized to see.
+            if not is_self_access:
+                try:
+                    create_data_consent_log(
+                        kyc.user,
+                        request.user,
+                        'KYC_DOCUMENT',
+                        f'Viewed {document_field}',
+                        request,
+                    )
+                except ConsentLogWriteError:
+                    pass
 
             # Serve the file
             return FileResponse(

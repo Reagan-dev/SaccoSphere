@@ -6,6 +6,14 @@ from django.db import models
 
 
 class SystemAuditLog(models.Model):
+    """Append-only system audit trail.
+
+    Rows must never be updated or deleted once written - see
+    save()/delete() below. Admin-level protection (NoChangeAdminMixin) is
+    not sufficient on its own since it only covers the Django Admin UI,
+    not application code.
+    """
+
     id = models.UUIDField(
         primary_key=True,
         default=uuid4,
@@ -32,6 +40,16 @@ class SystemAuditLog(models.Model):
     def __str__(self):
         actor = self.user.email if self.user else 'System'
         return f'{actor} {self.action} {self.resource_type}'
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise PermissionError(
+                'SystemAuditLog is append-only. Never update.'
+            )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise PermissionError('SystemAuditLog is append-only. Never delete.')
 
 
 class DataConsentLog(models.Model):

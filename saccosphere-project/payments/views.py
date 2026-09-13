@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 from datetime import timedelta
@@ -123,6 +124,19 @@ def _get_stk_callback_path():
     if token:
         return f'/api/v1/payments/callback/mpesa/stk/{token}/'
     return '/api/v1/payments/callback/mpesa/stk/'
+
+
+def _is_valid_callback_token(callback_token, expected_token):
+    """Constant-time check of the callback path token against the
+    configured secret.
+
+    Plain ``!=`` short-circuits on the first mismatched byte, leaking
+    timing information about how much of the token an attacker guessed
+    correctly. ``hmac.compare_digest`` compares in constant time instead.
+    """
+    return hmac.compare_digest(
+        callback_token.encode(), expected_token.encode(),
+    )
 
 
 def _earlier_delivery_already_terminal(
@@ -1114,7 +1128,9 @@ class MPesaSTKCallbackView(APIView):
             # Validate callback token
             from django.conf import settings
             expected_token = getattr(settings, 'MPESA_CALLBACK_TOKEN', '')
-            if expected_token and callback_token != expected_token:
+            if expected_token and not _is_valid_callback_token(
+                callback_token, expected_token,
+            ):
                 logger.warning(
                     'M-Pesa STK callback rejected: invalid token. '
                     'Provided: %s, Expected: %s',
@@ -1521,7 +1537,9 @@ class B2CCallbackView(APIView):
             # Validate callback token
             from django.conf import settings
             expected_token = getattr(settings, 'MPESA_CALLBACK_TOKEN', '')
-            if expected_token and callback_token != expected_token:
+            if expected_token and not _is_valid_callback_token(
+                callback_token, expected_token,
+            ):
                 logger.warning(
                     'M-Pesa B2C callback rejected: invalid token. '
                     'Provided: %s, Expected: %s',

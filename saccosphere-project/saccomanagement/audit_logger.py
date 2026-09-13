@@ -1,6 +1,6 @@
 import logging
 
-from config.utils import get_client_ip
+from config.utils import emit_metric, get_client_ip
 
 from .models import SystemAuditLog
 
@@ -19,6 +19,12 @@ def log_audit(
 ):
     """
     Create a SystemAuditLog entry without crashing calling code.
+
+    A failure to write is not swallowed silently: it is logged at ERROR
+    and counted via emit_metric so a lost audit record is observable
+    (alertable) rather than indistinguishable from a successful write.
+    Callers still get None back, since audit-logging failures must never
+    block the primary operation they are attached to.
     """
     try:
         ip_address = None
@@ -40,9 +46,16 @@ def log_audit(
         )
     except Exception:
         logger.exception(
-            'Failed to create audit log for resource_type=%s resource_id=%s.',
+            'AUDIT_LOG_WRITE_FAILED: could not persist SystemAuditLog for '
+            'resource_type=%s resource_id=%s action=%s.',
             resource_type,
             resource_id,
+            action,
+        )
+        emit_metric(
+            'system_audit_log_write_failure',
+            resource_type=resource_type,
+            action=action,
         )
         return None
 
