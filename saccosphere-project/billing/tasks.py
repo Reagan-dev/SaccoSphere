@@ -7,6 +7,7 @@ from pathlib import Path
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import EmailMessage, mail_admins
+from django.db import DatabaseError, InterfaceError, OperationalError
 from django.utils import timezone
 
 from accounts.models import Sacco
@@ -17,21 +18,32 @@ from billing.services import (
     previous_month_period,
     send_invoice_to_sacco,
 )
+from health.models import JobHeartbeat
 
 
 logger = logging.getLogger('saccosphere.billing')
 
+TRANSIENT_ERRORS = (DatabaseError, InterfaceError, OperationalError)
 
-@shared_task(name='billing.generate_monthly_invoices')
-def generate_monthly_invoices():
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='billing.generate_monthly_invoices',
+)
+def generate_monthly_invoices(self):
     """
     Generate and send invoices for the previous month.
 
     Runs at 00:00 on the 1st of every month in the configured Django timezone,
-    Africa/Nairobi.
+    Africa/Nairobi. A per-SACCO failure is isolated and reported in the
+    completion summary; a transient database error around the whole run
+    retries the task with exponential backoff.
     """
     from billing.invoice_generator import InvoiceGenerator
     from billing.pdf_generator import InvoicePDFGenerator
+    from config.utils import emit_metric
 
     today = timezone.localdate()
     first_of_current_month = today.replace(day=1)
@@ -46,40 +58,102 @@ def generate_monthly_invoices():
 
     generator = InvoiceGenerator()
     pdf_generator = InvoicePDFGenerator()
+    generated_count = 0
+    failures = []
 
-    for sacco in Sacco.objects.filter(is_active=True):
-        try:
-            invoice = generator.generate(sacco, billing_month)
-            if invoice is None:
+    try:
+        for sacco in Sacco.objects.filter(is_active=True):
+            try:
+                invoice = generator.generate(sacco, billing_month)
+                if invoice is None:
+                    logger.info(
+                        'No transactions for SACCO %s -- skipping',
+                        sacco.name,
+                    )
+                    continue
+
+                pdf_bytes = pdf_generator.generate(invoice)
+                pdf_generator.save(invoice, pdf_bytes)
+                send_invoice_email.delay(str(invoice.id))
+                generated_count += 1
+                emit_metric(
+                    'billing_invoice_generated',
+                    sacco_id=str(sacco.id),
+                    invoice_number=invoice.invoice_number,
+                    amount=str(invoice.total_amount),
+                )
+
                 logger.info(
-                    'No transactions for SACCO %s -- skipping',
+                    'Invoice %s generated for %s -- KES %s',
+                    invoice.invoice_number,
                     sacco.name,
+                    invoice.total_amount,
+                )
+            except Exception as exc:
+                failures.append({
+                    'sacco_id': str(sacco.id),
+                    'sacco_name': sacco.name,
+                    'error': str(exc),
+                })
+                logger.exception(
+                    'Failed to generate invoice for SACCO %s: %s',
+                    sacco.name,
+                    exc,
                 )
                 continue
 
-            pdf_bytes = pdf_generator.generate(invoice)
-            pdf_generator.save(invoice, pdf_bytes)
-            send_invoice_email.delay(str(invoice.id))
-
-            logger.info(
-                'Invoice %s generated for %s -- KES %s',
-                invoice.invoice_number,
-                sacco.name,
-                invoice.total_amount,
+        if failures:
+            _notify_platform_admins_of_fee_report_failures(
+                failures=failures,
+                period_start=billing_month,
+                period_end=billing_month,
             )
-        except Exception as exc:
+
+        JobHeartbeat.record(
+            'generate_monthly_invoices',
+            status=(
+                JobHeartbeat.Status.ERROR if failures
+                else JobHeartbeat.Status.OK
+            ),
+            detail={
+                'billing_month': str(billing_month),
+                'invoices_generated': generated_count,
+                'failures': len(failures),
+            },
+        )
+
+        update_overdue_invoices.delay()
+    except TRANSIENT_ERRORS as exc:
+        if self.request.retries >= self.max_retries:
             logger.exception(
-                'Failed to generate invoice for SACCO %s: %s',
-                sacco.name,
-                exc,
+                'Monthly invoice generation exhausted transient retries '
+                'for billing_month=%s.',
+                billing_month,
             )
-            continue
+            JobHeartbeat.record(
+                'generate_monthly_invoices',
+                status=JobHeartbeat.Status.ERROR,
+                detail={'billing_month': str(billing_month), 'error': str(exc)},
+            )
+            raise
 
-    update_overdue_invoices.delay()
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'Monthly invoice generation hit a transient error. '
+            'Retrying in %s seconds.',
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
 
 
-@shared_task(name='billing.send_invoice_email')
-def send_invoice_email(invoice_id: str):
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='billing.send_invoice_email',
+)
+def send_invoice_email(self, invoice_id: str):
     """Send an invoice PDF to all SACCO admin email addresses."""
     from saccomanagement.models import Role
 
@@ -147,35 +221,88 @@ Questions: billing@saccosphere.co.ke
         admin_emails,
     )
 
-    with open(invoice.pdf_path, 'rb') as pdf:
-        email.attach(
-            f'{invoice.invoice_number}.pdf',
-            pdf.read(),
-            'application/pdf',
-        )
+    try:
+        with open(invoice.pdf_path, 'rb') as pdf:
+            email.attach(
+                f'{invoice.invoice_number}.pdf',
+                pdf.read(),
+                'application/pdf',
+            )
 
-    email.send()
+        email.send()
+    except Exception as exc:
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'Invoice email failed for invoice_id=%s. Retrying in %s '
+            'seconds.',
+            invoice.id,
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
 
     invoice.status = 'sent'
     invoice.sent_at = timezone.now()
     invoice.save(update_fields=['status', 'sent_at'])
 
+    from config.utils import emit_metric
 
-@shared_task(name='billing.update_overdue_invoices')
-def update_overdue_invoices():
-    """Mark invoices as overdue if past due date and unpaid."""
-    overdue = Invoice.objects.filter(
-        status='sent',
-        due_date__lt=timezone.localdate(),
+    emit_metric(
+        'billing_invoice_sent',
+        sacco_id=str(invoice.sacco_id),
+        invoice_number=invoice.invoice_number,
     )
-    count = overdue.update(status='overdue')
 
-    if count:
-        logger.warning('%d invoices marked overdue', count)
-        notify_superadmin.delay(
-            f'{count} Overdue Invoices',
-            'Check billing dashboard for overdue SACCO invoices.',
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='billing.update_overdue_invoices',
+)
+def update_overdue_invoices(self):
+    """Mark invoices as overdue if past due date and unpaid."""
+    from config.utils import emit_metric
+
+    try:
+        overdue = Invoice.objects.filter(
+            status='sent',
+            due_date__lt=timezone.localdate(),
         )
+        count = overdue.update(status='overdue')
+
+        if count:
+            logger.warning('%d invoices marked overdue', count)
+            emit_metric('billing_invoices_marked_overdue', count=count)
+            notify_superadmin.delay(
+                f'{count} Overdue Invoices',
+                'Check billing dashboard for overdue SACCO invoices.',
+            )
+
+        JobHeartbeat.record(
+            'update_overdue_invoices',
+            detail={'invoices_marked_overdue': count},
+        )
+    except TRANSIENT_ERRORS as exc:
+        if self.request.retries >= self.max_retries:
+            logger.exception(
+                'Overdue-invoice sweep exhausted transient retries.',
+            )
+            JobHeartbeat.record(
+                'update_overdue_invoices',
+                status=JobHeartbeat.Status.ERROR,
+                detail={'error': str(exc)},
+            )
+            raise
+
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'Overdue-invoice sweep hit a transient error. Retrying in '
+            '%s seconds.',
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
 
 
 @shared_task(name='billing.notify_superadmin')
@@ -184,53 +311,108 @@ def notify_superadmin(subject: str, message: str):
     mail_admins(subject=subject, message=message, fail_silently=True)
 
 
-@shared_task(name='billing.suspend_overdue_saccos')
-def suspend_overdue_saccos():
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='billing.suspend_overdue_saccos',
+)
+def suspend_overdue_saccos(self):
     """Suspend SACCO admin writes for invoices overdue beyond grace period."""
-    today = timezone.localdate()
-    cutoff = today - timedelta(days=8)
-    overdue_invoices = Invoice.objects.filter(
-        status='overdue',
-        due_date__lte=cutoff,
-    ).select_related('sacco')
+    from config.utils import emit_metric
+    from saccomanagement.audit_logger import log_audit
 
-    suspended_count = 0
-    for invoice in overdue_invoices:
-        sacco = invoice.sacco
-        if sacco.is_billing_suspended:
-            continue
+    try:
+        today = timezone.localdate()
+        cutoff = today - timedelta(days=8)
+        overdue_invoices = Invoice.objects.filter(
+            status='overdue',
+            due_date__lte=cutoff,
+        ).select_related('sacco')
 
-        sacco.is_billing_suspended = True
-        sacco.suspended_at = timezone.now()
-        sacco.suspension_reason = (
-            f'Invoice {invoice.invoice_number} overdue by '
-            f'{(today - invoice.due_date).days} days'
+        suspended_count = 0
+        for invoice in overdue_invoices:
+            sacco = invoice.sacco
+            if sacco.is_billing_suspended:
+                continue
+
+            sacco.is_billing_suspended = True
+            sacco.suspended_at = timezone.now()
+            sacco.suspension_reason = (
+                f'Invoice {invoice.invoice_number} overdue by '
+                f'{(today - invoice.due_date).days} days'
+            )
+            sacco.save(
+                update_fields=[
+                    'is_billing_suspended',
+                    'suspended_at',
+                    'suspension_reason',
+                    'updated_at',
+                ],
+            )
+
+            invoice.status = 'suspended'
+            invoice.save(update_fields=['status', 'updated_at'])
+            send_suspension_notice.delay(str(sacco.id), str(invoice.id))
+            emit_metric(
+                'billing_sacco_suspended',
+                sacco_id=str(sacco.id),
+                invoice_number=invoice.invoice_number,
+            )
+            log_audit(
+                None,
+                'SACCO_BILLING_SUSPENDED',
+                'Sacco',
+                sacco.id,
+                new_values={
+                    'invoice_id': str(invoice.id),
+                    'invoice_number': invoice.invoice_number,
+                    'suspension_reason': sacco.suspension_reason,
+                },
+            )
+            suspended_count += 1
+
+        if suspended_count:
+            logger.warning(
+                '%d SACCOs suspended for overdue billing',
+                suspended_count,
+            )
+
+        JobHeartbeat.record(
+            'suspend_overdue_saccos',
+            detail={'saccos_suspended': suspended_count},
         )
-        sacco.save(
-            update_fields=[
-                'is_billing_suspended',
-                'suspended_at',
-                'suspension_reason',
-                'updated_at',
-            ],
-        )
 
-        invoice.status = 'suspended'
-        invoice.save(update_fields=['status', 'updated_at'])
-        send_suspension_notice.delay(str(sacco.id), str(invoice.id))
-        suspended_count += 1
+        return suspended_count
+    except TRANSIENT_ERRORS as exc:
+        if self.request.retries >= self.max_retries:
+            logger.exception(
+                'Billing suspension sweep exhausted transient retries.',
+            )
+            JobHeartbeat.record(
+                'suspend_overdue_saccos',
+                status=JobHeartbeat.Status.ERROR,
+                detail={'error': str(exc)},
+            )
+            raise
 
-    if suspended_count:
+        countdown = 60 * 2 ** self.request.retries
         logger.warning(
-            '%d SACCOs suspended for overdue billing',
-            suspended_count,
+            'Billing suspension sweep hit a transient error. Retrying '
+            'in %s seconds.',
+            countdown,
+            exc_info=True,
         )
+        raise self.retry(exc=exc, countdown=countdown)
 
-    return suspended_count
 
-
-@shared_task(name='billing.send_suspension_notice')
-def send_suspension_notice(sacco_id: str, invoice_id: str):
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='billing.send_suspension_notice',
+)
+def send_suspension_notice(self, sacco_id: str, invoice_id: str):
     """Notify SACCO admins that billing suspension has been applied."""
     sacco = Sacco.objects.get(id=sacco_id)
     invoice = Invoice.objects.get(id=invoice_id)
@@ -248,16 +430,32 @@ def send_suspension_notice(sacco_id: str, invoice_id: str):
         f'date of {invoice.due_date:%d %B %Y}.\n\n'
         'Please pay the outstanding invoice to restore full admin access.\n'
     )
-    EmailMessage(
-        subject,
-        body,
-        settings.DEFAULT_FROM_EMAIL,
-        admin_emails,
-    ).send()
+    try:
+        EmailMessage(
+            subject,
+            body,
+            settings.DEFAULT_FROM_EMAIL,
+            admin_emails,
+        ).send()
+    except Exception as exc:
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'Suspension notice failed for sacco_id=%s. Retrying in %s '
+            'seconds.',
+            sacco_id,
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
 
 
-@shared_task(name='billing.send_payment_received_notice')
-def send_payment_received_notice(sacco_id: str, invoice_id: str):
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='billing.send_payment_received_notice',
+)
+def send_payment_received_notice(self, sacco_id: str, invoice_id: str):
     """Notify SACCO admins that payment was received and access restored."""
     sacco = Sacco.objects.get(id=sacco_id)
     invoice = Invoice.objects.get(id=invoice_id)
@@ -275,12 +473,23 @@ def send_payment_received_notice(sacco_id: str, invoice_id: str):
         'SACCO admin portal access has been restored.\n\n'
         'Thank you for using SaccoSphere.\n'
     )
-    EmailMessage(
-        subject,
-        body,
-        settings.DEFAULT_FROM_EMAIL,
-        admin_emails,
-    ).send()
+    try:
+        EmailMessage(
+            subject,
+            body,
+            settings.DEFAULT_FROM_EMAIL,
+            admin_emails,
+        ).send()
+    except Exception as exc:
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'Payment-received notice failed for sacco_id=%s. Retrying '
+            'in %s seconds.',
+            sacco_id,
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
 
 
 def _get_sacco_admin_emails(sacco):

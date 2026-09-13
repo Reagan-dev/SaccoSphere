@@ -33,6 +33,8 @@ from billing.serializers import (
 )
 from billing.services import send_invoice_to_sacco
 from billing.tasks import send_payment_received_notice
+from config.pagination import FinancialPagination
+from saccomanagement.audit_logger import log_audit
 from saccomanagement.models import Role
 
 
@@ -144,11 +146,17 @@ class InvoiceAccessMixin:
 
 
 class InvoiceListView(InvoiceAccessMixin, ListAPIView):
-    """List invoices visible to the current SACCO admin or super admin."""
+    """List invoices visible to the current SACCO admin or super admin.
+
+    Paginated by the project-standard ``FinancialPagination`` (matching
+    ``ledger/views.py``'s financial-record lists) - a super admin listing
+    every invoice across every SACCO no longer returns an unbounded
+    result set. Payload: ``{success, message, data: {count, results, ...}}``.
+    """
 
     serializer_class = InvoiceListSerializer
     permission_classes = [IsAuthenticated, IsSaccoAdminOrSuperAdmin]
-    pagination_class = None
+    pagination_class = FinancialPagination
 
     def get_queryset(self):
         queryset = Invoice.objects.select_related('sacco')
@@ -429,6 +437,11 @@ class InvoiceMarkPaidView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            old_values = {
+                'invoice_status': invoice.status,
+                'sacco_is_billing_suspended': invoice.sacco.is_billing_suspended,
+            }
+
             payment = InvoicePayment.objects.create(
                 invoice=invoice,
                 amount=amount,
@@ -462,6 +475,30 @@ class InvoiceMarkPaidView(APIView):
                 ],
             )
 
+        log_audit(
+            request.user,
+            'INVOICE_MARKED_PAID',
+            'Invoice',
+            invoice.id,
+            old_values=old_values,
+            new_values={
+                'invoice_status': invoice.status,
+                'payment_id': str(payment.id),
+                'payment_ref': payment_ref,
+                'payment_method': payment_method,
+                'amount': str(amount),
+                'sacco_is_billing_suspended': sacco.is_billing_suspended,
+            },
+            request=request,
+        )
+        from config.utils import emit_metric
+
+        emit_metric(
+            'billing_invoice_marked_paid',
+            sacco_id=str(sacco.id),
+            invoice_number=invoice.invoice_number,
+            amount=str(amount),
+        )
         self._send_payment_notice(sacco.id, invoice.id)
         return Response(
             {

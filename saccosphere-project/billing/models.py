@@ -204,6 +204,23 @@ class InvoiceLineItem(models.Model):
             models.Index(fields=['transaction_type', 'billing_month']),
         ]
 
+    def save(self, *args, **kwargs):
+        """Append-only: mirrors services.models.DisbursementAuditLog and
+        ledger.models.LedgerEntry. InvoiceGenerator.generate() marks a
+        line item invoiced via a bulk QuerySet.update(), which bypasses
+        save() entirely and is unaffected by this guard.
+        """
+        if not self._state.adding:
+            raise PermissionError(
+                'InvoiceLineItem is append-only. Never update.'
+            )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise PermissionError(
+            'InvoiceLineItem is append-only. Never delete.'
+        )
+
     def __str__(self):
         return (
             f'{self.transaction_type} | {self.sacco.name} | '

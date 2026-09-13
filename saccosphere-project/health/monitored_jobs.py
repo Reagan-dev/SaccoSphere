@@ -22,4 +22,16 @@ MONITORED_JOBS = {
     # fit a freshness gate designed for daily sweeps. Observability for
     # it is the heartbeat row + the savings_interest_accrual_run metric
     # + the per-SACCO SAVINGS_INTEREST_ACCRUED audit rows.
+    # config/settings/base.py: 'check-overdue-invoices', crontab 08:00 daily.
+    'update_overdue_invoices': timedelta(days=2),
+    # config/settings/base.py: 'suspend-overdue-saccos', crontab 09:00 daily.
+    'suspend_overdue_saccos': timedelta(days=2),
+    # NOTE: 'generate_monthly_invoices' (config/settings/base.py, monthly
+    # on the 1st) deliberately writes a JobHeartbeat but is NOT registered
+    # here, for the same reason as 'accrue_savings_interest' above -- a
+    # monthly cadence does not fit this daily-sweep freshness gate.
+    # Observability for it is the heartbeat row + the
+    # billing_invoice_generated/billing_invoice_sent metrics + the
+    # per-SACCO failure email from _notify_platform_admins_of_fee_report_
+    # failures when any SACCO's generation fails.
 }
