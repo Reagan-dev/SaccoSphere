@@ -982,6 +982,14 @@ class SaccoSettings(models.Model):
         help_text='Daily SMS send limit to control costs.',
     )
 
+    # Claimed atomically (under a row lock on this SaccoSettings row) by
+    # notifications.tasks.claim_recipients_within_daily_limit before a
+    # bulk SMS campaign sends anything, and refunded on a per-recipient
+    # send failure - see that function's docstring. This is the SACCO's
+    # daily SMS quota ledger; it is not a display/reporting field.
+    sms_sent_today_count = models.PositiveIntegerField(default=0)
+    sms_sent_today_date = models.DateField(null=True, blank=True)
+
     enforce_dividend_dual_control = models.BooleanField(
         default=True,
         help_text=(

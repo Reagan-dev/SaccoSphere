@@ -54,6 +54,10 @@ app.conf.beat_schedule = {
         'task': 'services.tasks.purge_expired_crb_raw_response',
         'schedule': crontab(minute=30, hour=2),  # Daily at 2:30 AM
     },
+    'purge-expired-notification-content': {
+        'task': 'notifications.tasks.purge_expired_notification_content',
+        'schedule': crontab(minute=45, hour=2),  # Daily at 2:45 AM
+    },
     'process-queued-erasure-requests': {
         'task': 'accounts.tasks.process_queued_erasure_requests',
         'schedule': crontab(minute='*/30'),  # Every 30 minutes
