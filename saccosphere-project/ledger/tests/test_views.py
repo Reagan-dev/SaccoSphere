@@ -8,6 +8,7 @@ fallback, and ODPC statement-access logging.
 from decimal import Decimal
 from unittest.mock import patch
 
+from django.test import SimpleTestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -16,6 +17,7 @@ from rest_framework.test import APIClient, APITestCase
 from accounts.models import Sacco, User
 from ledger.models import LedgerEntry
 from ledger.utils import create_ledger_entry
+from ledger.views import StatementPDFThrottle, StatementPDFView
 from saccomanagement.models import DataConsentLog
 from saccomembership.models import Membership
 
@@ -337,6 +339,26 @@ class StatementViewTest(_LedgerAPITestCase):
         ).count()
         self.assertEqual(after - before, 2)
 
+    @patch('config.utils.emit_metric')
+    def test_cache_miss_then_hit_emit_the_right_metrics(self, mock_emit):
+        first = self.client.get(self.url, self._params())
+        second = self.client.get(self.url, self._params())
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        mock_emit.assert_any_call('ledger_statement_cache_miss')
+        mock_emit.assert_any_call('ledger_statement_cache_hit')
+
+    @patch(
+        'config.utils.emit_metric', side_effect=RuntimeError('boom'),
+    )
+    def test_a_metrics_failure_does_not_break_the_statement_view(
+        self, _mock_emit,
+    ):
+        response = self.client.get(self.url, self._params())
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
 
 class StatementPDFViewTest(_LedgerAPITestCase):
     def setUp(self):
@@ -379,6 +401,23 @@ class StatementPDFViewTest(_LedgerAPITestCase):
             response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
+    @patch('config.utils.emit_metric')
+    @patch('ledger.views.generate_statement_pdf')
+    def test_pdf_failure_is_logged_and_emits_a_metric(
+        self, mock_generate, mock_emit,
+    ):
+        mock_generate.side_effect = OSError('libgobject not found')
+
+        with self.assertLogs('saccosphere.ledger', level='ERROR'):
+            response = self.client.get(self.url, self._params())
+
+        self.assertEqual(
+            response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        mock_emit.assert_any_call(
+            'ledger_statement_pdf_failed', reason='OSError',
+        )
+
     def test_pdf_generation_always_logs_access(self):
         before = DataConsentLog.objects.filter(
             user=self.user, data_type='MEMBER_STATEMENT',
@@ -393,3 +432,22 @@ class StatementPDFViewTest(_LedgerAPITestCase):
             user=self.user, data_type='MEMBER_STATEMENT',
         ).count()
         self.assertEqual(after - before, 2)
+
+
+class StatementPDFThrottleTest(SimpleTestCase):
+    """The PDF endpoint has its own, tighter rate limit.
+
+    A CPU-heavy synchronous WeasyPrint render should not share the
+    blanket 1000/hour user throttle - see StatementPDFThrottle's
+    docstring in ledger.views.
+    """
+
+    def test_view_uses_the_dedicated_throttle(self):
+        self.assertEqual(
+            StatementPDFView.throttle_classes, [StatementPDFThrottle],
+        )
+
+    def test_throttle_scope_has_a_configured_rate(self):
+        throttle = StatementPDFThrottle()
+        self.assertEqual(throttle.scope, 'ledger_statement_pdf')
+        self.assertEqual(throttle.get_rate(), '30/hour')

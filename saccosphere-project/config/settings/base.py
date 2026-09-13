@@ -207,7 +207,8 @@ REST_FRAMEWORK = {
         'anon': '100/hour',
         'user': '1000/hour',
         'google_oauth': '10/minute',
-    },    
+        'ledger_statement_pdf': '30/hour',
+    },
 }
 
 SIMPLE_JWT = {

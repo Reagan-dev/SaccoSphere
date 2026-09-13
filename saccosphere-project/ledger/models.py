@@ -4,6 +4,38 @@ from django.db import models
 
 
 class LedgerEntry(models.Model):
+    """One signed movement on a membership's ledger.
+
+    Terminology note: ``entry_type`` (DEBIT/CREDIT) and the balanced-book
+    conventions below make this look like double-entry bookkeeping, but
+    it is not a full general ledger - each economic event posts exactly
+    one row against the membership's own running balance, with no
+    offsetting contra-account entry. There is no global invariant that
+    total DEBITs equal total CREDITs across the table.
+
+    The convention each category follows:
+
+    * SAVING_DEPOSIT, LOAN_REPAYMENT, DIVIDEND_PAYOUT, SAVINGS_INTEREST,
+      OPENING_BALANCE: CREDIT - money moving toward the member.
+    * SAVING_WITHDRAWAL, LOAN_DISBURSEMENT, FEE, PENALTY, DIVIDEND:
+      DEBIT - money moving away from the member's ledger balance (a loan
+      disbursement is a DEBIT here because it is the SACCO paying the
+      member, the mirror image of a deposit, not because the member owes
+      anything on this row).
+    * ADJUSTMENT: either direction, case by case - a manual correction
+      modelled as a new offsetting entry (see ``save()`` below).
+
+    ``ledger.utils.SAVINGS_LEDGER_CATEGORIES`` further narrows this to
+    the categories that make up a member's *savings* balance specifically
+    (excluding loan/fee/dividend movements) - see that constant's
+    docstring and ``ledger.engines.balance_calculator`` before assuming
+    "the balance" means the same thing in every context that reads this
+    model. ``saccomanagement.sasra_reports`` separately re-derives a
+    SACCO-wide cash position from these same rows, grouped by category,
+    for regulatory reporting - a second, independent read of this table,
+    not a second ledger row.
+    """
+
     class EntryType(models.TextChoices):
         DEBIT = 'DEBIT', 'Debit'
         CREDIT = 'CREDIT', 'Credit'
@@ -54,6 +86,12 @@ class LedgerEntry(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['membership', 'created_at']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(amount__gt=0),
+                name='ledger_entry_amount_positive',
+            ),
         ]
 
     def save(self, *args, **kwargs):
