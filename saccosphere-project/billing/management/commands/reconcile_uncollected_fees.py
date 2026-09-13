@@ -78,7 +78,7 @@ class Command(BaseCommand):
                 uncollected_records.append(record)
                 sacco_name = record.sacco.name if record.sacco else 'Unknown'
                 sacco_breakdown[sacco_name] = sacco_breakdown.get(
-                    sacacco_name,
+                    sacco_name,
                     {'count': 0, 'amount': Decimal('0.00')},
                 )
                 sacco_breakdown[sacco_name]['count'] += 1
@@ -176,46 +176,3 @@ class Command(BaseCommand):
         # If metadata has gross_amount, it's a post-fix transaction (collected)
         # If metadata lacks gross_amount, it's a pre-fix transaction (uncollected)
         return not has_gross_amount
-
-
-# ============================================================
-# REVIEW --- READ THIS THEN DELETE FROM THIS LINE TO THE END
-# ============================================================
-#
-# Why this matters for accurate financial reporting to SACCOs:
-# Before the fee collection fix, PlatformRevenue recorded 2% fees as revenue
-# even though no actual cash was collected from members. This inflated reported
-# revenue and made SACCO invoices inaccurate. Flagging these records allows
-# you to filter them out of financial reports and understand the true cash
-# collected vs. revenue recognized.
-#
-# Exact commands to run, in order, to safely reconcile:
-# 1. python manage.py migrate billing  # Add is_collected field
-# 2. python manage.py reconcile_uncollected_fees --before "2024-07-08 12:00:00"
-#    (Use the datetime when you deployed the fee collection fix)
-# 3. Review the output to confirm the identified records are correct
-# 4. python manage.py reconcile_uncollected_fees --before "2024-07-08 12:00:00" \
-#    --mark-uncollected --execute
-#    (This actually flags the records)
-#
-# Risk of double-flagging if run twice:
-# The command checks if record.is_collected is already False before flagging,
-# so running it multiple times is safe. It will only flag records that are
-# currently True (unflagged).
-#
-# Decision about already-invoiced historical fees:
-# You have two options:
-# 1. Absorb the loss: Write off the uncollected fees as a one-time accounting
-#    adjustment. This is simpler but means the platform lost that revenue.
-# 2. Invoice SACCOs separately: Create supplementary invoices for the
-#    shortfall. This is more complex but recovers the revenue, though it may
-#    strain relationships with SACCOs who were underbilled.
-#
-# Recommendation: If the total uncollected amount is small (< KES 100,000),
-# absorb it as a one-time loss and improve controls going forward. If large,
-# consider a diplomatic approach with SACCOs explaining the technical issue
-# and offering a payment plan for the shortfall.
-#
-# ============================================================
-# END OF REVIEW --- DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
-# ============================================================

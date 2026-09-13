@@ -2,6 +2,7 @@
 
 import logging
 from datetime import timedelta
+from pathlib import Path
 
 from celery import shared_task
 from django.conf import settings
@@ -100,6 +101,24 @@ def send_invoice_email(invoice_id: str):
         )
         return
 
+    if not invoice.pdf_path or not Path(invoice.pdf_path).exists():
+        logger.error(
+            'Invoice PDF missing for invoice_id=%s (sacco=%s, path=%r); '
+            'skipping send.',
+            invoice.id,
+            invoice.sacco.name,
+            invoice.pdf_path,
+        )
+        notify_superadmin.delay(
+            f'Invoice {invoice.invoice_number} PDF missing',
+            (
+                f'Could not send invoice {invoice.invoice_number} for '
+                f'{invoice.sacco.name}: PDF file not found at '
+                f'{invoice.pdf_path!r}. Regenerate and resend manually.'
+            ),
+        )
+        return
+
     subject = (
         f'SaccoSphere Invoice {invoice.invoice_number} -- '
         f'KES {invoice.total_amount:,.2f} due by {invoice.due_date}'
@@ -119,7 +138,6 @@ Paybill: {settings.BILLING_PAYBILL}
 Account Number: {settings.BILLING_ACCOUNT_NUMBER}
 Account Name: {settings.BILLING_ACCOUNT_NAME}
 
-Note: Late payment attracts 2% interest per month.
 Questions: billing@saccosphere.co.ke
 """
     email = EmailMessage(

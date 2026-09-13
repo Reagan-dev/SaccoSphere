@@ -110,12 +110,14 @@ class BillingSuspensionMiddleware:
     """
 
     WRITE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
-    EXEMPT_PATHS = [
+    # Prefixes, not exact paths: a suspended SACCO admin must still be able
+    # to act on their own invoices (e.g. resend) in order to resolve the
+    # suspension, so every sub-path under /billing/invoices/ is exempt.
+    EXEMPT_PATH_PREFIXES = [
         '/api/v1/accounts/login/',
         '/api/v1/accounts/logout/',
         '/api/v1/accounts/token/refresh/',
         '/api/v1/billing/invoices/',
-        '/api/v1/billing/pay/',
     ]
 
     def __init__(self, get_response):
@@ -156,4 +158,6 @@ class BillingSuspensionMiddleware:
         ).exists()
 
     def _is_exempt_path(self, path):
-        return path in self.EXEMPT_PATHS
+        return any(
+            path.startswith(prefix) for prefix in self.EXEMPT_PATH_PREFIXES
+        )

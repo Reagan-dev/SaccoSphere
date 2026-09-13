@@ -412,6 +412,12 @@ class InvoiceMarkPaidView(APIView):
             )
             invoice = get_object_or_404(queryset, id=invoice_id)
 
+            if invoice.status == 'paid':
+                return Response(
+                    {'detail': 'This invoice is already marked as paid.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             if amount < invoice.total_amount:
                 return Response(
                     {

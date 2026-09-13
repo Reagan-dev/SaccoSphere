@@ -12,8 +12,43 @@ from rest_framework import status
 from accounts.models import User, Sacco
 from saccomembership.models import Membership
 from saccomanagement.models import ComplianceFlag, Role
-from billing.models import PlatformRevenue
+from billing.models import InvoiceLineItem, PlatformRevenue
 from payments.models import Transaction, MpesaTransaction, PaymentProvider
+
+
+def _create_invoice_line_item(sacco, platform_fee, transaction_type='deposit'):
+    """Build a minimal, valid InvoiceLineItem for dashboard revenue tests."""
+    provider, _ = PaymentProvider.objects.get_or_create(
+        name='M-Pesa',
+        defaults={
+            'provider_type': PaymentProvider.ProviderType.MPESA,
+            'is_active': True,
+        },
+    )
+    transaction = Transaction.objects.create(
+        provider=provider,
+        user=User.objects.create_user(
+            email=f'line-item-{uuid4().hex[:12]}@example.com',
+            password='testpass123',
+        ),
+        reference=f'DASH-TXN-{uuid4().hex[:12]}',
+        transaction_type=Transaction.TransactionType.DEPOSIT,
+        amount=Decimal('1000.00'),
+        status=Transaction.Status.COMPLETED,
+        sacco=sacco,
+    )
+    return InvoiceLineItem.objects.create(
+        sacco=sacco,
+        transaction=transaction,
+        transaction_type=transaction_type,
+        gross_amount=Decimal('1000.00') + platform_fee,
+        net_amount=Decimal('1000.00'),
+        platform_fee=platform_fee,
+        fee_model='percentage',
+        rate_applied='1.0% of deposit amount',
+        billing_month=timezone.localdate().replace(day=1),
+        invoiced=False,
+    )
 
 
 class SystemOverviewTest(APITestCase):
@@ -108,6 +143,28 @@ class SystemOverviewTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data['all_systems_operational'])
 
+    def test_platform_revenue_mtd_reflects_invoice_line_items(self):
+        """platform_revenue_mtd must read real fee data (InvoiceLineItem),
+        not the PlatformRevenue table nothing in production writes to."""
+        _create_invoice_line_item(self.sacco, Decimal('15.00'))
+        _create_invoice_line_item(self.sacco, Decimal('25.00'))
+        # A PlatformRevenue row must be ignored -- if the view still read
+        # from this table, it would report 999.00 instead of 40.00.
+        PlatformRevenue.objects.create(
+            sacco=self.sacco,
+            revenue_type=PlatformRevenue.RevenueType.TRANSACTION_FEE,
+            amount=Decimal('999.00'),
+        )
+
+        self.client.force_authenticate(user=self.super_admin)
+        response = self.client.get('/api/v1/management/superadmin/overview/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            Decimal(str(response.data['platform_revenue_mtd'])),
+            Decimal('40.00'),
+        )
+
 
 class PlatformRevenueChartTest(APITestCase):
     """Test PlatformRevenueChartView."""
@@ -145,6 +202,27 @@ class PlatformRevenueChartTest(APITestCase):
             self.assertIn('saas_fees', month_data)
             self.assertIn('transaction_fees', month_data)
             self.assertIn('total_mrr', month_data)
+
+    def test_current_month_transaction_fees_reflect_invoice_line_items(self):
+        """The current month's bucket must sum real InvoiceLineItem fees;
+        saas_fees stays 0 since subscription billing isn't active yet."""
+        sacco = Sacco.objects.create(
+            name='Chart SACCO', county='Nairobi', sector='EDUCATION',
+        )
+        _create_invoice_line_item(sacco, Decimal('30.00'))
+
+        self.client.force_authenticate(user=self.super_admin)
+        response = self.client.get('/api/v1/management/superadmin/revenue-chart/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        current_month = response.data[-1]
+        self.assertEqual(
+            Decimal(str(current_month['transaction_fees'])), Decimal('30.00'),
+        )
+        self.assertEqual(Decimal(str(current_month['saas_fees'])), Decimal('0.00'))
+        self.assertEqual(
+            Decimal(str(current_month['total_mrr'])), Decimal('30.00'),
+        )
 
 
 class TopSaccosTest(APITestCase):
@@ -236,6 +314,35 @@ class TopSaccosTest(APITestCase):
             if row['sacco_id'] == self.sacco1.id
         )
         self.assertEqual(flagged['health_status'], 'REVIEW')
+
+    def test_platform_fee_this_month_reflects_invoice_line_items(self):
+        """platform_fee_this_month must be scoped per-SACCO from
+        InvoiceLineItem -- sacco2's fee must never bleed into sacco1's row."""
+        _create_invoice_line_item(self.sacco1, Decimal('12.50'))
+        _create_invoice_line_item(self.sacco2, Decimal('99.00'))
+
+        self.client.force_authenticate(user=self.super_admin)
+        response = self.client.get('/api/v1/management/superadmin/top-saccos/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # sacco_id serializes as a string (UUIDField.to_representation),
+        # so compare against str(self.saccoN.id), not the UUID object.
+        sacco1_row = next(
+            row for row in response.data
+            if row['sacco_id'] == str(self.sacco1.id)
+        )
+        sacco2_row = next(
+            row for row in response.data
+            if row['sacco_id'] == str(self.sacco2.id)
+        )
+        self.assertEqual(
+            Decimal(str(sacco1_row['platform_fee_this_month'])),
+            Decimal('12.50'),
+        )
+        self.assertEqual(
+            Decimal(str(sacco2_row['platform_fee_this_month'])),
+            Decimal('99.00'),
+        )
 
 
 class PlatformAlertsTest(APITestCase):
