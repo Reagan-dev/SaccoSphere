@@ -76,6 +76,13 @@ class SACCOSwitcherView(ListAPIView):
 class ActivityFeedView(APIView):
     permission_classes = [IsAuthenticated]
 
+    # Cached once per member at the widest allowed limit and sliced per
+    # request, rather than once per (member, limit) pair - callers asking
+    # for different limits share one cache entry, which also means
+    # invalidating a member's feed (see dashboard/signals.py) only ever
+    # has to delete a single key.
+    MAX_CACHED_ITEMS = 100
+
     @swagger_auto_schema(
         operation_description='Get member activity feed entries.',
         responses={200: openapi.Response('OK'), 400: 'Bad Request', 401: 'Unauthorized'},
@@ -83,16 +90,16 @@ class ActivityFeedView(APIView):
     )
     def get(self, request):
         limit = self._get_limit(request)
-        cache_key = f'activity_feed:{request.user.id}:{limit}'
+        cache_key = f'activity_feed:{request.user.id}'
         activity = cache.get(cache_key)
         if activity is not None:
-            response = Response(activity, status=200)
+            response = Response(activity[:limit], status=200)
             response['X-Cache'] = 'HIT'
             return response
 
-        activity = get_activity_feed(request.user, limit=limit)
+        activity = get_activity_feed(request.user, limit=self.MAX_CACHED_ITEMS)
         cache.set(cache_key, activity, timeout=60)
-        return Response(activity, status=200)
+        return Response(activity[:limit], status=200)
 
     def _get_limit(self, request):
         raw_limit = request.query_params.get('limit', 20)
@@ -105,7 +112,7 @@ class ActivityFeedView(APIView):
         if limit < 1:
             raise ValidationError({'limit': 'Limit must be at least 1.'})
 
-        return min(limit, 100)
+        return min(limit, self.MAX_CACHED_ITEMS)
 
 
 class LoanComparisonView(APIView):

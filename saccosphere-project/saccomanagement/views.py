@@ -178,6 +178,7 @@ class AdminMemberDetailView(DataAccessMixin, SaccoScopedMixin, RetrieveAPIView):
             context['recent_transactions'] = list(
                 Transaction.objects.filter(
                     user=self.object.user,
+                    sacco=self.object.sacco,
                 ).order_by('-created_at')[:10]
             )
         return context
@@ -194,6 +195,11 @@ class AdminSaccoStatsView(SaccoScopedMixin, APIView):
     """Return aggregate dashboard stats for the current SACCO."""
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    # A multi-SACCO admin who omits X-Sacco-ID must not silently receive
+    # another SACCO's aggregate figures with no indication of the mix-up -
+    # force the explicit header instead of guessing (see mixins.py).
+    require_sacco_header = True
+    require_sacco_header_for_reads = True
 
     def get(self, request):
         """Return current SACCO stats without per-member queries."""
@@ -204,11 +210,22 @@ class AdminSaccoStatsView(SaccoScopedMixin, APIView):
         sacco = self.get_sacco_context()
         stats = self._build_stats(sacco)
         serializer = AdminSaccoStatsSerializer(stats)
+        log_audit(
+            request.user,
+            'VIEW',
+            'SaccoStats',
+            sacco.id,
+            request=request,
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def _build_stats(self, sacco):
         now = timezone.localdate()
-        savings = Saving.objects.filter(membership__sacco=sacco)
+        month_start = now.replace(day=1)
+        savings = Saving.objects.filter(
+            membership__sacco=sacco,
+            status=Saving.Status.ACTIVE,
+        )
         active_loans = Loan.objects.filter(
             membership__sacco=sacco,
             status=Loan.Status.ACTIVE,
@@ -216,6 +233,15 @@ class AdminSaccoStatsView(SaccoScopedMixin, APIView):
         defaulted_loans = Loan.objects.filter(
             membership__sacco=sacco,
             status=Loan.Status.DEFAULTED,
+        )
+        # Disbursed principal still owed to the SACCO. DEFAULTED loans are
+        # included since that money is still outstanding; PENDING/APPROVED
+        # loans are excluded even though they reserve outstanding_balance
+        # for capacity checks (see OUTSTANDING_LOAN_STATUSES) - nothing has
+        # actually gone out the door yet.
+        outstanding_loans = Loan.objects.filter(
+            membership__sacco=sacco,
+            status__in=[Loan.Status.ACTIVE, Loan.Status.DEFAULTED],
         )
         pending_loans = Loan.objects.filter(
             membership__sacco=sacco,
@@ -235,10 +261,12 @@ class AdminSaccoStatsView(SaccoScopedMixin, APIView):
         )
 
         recent_transactions = Transaction.objects.filter(
-            user__membership__sacco=sacco,
-        ).select_related('provider').distinct().order_by('-created_at')[:5]
+            sacco=sacco,
+        ).select_related('provider').order_by('-created_at')[:5]
 
         return {
+            'sacco_id': sacco.id,
+            'sacco_name': sacco.name,
             'total_members': Membership.objects.filter(
                 sacco=sacco,
                 status=Membership.Status.APPROVED,
@@ -260,7 +288,7 @@ class AdminSaccoStatsView(SaccoScopedMixin, APIView):
                     ),
                 )
             )['total'],
-            'total_loans_portfolio': active_loans.aggregate(
+            'total_loans_portfolio': outstanding_loans.aggregate(
                 total=Coalesce(
                     Sum('outstanding_balance'),
                     Value(ZERO),
@@ -274,12 +302,15 @@ class AdminSaccoStatsView(SaccoScopedMixin, APIView):
             'pending_loan_approvals': pending_loans.count(),
             'default_count': default_count,
             'default_rate': default_rate,
-            'monthly_contributions': savings.filter(
-                last_transaction_date__year=now.year,
-                last_transaction_date__month=now.month,
+            'monthly_contributions': Transaction.objects.filter(
+                sacco=sacco,
+                status=Transaction.Status.COMPLETED,
+                transaction_type=Transaction.TransactionType.DEPOSIT,
+                created_at__date__gte=month_start,
+                created_at__date__lte=now,
             ).aggregate(
                 total=Coalesce(
-                    Sum('total_contributions'),
+                    Sum('amount'),
                     Value(ZERO),
                     output_field=DecimalField(
                         max_digits=14,
