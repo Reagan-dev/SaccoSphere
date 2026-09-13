@@ -1,4 +1,5 @@
 from math import ceil
+import uuid
 
 from django.core.cache import cache
 from django.http import HttpResponse
@@ -16,13 +17,51 @@ from saccomembership.models import Membership
 
 from .engines.balance_calculator import get_running_balance
 from .engines.pdf_generator import generate_statement_pdf
-from .engines.statement_builder import build_statement
+from .engines.statement_builder import build_statement, record_statement_access
 from .models import LedgerEntry
 from .serializers import (
     BalanceSerializer,
     LedgerEntrySerializer,
     StatementSerializer,
 )
+
+
+def _parse_uuid_param(request, name):
+    """Parse a required UUID query param.
+
+    Raises a DRF ``ValidationError`` (400) on a missing or malformed
+    value, instead of letting a bad UUID reach the ORM and blow up as an
+    unhandled ``django.core.exceptions.ValidationError`` (500).
+    """
+    raw_value = request.query_params.get(name)
+    if not raw_value:
+        raise ValidationError({name: 'This query param is required.'})
+
+    try:
+        return uuid.UUID(raw_value)
+    except ValueError as exc:
+        raise ValidationError({name: 'Must be a valid UUID.'}) from exc
+
+
+def _parse_date_param(request, name, *, required):
+    """Parse a query param as a date.
+
+    Raises a DRF ``ValidationError`` (400) on a missing required value or
+    a malformed one, instead of letting a bad date string reach the ORM
+    and blow up as an unhandled ``django.core.exceptions.ValidationError``
+    (500). Returns ``None`` for an absent optional param.
+    """
+    raw_value = request.query_params.get(name)
+    if not raw_value:
+        if required:
+            raise ValidationError({name: 'This query param is required.'})
+        return None
+
+    value = parse_date(raw_value)
+    if value is None:
+        raise ValidationError({name: 'Use YYYY-MM-DD date format.'})
+
+    return value
 
 
 class LedgerEntryListView(ListAPIView):
@@ -42,11 +81,13 @@ class LedgerEntryListView(ListAPIView):
             'transaction',
         )
 
-        from_date = self.request.query_params.get('from_date')
+        from_date = _parse_date_param(
+            self.request, 'from_date', required=False,
+        )
         if from_date:
             queryset = queryset.filter(created_at__date__gte=from_date)
 
-        to_date = self.request.query_params.get('to_date')
+        to_date = _parse_date_param(self.request, 'to_date', required=False)
         if to_date:
             queryset = queryset.filter(created_at__date__lte=to_date)
 
@@ -57,9 +98,7 @@ class LedgerEntryListView(ListAPIView):
         return queryset.order_by('-created_at')
 
     def _get_membership(self):
-        sacco_id = self.request.query_params.get('sacco_id')
-        if not sacco_id:
-            raise ValidationError({'sacco_id': 'This query param is required.'})
+        sacco_id = _parse_uuid_param(self.request, 'sacco_id')
 
         try:
             return Membership.objects.select_related('sacco').get(
@@ -90,9 +129,7 @@ class BalanceView(APIView):
         return Response(serializer.data)
 
     def _get_membership(self, request):
-        sacco_id = request.query_params.get('sacco_id')
-        if not sacco_id:
-            raise ValidationError({'sacco_id': 'This query param is required.'})
+        sacco_id = _parse_uuid_param(request, 'sacco_id')
 
         try:
             return Membership.objects.select_related('sacco').get(
@@ -125,6 +162,12 @@ class StatementView(APIView):
                 requesting_user=request.user,
             )
             cache.set(cache_key, statement, timeout=300)
+        else:
+            # build_statement() logs the ODPC access record itself, but a
+            # cache hit skips build_statement() entirely - log the access
+            # explicitly here so every view of a statement is recorded,
+            # not just the first one within the cache window.
+            record_statement_access(membership, request.user)
 
         statement = statement.copy()
         statement['entries'], pagination = self._paginate_entries(
@@ -138,8 +181,8 @@ class StatementView(APIView):
         return Response(data)
 
     def _get_date_range(self, request):
-        from_date = self._parse_required_date(request, 'from_date')
-        to_date = self._parse_required_date(request, 'to_date')
+        from_date = _parse_date_param(request, 'from_date', required=True)
+        to_date = _parse_date_param(request, 'to_date', required=True)
 
         if from_date > to_date:
             raise ValidationError(
@@ -153,23 +196,8 @@ class StatementView(APIView):
 
         return from_date, to_date
 
-    def _parse_required_date(self, request, name):
-        raw_value = request.query_params.get(name)
-        if not raw_value:
-            raise ValidationError({name: 'This query param is required.'})
-
-        value = parse_date(raw_value)
-        if value is None:
-            raise ValidationError(
-                {name: 'Use YYYY-MM-DD date format.'}
-            )
-
-        return value
-
     def _get_membership(self, request):
-        sacco_id = request.query_params.get('sacco_id')
-        if not sacco_id:
-            raise ValidationError({'sacco_id': 'This query param is required.'})
+        sacco_id = _parse_uuid_param(request, 'sacco_id')
 
         try:
             return Membership.objects.select_related('user', 'sacco').get(
@@ -178,7 +206,9 @@ class StatementView(APIView):
                 status=Membership.Status.APPROVED,
             )
         except Membership.DoesNotExist as exc:
-            raise NotFound('No approved membership found for this SACCO.') from exc
+            raise NotFound(
+                'No approved membership found for this SACCO.'
+            ) from exc
 
     def _paginate_entries(self, entries, request):
         paginator = FinancialPagination()
@@ -234,5 +264,3 @@ class StatementPDFView(StatementView):
             f'attachment; filename="{filename}"'
         )
         return response
-
-

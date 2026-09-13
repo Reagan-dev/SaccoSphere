@@ -9,7 +9,20 @@ class LedgerEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = LedgerEntry
         fields = '__all__'
-        read_only_fields = fields
+        # DRF requires a list/tuple here, not the '__all__' string above -
+        # spelled out explicitly so this stays correct if fields change.
+        read_only_fields = (
+            'id',
+            'membership',
+            'entry_type',
+            'category',
+            'amount',
+            'reference',
+            'description',
+            'balance_after',
+            'transaction',
+            'created_at',
+        )
 
 
 class BalanceSerializer(serializers.Serializer):
