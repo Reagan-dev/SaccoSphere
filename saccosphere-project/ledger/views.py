@@ -1,3 +1,4 @@
+import logging
 from math import ceil
 import uuid
 
@@ -10,6 +11,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
 from config.pagination import FinancialPagination
@@ -24,6 +26,31 @@ from .serializers import (
     LedgerEntrySerializer,
     StatementSerializer,
 )
+
+
+logger = logging.getLogger('saccosphere.ledger')
+
+
+class StatementPDFThrottle(UserRateThrottle):
+    """Dedicated rate limit for the synchronous WeasyPrint PDF render.
+
+    Kept separate from the blanket ``user`` scope (1000/hour) because
+    rendering a statement to PDF is CPU-heavy and runs in the
+    request/response cycle - a member downloading their own statement a
+    few times an hour is normal; hundreds of times is not.
+    """
+
+    scope = 'ledger_statement_pdf'
+
+
+def _safe_emit_metric(event, **tags):
+    """Emit a metric without letting a metrics hiccup break the request."""
+    try:
+        from config.utils import emit_metric
+
+        emit_metric(event, **tags)
+    except Exception:
+        logger.exception('Failed to emit metric %s.', event)
 
 
 def _parse_uuid_param(request, name):
@@ -155,6 +182,7 @@ class StatementView(APIView):
         statement = cache.get(cache_key)
 
         if statement is None:
+            _safe_emit_metric('ledger_statement_cache_miss')
             statement = build_statement(
                 membership,
                 from_date,
@@ -163,6 +191,7 @@ class StatementView(APIView):
             )
             cache.set(cache_key, statement, timeout=300)
         else:
+            _safe_emit_metric('ledger_statement_cache_hit')
             # build_statement() logs the ODPC access record itself, but a
             # cache hit skips build_statement() entirely - log the access
             # explicitly here so every view of a statement is recorded,
@@ -237,6 +266,8 @@ class StatementView(APIView):
 class StatementPDFView(StatementView):
     """Return a PDF ledger statement for a SACCO membership."""
 
+    throttle_classes = [StatementPDFThrottle]
+
     def get(self, request):
         from_date, to_date = self._get_date_range(request)
         membership = self._get_membership(request)
@@ -249,7 +280,15 @@ class StatementPDFView(StatementView):
 
         try:
             pdf_bytes = generate_statement_pdf(statement)
-        except (ImportError, OSError):
+        except (ImportError, OSError) as exc:
+            logger.exception(
+                'Statement PDF generation unavailable for membership %s.',
+                membership.id,
+            )
+            _safe_emit_metric(
+                'ledger_statement_pdf_failed',
+                reason=type(exc).__name__,
+            )
             return Response(
                 {'message': 'PDF generation temporarily unavailable.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,

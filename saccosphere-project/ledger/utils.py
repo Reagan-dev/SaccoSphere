@@ -1,4 +1,5 @@
 from decimal import Decimal, ROUND_HALF_UP
+import logging
 
 from django.db import transaction as db_transaction
 from django.db.models import Sum
@@ -9,6 +10,8 @@ from .engines.balance_calculator import (
 )
 from .models import LedgerEntry
 
+
+logger = logging.getLogger('saccosphere.ledger')
 
 MONEY_QUANTIZER = Decimal('0.01')
 ZERO = Decimal('0.00')
@@ -61,11 +64,29 @@ def create_ledger_entry(
     write ``Saving.amount``. The membership's existing ledger rows are
     locked while the new running balance is computed and written, so
     concurrent writes for the same membership are serialized.
+
+    KNOWN GAP (tracked by ``ledger.tests.test_concurrency``): this only
+    serializes writers against rows that already exist. If a membership
+    has zero prior entries, ``SELECT ... FOR UPDATE`` locks nothing, so
+    two brand-new concurrent writes are not actually serialized against
+    each other, and each could compute ``balance_after`` without seeing
+    the other's row. This does not corrupt the true balance - every
+    reader recomputes it fresh from all committed rows (see
+    :func:`savings_ledger_balance`,
+    :func:`ledger.engines.balance_calculator.get_running_balance`) - but
+    the per-row ``balance_after`` snapshot on the second-committed entry
+    could then be wrong. Fixing this properly means locking a stable
+    resource (e.g. the ``Membership`` row) instead of the entries being
+    summed, which changes this function's lock target and needs a full
+    audit of every other place that locks ``Membership``/``Saving``
+    before it ships, to rule out a new deadlock.
     """
     amount = Decimal(str(amount)).quantize(
         MONEY_QUANTIZER,
         rounding=ROUND_HALF_UP,
     )
+    if amount <= ZERO:
+        raise ValueError('create_ledger_entry() amount must be positive.')
 
     with db_transaction.atomic():
         if reference is None:
@@ -99,7 +120,7 @@ def create_ledger_entry(
         else:
             balance_after = balance_before - amount
 
-        return LedgerEntry.objects.create(
+        entry = LedgerEntry.objects.create(
             membership=membership,
             entry_type=entry_type,
             category=category,
@@ -109,6 +130,12 @@ def create_ledger_entry(
             balance_after=balance_after,
             transaction=transaction,
         )
+        _safe_emit_metric(
+            'ledger_entry_created',
+            category=category,
+            entry_type=entry_type,
+        )
+        return entry
 
 
 def apply_ledger_entry(
@@ -241,3 +268,17 @@ def expected_savings_balance(membership):
 
 def _get_reference_prefix(category):
     return CATEGORY_PREFIXES.get(category, 'LED')
+
+
+def _safe_emit_metric(event, **tags):
+    """Emit a metric without letting a metrics hiccup break the caller.
+
+    create_ledger_entry() runs inside the money-moving atomic block, so
+    a logging/metrics failure here must never roll back a posted entry.
+    """
+    try:
+        from config.utils import emit_metric
+
+        emit_metric(event, **tags)
+    except Exception:
+        logger.exception('Failed to emit metric %s.', event)
