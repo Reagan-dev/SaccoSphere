@@ -269,7 +269,15 @@ BULK_SMS_SEND_THROTTLE_RATE = config(
 AT_API_KEY = config('AT_API_KEY', default='')
 AT_USERNAME = config('AT_USERNAME', default='sandbox')
 AT_ENVIRONMENT = config('AT_ENVIRONMENT', default='sandbox' if DEBUG else 'production')
-FCM_SERVER_KEY = config('FCM_SERVER_KEY', default='')
+
+# Firebase Cloud Messaging (HTTP v1 API). The legacy server-key API
+# (fcm.googleapis.com/fcm/send) Google decommissioned in 2024 is not used
+# here - v1 requires a service-account key exchanged for a short-lived
+# OAuth2 access token. FCM_CREDENTIALS_JSON holds the full service-account
+# JSON key as a single-line string (set as an env var; no filesystem key
+# file on Railway).
+FCM_PROJECT_ID = config('FCM_PROJECT_ID', default='')
+FCM_CREDENTIALS_JSON = config('FCM_CREDENTIALS_JSON', default='')
 
 # IPRS Configuration
 IPRS_API_KEY = config('IPRS_API_KEY', default='')
@@ -327,6 +335,26 @@ CRB_RAW_RESPONSE_RETENTION_DAYS = (
 _CALLBACK_RETENTION_DAYS = config('CALLBACK_RETENTION_DAYS', default='90')
 CALLBACK_RETENTION_DAYS = (
     int(_CALLBACK_RETENTION_DAYS) if _CALLBACK_RETENTION_DAYS else None
+)
+
+# Notification.title/message retention. These free-text fields can embed
+# PII/business data (loan amounts, KYC outcomes, SACCO names) and, like
+# Callback, accumulate on every operational event (a payment, a loan
+# decision, an alert), so - as with CALLBACK_RETENTION_DAYS - this
+# defaults ON rather than indefinite. 365 IS A PLACEHOLDER - there is no
+# retention period signed off by compliance/legal yet. CONFIRM THE REAL
+# NUMBER WITH THEM BEFORE GO-LIVE. Only title/message/action_url are
+# cleared; category, is_read, created_at, and the related_object_*
+# reference are kept so read/unread history and audit trails survive.
+# Set to None/unset to disable the purge entirely.
+_NOTIFICATION_CONTENT_RETENTION_DAYS = config(
+    'NOTIFICATION_CONTENT_RETENTION_DAYS',
+    default='365',
+)
+NOTIFICATION_CONTENT_RETENTION_DAYS = (
+    int(_NOTIFICATION_CONTENT_RETENTION_DAYS)
+    if _NOTIFICATION_CONTENT_RETENTION_DAYS
+    else None
 )
 
 # Metropol CRB Configuration

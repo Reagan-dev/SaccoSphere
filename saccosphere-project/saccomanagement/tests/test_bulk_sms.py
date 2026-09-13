@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.core.cache import cache
-from django.test import TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -359,6 +359,14 @@ class BulkSMSTests(TestCase):
             status=SMSCampaignRecipient.Status.SENT,
             sent_at=timezone.now(),
         )
+        # The daily allowance is tracked on SaccoSettings itself (claimed
+        # under a row lock - see claim_recipients_within_daily_limit), not
+        # derived by counting SENT rows, so this previous campaign's
+        # claim has to be reflected there too.
+        SaccoSettings.objects.filter(sacco=self.sacco).update(
+            sms_sent_today_count=1,
+            sms_sent_today_date=timezone.localdate(),
+        )
         campaign = self._campaign(status=SMSCampaign.Status.SENDING)
         member = self._membership(
             email='limited@example.com',
@@ -532,6 +540,107 @@ class BulkSMSTests(TestCase):
             audience_filter={'status': Membership.Status.APPROVED},
             status=status,
         )
+
+
+class BulkSMSDailyLimitConcurrencyTests(TransactionTestCase):
+    """
+    claim_recipients_within_daily_limit locks the SACCO's SaccoSettings
+    row so two campaigns for the same SACCO, processed by different
+    Celery workers at once, can't both read the same "already claimed
+    today" count and each believe they have the full daily allowance
+    left. A TransactionTestCase (not TestCase) is required here - only
+    it gives each worker thread its own real connection and commits, so
+    the row lock is genuinely contended instead of everything running
+    inside one already-open outer transaction.
+    """
+
+    def setUp(self):
+        self.sacco = Sacco.objects.create(
+            name='Concurrency SACCO',
+            registration_number='SMS-CC',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+        )
+        SaccoSettings.objects.create(sacco=self.sacco, sms_daily_limit=5)
+        self.admin = User.objects.create_user(
+            email='concurrency-admin@example.com',
+            password='secret',
+        )
+
+    def _campaign_with_recipients(self, campaign_index, recipient_count):
+        campaign = SMSCampaign.objects.create(
+            sacco=self.sacco,
+            created_by=self.admin,
+            message='Hello SACCO members.',
+            audience_filter={'status': Membership.Status.APPROVED},
+            status=SMSCampaign.Status.SENDING,
+        )
+        for member_index in range(recipient_count):
+            user = User.objects.create_user(
+                email=f'cc-{campaign_index}-{member_index}@example.com',
+                password='secret',
+                phone_number=f'25471100{campaign_index}{member_index:02d}',
+            )
+            membership = Membership.objects.create(
+                user=user,
+                sacco=self.sacco,
+                status=Membership.Status.APPROVED,
+                member_number=f'SMS-CC{campaign_index}{member_index}',
+            )
+            SMSCampaignRecipient.objects.create(
+                campaign=campaign,
+                membership=membership,
+                phone_number=user.phone_number,
+            )
+        campaign.total_recipients = recipient_count
+        campaign.save(update_fields=['total_recipients'])
+        return campaign
+
+    def test_concurrent_campaigns_do_not_jointly_exceed_daily_limit(self):
+        from django.db import connection
+
+        if connection.vendor == 'sqlite':
+            self.skipTest(
+                'SQLite select_for_update is a no-op; run on PostgreSQL.'
+            )
+
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        from notifications.tasks import send_bulk_sms_campaign_task
+
+        campaigns = [
+            self._campaign_with_recipients(campaign_index, 5)
+            for campaign_index in range(2)
+        ]
+        barrier = threading.Barrier(2)
+
+        def worker(campaign):
+            barrier.wait()
+            try:
+                with patch(
+                    'accounts.integrations.otp_service.ATSMSClient',
+                ) as client_mock:
+                    client_mock.return_value.send_sms.return_value = True
+                    return send_bulk_sms_campaign_task(str(campaign.id))
+            finally:
+                connection.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(worker, campaigns))
+
+        total_sent = SMSCampaignRecipient.objects.filter(
+            campaign__in=campaigns,
+            status=SMSCampaignRecipient.Status.SENT,
+        ).count()
+        total_limit_failed = SMSCampaignRecipient.objects.filter(
+            campaign__in=campaigns,
+            status=SMSCampaignRecipient.Status.FAILED,
+            error_message='daily SMS limit reached',
+        ).count()
+
+        self.assertEqual(total_sent, 5)
+        self.assertEqual(total_limit_failed, 5)
 
 
 class BulkSMSSendThrottleTests(TestCase):

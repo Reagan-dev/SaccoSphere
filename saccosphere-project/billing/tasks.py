@@ -214,12 +214,7 @@ Account Name: {settings.BILLING_ACCOUNT_NAME}
 
 Questions: billing@saccosphere.co.ke
 """
-    email = EmailMessage(
-        subject,
-        body,
-        settings.DEFAULT_FROM_EMAIL,
-        admin_emails,
-    )
+    email = _admin_email_message(subject, body, admin_emails)
 
     try:
         with open(invoice.pdf_path, 'rb') as pdf:
@@ -431,12 +426,7 @@ def send_suspension_notice(self, sacco_id: str, invoice_id: str):
         'Please pay the outstanding invoice to restore full admin access.\n'
     )
     try:
-        EmailMessage(
-            subject,
-            body,
-            settings.DEFAULT_FROM_EMAIL,
-            admin_emails,
-        ).send()
+        _admin_email_message(subject, body, admin_emails).send()
     except Exception as exc:
         countdown = 60 * 2 ** self.request.retries
         logger.warning(
@@ -474,12 +464,7 @@ def send_payment_received_notice(self, sacco_id: str, invoice_id: str):
         'Thank you for using SaccoSphere.\n'
     )
     try:
-        EmailMessage(
-            subject,
-            body,
-            settings.DEFAULT_FROM_EMAIL,
-            admin_emails,
-        ).send()
+        _admin_email_message(subject, body, admin_emails).send()
     except Exception as exc:
         countdown = 60 * 2 ** self.request.retries
         logger.warning(
@@ -503,6 +488,22 @@ def _get_sacco_admin_emails(sacco):
         )
         .exclude(user__email='')
         .values_list('user__email', flat=True)
+    )
+
+
+def _admin_email_message(subject, body, admin_emails):
+    """
+    Build an EmailMessage addressed to a SACCO's admin group without
+    exposing each admin's address to the others in a shared To: header.
+    Every real recipient goes in Bcc; To: carries a generic address
+    instead of being left empty, which some mail servers flag as spam.
+    """
+    return EmailMessage(
+        subject,
+        body,
+        settings.DEFAULT_FROM_EMAIL,
+        [settings.DEFAULT_FROM_EMAIL],
+        bcc=admin_emails,
     )
 
 

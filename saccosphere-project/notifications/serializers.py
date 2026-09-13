@@ -25,3 +25,12 @@ class DeviceTokenSerializer(serializers.ModelSerializer):
             'token',
             'platform',
         )
+        # DeviceTokenRegisterView.create() upserts on `token` via
+        # update_or_create() to reactivate an already-registered token
+        # (e.g. the same device re-sending its FCM token on app restart).
+        # The default ModelSerializer would add a UniqueValidator on this
+        # unique field that rejects that exact case with a 400 before the
+        # view ever runs - drop it so re-registration reaches the view.
+        extra_kwargs = {
+            'token': {'validators': []},
+        }

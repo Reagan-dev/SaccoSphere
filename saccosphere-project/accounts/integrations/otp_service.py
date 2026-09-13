@@ -1,13 +1,14 @@
 """Africa's Talking SMS service for general-purpose messaging.
 
-This module provides ATSMSClient for sending SMS messages outside of OTP flows,
-such as notifications, bulk SMS campaigns, and guarantor communications.
+This module provides ATSMSClient for sending SMS messages outside of OTP
+flows, such as notifications, bulk SMS campaigns, and guarantor
+communications.
 
-For OTP-specific send/verify/reset flows, use accounts.otp_backends.PhoneOTPBackend
-instead, which is integrated with the unified OTP delivery backend system.
+For OTP-specific send/verify/reset flows, use
+accounts.otp_backends.PhoneOTPBackend instead, which is integrated with the
+unified OTP delivery backend system.
 """
 import logging
-import re
 
 from django.conf import settings
 
@@ -20,9 +21,34 @@ logger = logging.getLogger('saccosphere.sms')
 
 
 class ATSMSError(Exception):
-    """Africa's Talking SMS service error."""
+    """Africa's Talking SMS service error.
 
-    pass
+    ``retryable`` tells callers whether a retry stands any chance of
+    succeeding. It defaults to True (network blips, timeouts) and is
+    overridden False on the subclasses below, which represent Africa's
+    Talking rejecting the message outright - retrying sends the exact same
+    request and gets the exact same rejection.
+    """
+
+    retryable = True
+
+
+class ATSMSInvalidRecipientError(ATSMSError):
+    """The recipient phone number was rejected by Africa's Talking."""
+
+    retryable = False
+
+
+class ATSMSInsufficientBalanceError(ATSMSError):
+    """The Africa's Talking account has insufficient balance."""
+
+    retryable = False
+
+
+class ATSMSRateLimitError(ATSMSError):
+    """Africa's Talking is throttling this account."""
+
+    retryable = True
 
 
 class ATSMSClient:
@@ -43,6 +69,16 @@ class ATSMSClient:
             'Expires in 5 minutes.'
         ),
     }
+
+    # Africa's Talking per-recipient status codes
+    # (https://developers.africastalking.com/docs/sms/send status codes).
+    # The HTTP call to .send() can return 200 while still reporting a
+    # per-recipient failure in the response body - these map those codes to
+    # specific exceptions so callers can tell a real failure from success.
+    _STATUS_INVALID_RECIPIENT = 102
+    _STATUS_INSUFFICIENT_BALANCE = 103
+    _STATUS_RATE_LIMITED = {404, 429}
+    _STATUS_SUCCESS = {100, 101}
 
     def __init__(self):
         """Initialize Africa's Talking SMS client with API credentials."""
@@ -73,7 +109,8 @@ class ATSMSClient:
         """
         Normalize phone number to E.164 format for Africa's Talking.
 
-        This function is deprecated. Use config.utils.normalize_phone_number() instead.
+        This function is deprecated. Use
+        config.utils.normalize_phone_number() instead.
 
         Args:
             phone_number: Phone number in any format (e.g., +254123456789,
@@ -85,12 +122,65 @@ class ATSMSClient:
         Raises:
             ATSMSError: If phone number is invalid
         """
-        from config.utils import InvalidPhoneNumberError, normalize_phone_number
+        from config.utils import (
+            InvalidPhoneNumberError,
+            normalize_phone_number,
+        )
 
         try:
             return normalize_phone_number(phone_number)
         except InvalidPhoneNumberError as exc:
-            raise ATSMSError(str(exc))
+            raise ATSMSInvalidRecipientError(str(exc)) from exc
+
+    def _classify_response(self, response):
+        """
+        Raise a specific ``ATSMSError`` if ``response`` reports a delivery
+        failure, even though the HTTP call to Africa's Talking succeeded.
+
+        Africa's Talking returns per-recipient status codes inside a 200
+        response, so a successful API call is not the same thing as a
+        successful send - this must be checked separately.
+
+        Args:
+            response: The response object from africastalking.SMS.send().
+
+        Raises:
+            ATSMSInvalidRecipientError: Phone number rejected (code 102).
+            ATSMSInsufficientBalanceError: Account out of credit (code 103).
+            ATSMSRateLimitError: Account is being throttled (404/429).
+        """
+        try:
+            recipients = response.get('SMSMessageData', {}).get(
+                'Recipients', [],
+            )
+        except AttributeError:
+            return
+
+        if not recipients:
+            return
+
+        status_code = recipients[0].get('statusCode')
+        if status_code in self._STATUS_SUCCESS or status_code is None:
+            return
+
+        status_text = recipients[0].get('status', 'Unknown error')
+        if status_code == self._STATUS_INVALID_RECIPIENT:
+            raise ATSMSInvalidRecipientError(
+                f'Invalid recipient phone number: {status_text}',
+            )
+        if status_code == self._STATUS_INSUFFICIENT_BALANCE:
+            raise ATSMSInsufficientBalanceError(
+                f'Insufficient Africa\'s Talking balance: {status_text}',
+            )
+        if status_code in self._STATUS_RATE_LIMITED:
+            raise ATSMSRateLimitError(
+                f'Africa\'s Talking rate limit exceeded: {status_text}',
+            )
+
+        raise ATSMSError(
+            f'Africa\'s Talking delivery failed (code {status_code}): '
+            f'{status_text}',
+        )
 
     def send_otp(self, phone_number, code, purpose):
         """
@@ -132,14 +222,20 @@ class ATSMSClient:
         try:
             response = self.sms.send(
                 message=message,
-                recipients=[normalized_phone]
-                
+                recipients=[normalized_phone],
             )
+            self._classify_response(response)
             logger.info(
                 f'OTP sent successfully to {normalized_phone} '
                 f'(purpose={purpose}, response={response})'
             )
             return True
+        except ATSMSError:
+            logger.error(
+                f'Africa\'s Talking rejected OTP for {normalized_phone} '
+                f'(purpose={purpose}).'
+            )
+            raise
         except Exception as e:
             error_msg = f'Africa\'s Talking SMS error: {str(e)}'
             logger.error(error_msg)
@@ -176,15 +272,21 @@ class ATSMSClient:
         try:
             response = self.sms.send(
                 message=message,
-                recipients=[normalized_phone]
-                
+                recipients=[normalized_phone],
             )
+            self._classify_response(response)
             logger.info(
                 'SMS sent successfully to %s. response=%s',
                 normalized_phone,
                 response,
             )
             return True
+        except ATSMSError:
+            logger.error(
+                'Africa\'s Talking rejected SMS for %s.',
+                normalized_phone,
+            )
+            raise
         except Exception as e:
             error_msg = f'Africa\'s Talking SMS error: {str(e)}'
             logger.error(error_msg)
