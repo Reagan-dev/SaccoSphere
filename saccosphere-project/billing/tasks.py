@@ -13,7 +13,6 @@ from django.utils import timezone
 from accounts.models import Sacco
 from billing.models import Invoice
 from billing.services import (
-    generate_monthly_invoices_for_month,
     generate_monthly_sacco_invoice,
     previous_month_period,
     send_invoice_to_sacco,
@@ -319,16 +318,28 @@ def suspend_overdue_saccos(self):
 
     try:
         today = timezone.localdate()
-        cutoff = today - timedelta(days=8)
+        grace_days = getattr(settings, 'BILLING_SUSPENSION_GRACE_DAYS', 8)
+        cutoff = today - timedelta(days=grace_days)
         overdue_invoices = Invoice.objects.filter(
             status='overdue',
             due_date__lte=cutoff,
         ).select_related('sacco')
 
         suspended_count = 0
+        exempted_count = 0
         for invoice in overdue_invoices:
             sacco = invoice.sacco
             if sacco.is_billing_suspended:
+                continue
+
+            if sacco.billing_exempt:
+                exempted_count += 1
+                logger.info(
+                    'Sacco %s is billing_exempt; skipping automatic '
+                    'suspension despite overdue invoice %s.',
+                    sacco.id,
+                    invoice.invoice_number,
+                )
                 continue
 
             sacco.is_billing_suspended = True
@@ -375,7 +386,10 @@ def suspend_overdue_saccos(self):
 
         JobHeartbeat.record(
             'suspend_overdue_saccos',
-            detail={'saccos_suspended': suspended_count},
+            detail={
+                'saccos_suspended': suspended_count,
+                'saccos_exempted': exempted_count,
+            },
         )
 
         return suspended_count
@@ -395,6 +409,131 @@ def suspend_overdue_saccos(self):
         logger.warning(
             'Billing suspension sweep hit a transient error. Retrying '
             'in %s seconds.',
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='billing.send_billing_suspension_warnings',
+)
+def send_billing_suspension_warnings(self):
+    """Warn SACCO admins before suspend_overdue_saccos locks them out.
+
+    suspend_overdue_saccos gives no advance notice beyond the original
+    invoice email before suspending BILLING_SUSPENSION_GRACE_DAYS (8)
+    days after due_date - this runs daily and warns admins
+    BILLING_SUSPENSION_WARNING_DAYS_BEFORE (3) days ahead of that same
+    cutoff. Deduped per invoice via suspension_warning_sent_at, so an
+    invoice that stays overdue through the rest of the grace window is
+    only warned about once. billing_exempt SACCOs are skipped, matching
+    suspend_overdue_saccos - there is no point warning about a
+    suspension that will never happen.
+    """
+    try:
+        today = timezone.localdate()
+        grace_days = getattr(settings, 'BILLING_SUSPENSION_GRACE_DAYS', 8)
+        warning_days_before = getattr(
+            settings, 'BILLING_SUSPENSION_WARNING_DAYS_BEFORE', 3,
+        )
+        warning_cutoff = today - timedelta(
+            days=grace_days - warning_days_before,
+        )
+
+        candidate_invoices = Invoice.objects.filter(
+            status='overdue',
+            due_date__lte=warning_cutoff,
+            suspension_warning_sent_at__isnull=True,
+        ).select_related('sacco')
+
+        warned_count = 0
+        for invoice in candidate_invoices:
+            if invoice.sacco.billing_exempt:
+                continue
+
+            send_suspension_warning_notice.delay(
+                str(invoice.sacco_id), str(invoice.id),
+            )
+            invoice.suspension_warning_sent_at = timezone.now()
+            invoice.save(update_fields=['suspension_warning_sent_at'])
+            warned_count += 1
+
+        if warned_count:
+            logger.info(
+                '%d SACCO(s) warned of upcoming billing suspension.',
+                warned_count,
+            )
+
+        JobHeartbeat.record(
+            'send_billing_suspension_warnings',
+            detail={'saccos_warned': warned_count},
+        )
+        return warned_count
+    except TRANSIENT_ERRORS as exc:
+        if self.request.retries >= self.max_retries:
+            logger.exception(
+                'Billing suspension warning sweep exhausted transient '
+                'retries.',
+            )
+            JobHeartbeat.record(
+                'send_billing_suspension_warnings',
+                status=JobHeartbeat.Status.ERROR,
+                detail={'error': str(exc)},
+            )
+            raise
+
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'Billing suspension warning sweep hit a transient error. '
+            'Retrying in %s seconds.',
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(exc=exc, countdown=countdown)
+
+
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    name='billing.send_suspension_warning_notice',
+)
+def send_suspension_warning_notice(self, sacco_id: str, invoice_id: str):
+    """Notify SACCO admins that suspension is approaching, not yet applied."""
+    sacco = Sacco.objects.get(id=sacco_id)
+    invoice = Invoice.objects.get(id=invoice_id)
+    admin_emails = _get_sacco_admin_emails(sacco)
+
+    if not admin_emails:
+        logger.warning('No admin emails found for SACCO %s', sacco.name)
+        return
+
+    grace_days = getattr(settings, 'BILLING_SUSPENSION_GRACE_DAYS', 8)
+    days_overdue = (timezone.localdate() - invoice.due_date).days
+    days_remaining = max(grace_days - days_overdue, 0)
+
+    subject = f'Action needed: SaccoSphere billing overdue for {sacco.name}'
+    body = (
+        f'Dear {sacco.name} Admin,\n\n'
+        f'Invoice {invoice.invoice_number} is still unpaid '
+        f'{days_overdue} days after its due date of '
+        f'{invoice.due_date:%d %B %Y}.\n\n'
+        f'If it remains unpaid, admin portal write access will be '
+        f'suspended in approximately {days_remaining} day(s). Please pay '
+        'the outstanding invoice to avoid any interruption.\n'
+    )
+    try:
+        _admin_email_message(subject, body, admin_emails).send()
+    except Exception as exc:
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'Suspension warning notice failed for sacco_id=%s. Retrying '
+            'in %s seconds.',
+            sacco_id,
             countdown,
             exc_info=True,
         )
@@ -505,13 +644,6 @@ def _admin_email_message(subject, body, admin_emails):
         [settings.DEFAULT_FROM_EMAIL],
         bcc=admin_emails,
     )
-
-
-@shared_task(name='billing.tasks.generate_monthly_invoices')
-def generate_monthly_invoices_for_current_month(billing_month=None):
-    """Generate legacy new-style monthly invoices from invoice line items."""
-    invoices = generate_monthly_invoices_for_month(billing_month)
-    return [str(invoice.id) for invoice in invoices]
 
 
 @shared_task(name='billing.tasks.generate_and_send_monthly_fee_reports')

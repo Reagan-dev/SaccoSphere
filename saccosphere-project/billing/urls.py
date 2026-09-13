@@ -8,6 +8,7 @@ from billing.views import (
     InvoiceMarkPaidView,
     MonthlyInvoiceResendView,
     RevenueSummaryView,
+    SaccoBillingExemptionView,
 )
 
 
@@ -44,5 +45,10 @@ urlpatterns = [
         'transactions/current-month/',
         CurrentMonthTransactionPreviewView.as_view(),
         name='current-month-transactions',
+    ),
+    path(
+        'saccos/<uuid:sacco_id>/exemption/',
+        SaccoBillingExemptionView.as_view(),
+        name='sacco-billing-exemption',
     ),
 ]

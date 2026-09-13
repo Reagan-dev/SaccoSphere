@@ -8,10 +8,12 @@ of reporting success - these tests pin that behaviour down.
 """
 from unittest.mock import Mock
 
+import requests
 from django.test import TestCase, override_settings
 
 from accounts.integrations.otp_service import (
     ATSMSClient,
+    ATSMSDeliveryUncertainError,
     ATSMSError,
     ATSMSInsufficientBalanceError,
     ATSMSInvalidRecipientError,
@@ -119,6 +121,48 @@ class ATSMSClientClassificationTests(TestCase):
                 ATSMSRateLimitError,
             ),
         )
+
+    def test_connection_error_is_retryable_no_message_was_sent(self):
+        """africastalking.Service._make_request calls requests.post()
+        directly with no internal error handling, so a connection-phase
+        failure means our request never reached Africa's Talking - safe
+        to retry."""
+        client = _build_client(
+            send_side_effect=requests.exceptions.ConnectionError('refused'),
+        )
+
+        with self.assertRaises(ATSMSError) as ctx:
+            client.send_sms('+254712345678', 'hello')
+
+        self.assertNotIsInstance(ctx.exception, ATSMSDeliveryUncertainError)
+        self.assertTrue(ctx.exception.retryable)
+
+    def test_connect_timeout_is_retryable_no_message_was_sent(self):
+        """ConnectTimeout is a ConnectionError subclass (connect-phase),
+        distinct from ReadTimeout (request already sent) below."""
+        client = _build_client(
+            send_side_effect=requests.exceptions.ConnectTimeout('timed out'),
+        )
+
+        with self.assertRaises(ATSMSError) as ctx:
+            client.send_sms('+254712345678', 'hello')
+
+        self.assertNotIsInstance(ctx.exception, ATSMSDeliveryUncertainError)
+        self.assertTrue(ctx.exception.retryable)
+
+    def test_read_timeout_is_not_retryable_message_may_have_sent(self):
+        """A read-phase timeout means our POST (message included) was
+        already transmitted before Africa's Talking's response was lost
+        - retrying risks a duplicate, chargeable SMS, so this must not
+        be auto-retried."""
+        client = _build_client(
+            send_side_effect=requests.exceptions.ReadTimeout('no response'),
+        )
+
+        with self.assertRaises(ATSMSDeliveryUncertainError) as ctx:
+            client.send_sms('+254712345678', 'hello')
+
+        self.assertFalse(ctx.exception.retryable)
 
 
 class ATSMSErrorRetryabilityTests(TestCase):

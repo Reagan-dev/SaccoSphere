@@ -18,6 +18,10 @@ from .models import MemberImportJob
 
 
 MAX_IMPORT_FILE_SIZE = 5 * 1024 * 1024
+# A dense-but-tiny-per-row CSV can pack far more than a few hundred rows
+# into 5MB, and each row costs its own DB transaction/lookups in the
+# serial loop below - this caps that cost independently of file size.
+MAX_IMPORT_ROWS = 5000
 ALLOWED_EXTENSIONS = {'.csv', '.xlsx'}
 REQUIRED_FIELDS = ('first_name', 'last_name', 'email')
 OPTIONAL_FIELDS = ('phone_number', 'employment_status', 'monthly_income')
@@ -85,6 +89,13 @@ def parse_import_file(uploaded_file):
     if not rows:
         return [], 'Import file contains no data rows.'
 
+    if len(rows) > MAX_IMPORT_ROWS:
+        return [], (
+            f'Import file has {len(rows)} rows, which exceeds the '
+            f'{MAX_IMPORT_ROWS}-row limit per import. Split it into '
+            'smaller batches.'
+        )
+
     return rows, None
 
 
@@ -92,6 +103,12 @@ def parse_import_file(uploaded_file):
     bind=True,
     max_retries=3,
     name='saccomanagement.import_utils.process_import_job',
+    # MAX_IMPORT_ROWS rows, each its own DB transaction/lookups in a
+    # serial loop, could otherwise run unbounded on one worker. The
+    # 60s gap before the hard kill gives the except-block below (and its
+    # self.retry()/_mark_import_job_failed) a chance to run first.
+    soft_time_limit=900,
+    time_limit=960,
 )
 def process_import_job(self, job_id, rows=None):
     """

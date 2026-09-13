@@ -70,6 +70,13 @@ app.conf.beat_schedule = {
         'task': 'guarantor.tasks.expire_stale_external_guarantors',
         'schedule': crontab(minute='*/30'),  # Every 30 minutes
     },
+    # Same reasoning as the external sweep above - an internal guarantor
+    # who never responds otherwise blocks the loan forever with no
+    # signal to the applicant.
+    'expire-stale-internal-guarantors': {
+        'task': 'services.tasks.expire_stale_internal_guarantors',
+        'schedule': crontab(minute='*/30'),  # Every 30 minutes
+    },
     # Flip past-due instalments to OVERDUE + accrue penalties first, then
     # send the reminders/overdue alerts that key off that status.
     'mark-overdue-instalments': {
@@ -79,6 +86,15 @@ app.conf.beat_schedule = {
     'send-repayment-reminders': {
         'task': 'services.tasks.send_repayment_reminders',
         'schedule': crontab(minute=0, hour=6),  # Daily 06:00
+    },
+    # get_upcoming_instalments matches an exact days_ahead, so the 1-day
+    # reminder needs its own run - it is never reached by the 3-day call
+    # above. Safe to run alongside it: ReminderLog dedupes the overdue
+    # alerts both runs also send (see send_repayment_reminders.py).
+    'send-repayment-reminders-1-day': {
+        'task': 'services.tasks.send_repayment_reminders',
+        'schedule': crontab(minute=15, hour=6),  # Daily 06:15
+        'kwargs': {'days': 1},
     },
     # Flag (never auto-fix) any Saving.amount that drifted from the
     # ledger. Runs after the other daily financial sweeps.
@@ -104,6 +120,13 @@ app.conf.beat_schedule = {
 app.conf.task_serializer = 'json'
 app.conf.result_expires = 3600
 app.conf.task_default_retry_delay = 60
+# Only takes effect for tasks that opt into acks_late=True (the
+# payment-callback and reconciliation tasks in payments/tasks.py and
+# services/tasks.py) - a worker that is SIGKILLed or OOM-killed mid-task
+# redelivers the message instead of losing it outright. Every task that
+# opts in is idempotent by design (unique-constraint / status-guarded),
+# so redelivery is a safe no-op, not a double-processing risk.
+app.conf.task_reject_on_worker_lost = True
 app.conf.task_annotations = {
     '*': {
         'max_retries': 3,

@@ -16,6 +16,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from accounts.models import Sacco, SaccoPaymentConfig, User
+from health.models import JobHeartbeat
 from payments.integrations.mpesa.daraja import DarajaClient
 from payments.models import MpesaTransaction, PaymentProvider, Transaction
 from payments.tasks import reconcile_stale_mpesa_transactions
@@ -214,3 +215,32 @@ class ReconciliationBatchCapTestCase(TestCase):
         self.assertEqual(third_result['found'], 0)
         self.assertEqual(third_result['remaining'], 0)
         self.assertEqual(third_queried, [])
+
+    def test_sweep_writes_heartbeat(self):
+        self.assertFalse(
+            JobHeartbeat.objects.filter(
+                job_name='reconcile_stale_mpesa_transactions',
+            ).exists()
+        )
+
+        self._run_with_mocked_daraja()
+
+        hb = JobHeartbeat.objects.get(
+            job_name='reconcile_stale_mpesa_transactions',
+        )
+        self.assertEqual(hb.last_status, JobHeartbeat.Status.OK)
+        self.assertIn('found', hb.detail)
+
+    @patch(
+        'payments.tasks._run_mpesa_reconciliation_sweep',
+        side_effect=RuntimeError('boom'),
+    )
+    def test_sweep_failure_records_error_heartbeat(self, _run):
+        with self.assertRaises(RuntimeError):
+            reconcile_stale_mpesa_transactions()
+
+        hb = JobHeartbeat.objects.get(
+            job_name='reconcile_stale_mpesa_transactions',
+        )
+        self.assertEqual(hb.last_status, JobHeartbeat.Status.ERROR)
+        self.assertEqual(hb.detail.get('error'), 'boom')

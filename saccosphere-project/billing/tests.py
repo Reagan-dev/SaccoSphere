@@ -36,6 +36,7 @@ from billing.services import (
 from billing.tasks import (
     generate_and_send_monthly_fee_reports,
     generate_monthly_invoices,
+    send_billing_suspension_warnings,
     send_invoice_email,
     suspend_overdue_saccos,
     update_overdue_invoices,
@@ -753,6 +754,28 @@ class BillingSuspensionTests(TestCase):
         )
         self.assertEqual(heartbeat.detail['saccos_suspended'], 1)
 
+    @patch('config.utils.emit_metric')
+    @patch('billing.tasks.send_suspension_notice.delay')
+    def test_suspend_overdue_saccos_skips_billing_exempt_sacco(
+        self, notice_delay_mock, _emit_metric_mock,
+    ):
+        self.sacco.billing_exempt = True
+        self.sacco.billing_exempt_reason = 'Pilot deal - do not suspend'
+        self.sacco.save(
+            update_fields=['billing_exempt', 'billing_exempt_reason'],
+        )
+
+        count = suspend_overdue_saccos()
+
+        self.assertEqual(count, 0)
+        self.sacco.refresh_from_db()
+        self.assertFalse(self.sacco.is_billing_suspended)
+        notice_delay_mock.assert_not_called()
+        heartbeat = JobHeartbeat.objects.get(
+            job_name='suspend_overdue_saccos',
+        )
+        self.assertEqual(heartbeat.detail['saccos_exempted'], 1)
+
     def test_billing_suspension_blocks_admin_write_with_402(self):
         self.sacco.is_billing_suspended = True
         self.sacco.save(update_fields=['is_billing_suspended'])
@@ -938,6 +961,195 @@ class BillingSuspensionTests(TestCase):
         self.assertEqual(second_response.status_code, status.HTTP_409_CONFLICT)
         self.assertEqual(InvoicePayment.objects.filter(invoice=self.invoice).count(), 1)
         notice_delay_mock.assert_called_once()
+
+
+class BillingSuspensionWarningTests(TestCase):
+    """send_billing_suspension_warnings: warns ahead of the same cutoff
+    suspend_overdue_saccos enforces, deduped per invoice, skipping
+    billing_exempt SACCOs (there is nothing to warn them about)."""
+
+    def setUp(self):
+        self.sacco = Sacco.objects.create(
+            name='Warning SACCO',
+            registration_number='WARN001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        self.admin = User.objects.create_user(
+            email='warning.admin@example.com',
+            first_name='Warning',
+            last_name='Admin',
+            phone_number='254700001188',
+            password='StrongPass1',
+        )
+        Role.objects.create(
+            user=self.admin, sacco=self.sacco, name=Role.SACCO_ADMIN,
+        )
+
+    def _invoice(self, days_overdue, **overrides):
+        # billing_month just needs to be distinct per call (unique
+        # together with sacco) - derive it from days_overdue via a
+        # large-enough offset that different callers never collide.
+        billing_month = (
+            timezone.datetime(2020, 1, 1).date()
+            + timedelta(days=days_overdue * 31)
+        ).replace(day=1)
+        defaults = dict(
+            sacco=self.sacco,
+            invoice_number=f'SS-WARN-{days_overdue}',
+            billing_month=billing_month,
+            total_amount=Decimal('5000.00'),
+            line_items_count=1,
+            status='overdue',
+            due_date=timezone.localdate() - timedelta(days=days_overdue),
+        )
+        defaults.update(overrides)
+        return Invoice.objects.create(**defaults)
+
+    @patch('billing.tasks.send_suspension_warning_notice.delay')
+    def test_warns_at_default_threshold_and_dedupes(self, notice_mock):
+        # Default grace=8, warn 3 days ahead -> eligible once 5 days
+        # overdue.
+        due_invoice = self._invoice(days_overdue=5)
+        not_yet_invoice = self._invoice(days_overdue=4)
+
+        warned = send_billing_suspension_warnings()
+
+        self.assertEqual(warned, 1)
+        due_invoice.refresh_from_db()
+        not_yet_invoice.refresh_from_db()
+        self.assertIsNotNone(due_invoice.suspension_warning_sent_at)
+        self.assertIsNone(not_yet_invoice.suspension_warning_sent_at)
+        notice_mock.assert_called_once_with(
+            str(self.sacco.id), str(due_invoice.id),
+        )
+
+        # Running again the same day must not re-warn the same invoice.
+        notice_mock.reset_mock()
+        warned_again = send_billing_suspension_warnings()
+        self.assertEqual(warned_again, 0)
+        notice_mock.assert_not_called()
+
+    @patch('billing.tasks.send_suspension_warning_notice.delay')
+    def test_skips_billing_exempt_sacco(self, notice_mock):
+        self.sacco.billing_exempt = True
+        self.sacco.billing_exempt_reason = 'Pilot deal'
+        self.sacco.save(
+            update_fields=['billing_exempt', 'billing_exempt_reason'],
+        )
+        self._invoice(days_overdue=6)
+
+        warned = send_billing_suspension_warnings()
+
+        self.assertEqual(warned, 0)
+        notice_mock.assert_not_called()
+
+    @patch('billing.services.EmailMessage.send')
+    def test_notice_email_is_sent_to_sacco_admin(self, email_send_mock):
+        invoice = self._invoice(days_overdue=6)
+
+        from billing.tasks import send_suspension_warning_notice
+
+        send_suspension_warning_notice(str(self.sacco.id), str(invoice.id))
+
+        email_send_mock.assert_called_once()
+
+
+class SaccoBillingExemptionViewTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.sacco = Sacco.objects.create(
+            name='Exemption SACCO',
+            registration_number='EXEMPT01',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+        )
+        self.super_admin = User.objects.create_user(
+            email='exempt.superadmin@example.com',
+            password='StrongPass1',
+            is_staff=True,
+        )
+        self.sacco_admin = User.objects.create_user(
+            email='exempt.saccoadmin@example.com',
+            password='StrongPass1',
+        )
+        Role.objects.create(
+            user=self.super_admin, sacco=None, name=Role.SUPER_ADMIN,
+        )
+        Role.objects.create(
+            user=self.sacco_admin, sacco=self.sacco, name=Role.SACCO_ADMIN,
+        )
+
+    def _url(self):
+        return reverse(
+            'billing:sacco-billing-exemption',
+            kwargs={'sacco_id': self.sacco.id},
+        )
+
+    def test_superadmin_can_grant_exemption_with_reason(self):
+        self.client.force_authenticate(user=self.super_admin)
+
+        response = self.client.post(
+            self._url(),
+            {'exempt': True, 'reason': 'Pilot deal - do not suspend'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.sacco.refresh_from_db()
+        self.assertTrue(self.sacco.billing_exempt)
+        self.assertEqual(
+            self.sacco.billing_exempt_reason,
+            'Pilot deal - do not suspend',
+        )
+        audit_entry = SystemAuditLog.objects.get(
+            action='SACCO_BILLING_EXEMPTION_CHANGED',
+            resource_type='Sacco',
+            resource_id=str(self.sacco.id),
+        )
+        self.assertEqual(audit_entry.user, self.super_admin)
+        self.assertTrue(audit_entry.new_values['billing_exempt'])
+
+    def test_granting_exemption_without_reason_is_rejected(self):
+        self.client.force_authenticate(user=self.super_admin)
+
+        response = self.client.post(
+            self._url(), {'exempt': True, 'reason': ''}, format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.sacco.refresh_from_db()
+        self.assertFalse(self.sacco.billing_exempt)
+
+    def test_superadmin_can_lift_exemption(self):
+        self.sacco.billing_exempt = True
+        self.sacco.billing_exempt_reason = 'Pilot deal'
+        self.sacco.save(
+            update_fields=['billing_exempt', 'billing_exempt_reason'],
+        )
+        self.client.force_authenticate(user=self.super_admin)
+
+        response = self.client.post(
+            self._url(), {'exempt': False}, format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.sacco.refresh_from_db()
+        self.assertFalse(self.sacco.billing_exempt)
+        self.assertEqual(self.sacco.billing_exempt_reason, '')
+
+    def test_sacco_admin_cannot_grant_exemption(self):
+        self.client.force_authenticate(user=self.sacco_admin)
+
+        response = self.client.post(
+            self._url(), {'exempt': True, 'reason': 'Nice try'}, format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.sacco.refresh_from_db()
+        self.assertFalse(self.sacco.billing_exempt)
 
 
 class ReconcileUncollectedFeesCommandTests(TestCase):

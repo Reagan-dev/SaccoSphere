@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 
 from uuid import uuid4
@@ -1182,6 +1183,13 @@ class ReminderLog(models.Model):
 
 
 
+def default_guarantor_response_deadline():
+    """48 hours, matching guarantor.models.default_response_token_expires_at
+    for the external-guarantor flow - no product-specified reason for the
+    two windows to differ."""
+    return timezone.now() + timedelta(hours=48)
+
+
 class Guarantor(models.Model):
 
     class Status(models.TextChoices):
@@ -1191,6 +1199,8 @@ class Guarantor(models.Model):
         APPROVED = 'APPROVED', 'Approved'
 
         DECLINED = 'DECLINED', 'Declined'
+
+        EXPIRED = 'EXPIRED', 'Expired'
 
 
 
@@ -1267,6 +1277,23 @@ class Guarantor(models.Model):
         blank=True,
 
         help_text='Date and time the guarantor responded.',
+
+    )
+
+    expires_at = models.DateTimeField(
+
+        null=True,
+
+        blank=True,
+
+        default=default_guarantor_response_deadline,
+
+        help_text=(
+            'Deadline for the guarantor to respond before '
+            'expire_stale_internal_guarantors_task marks this EXPIRED. '
+            'Null on rows created before this field existed - those are '
+            'never swept.'
+        ),
 
     )
 

@@ -7,6 +7,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import Sacco, User
+from payments.models import Callback, PaymentProvider, Transaction
 from saccomembership.models import Membership
 from services.models import DisbursementAuditLog, Loan, LoanType
 
@@ -181,3 +182,144 @@ class DisbursementTaskTests(TestCase):
             self.assertIn('24hr timeout', context_data['reason'])
         finally:
             sys.modules.pop('sentry_sdk', None)
+
+
+class OnDisbursementB2CCallbackCallbackBookkeepingTests(TestCase):
+    """on_disbursement_b2c_callback and payments.tasks.process_b2c_callback_task
+    both act on a Callback row payments.views persists before dispatching
+    either one - this locks in that the disbursement path also marks its
+    Callback processed, instead of leaving it stuck at processed=False
+    forever (the two paths previously drifted on this)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='disb-callback@example.com',
+            phone_number='254700000444',
+            password='testpass123',
+        )
+        self.sacco = Sacco.objects.create(
+            name='Disbursement Callback SACCO',
+            registration_number='DISBCB01',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+            membership_type=Sacco.MembershipType.OPEN,
+            payment_ready=True,
+        )
+        self.membership = Membership.objects.create(
+            user=self.user,
+            sacco=self.sacco,
+            status=Membership.Status.APPROVED,
+            member_number='DISBCB-M-001',
+            approved_date=timezone.now(),
+        )
+        self.loan_type = LoanType.objects.create(
+            sacco=self.sacco,
+            name='Callback Test Loan',
+            interest_rate=Decimal('12.00'),
+            max_term_months=12,
+            min_amount=Decimal('100.00'),
+        )
+        self.provider = PaymentProvider.objects.create(
+            name='M-Pesa',
+            provider_type=PaymentProvider.ProviderType.MPESA,
+            is_active=True,
+        )
+        self.transaction = Transaction.objects.create(
+            provider=self.provider,
+            user=self.user,
+            sacco=self.sacco,
+            reference='DISBCB-TXN-001',
+            transaction_type=Transaction.TransactionType.LOAN_DISBURSEMENT,
+            amount=Decimal('950.00'),
+            gross_amount=Decimal('1000.00'),
+            platform_fee=Decimal('50.00'),
+            status=Transaction.Status.SENT,
+        )
+        self.loan = Loan.objects.create(
+            membership=self.membership,
+            loan_type=self.loan_type,
+            amount=Decimal('1000.00'),
+            interest_rate=Decimal('12.00'),
+            term_months=6,
+            outstanding_balance=Decimal('0.00'),
+            status=Loan.Status.APPROVED,
+            disbursement_status=Loan.DisbursementStatus.INITIATED,
+            disbursement_transaction=self.transaction,
+            mpesa_conversation_id='DISBCB-CONV-001',
+        )
+        self.callback = Callback.objects.create(
+            transaction=self.transaction,
+            provider=self.provider,
+            raw_payload={'placeholder': True},
+            processed=False,
+        )
+
+    @patch('services.tasks.send_disbursement_confirmation_request.delay')
+    def test_success_marks_callback_processed(self, _delay):
+        from services.tasks import on_disbursement_b2c_callback
+
+        on_disbursement_b2c_callback(
+            str(self.loan.id),
+            {
+                'ResultCode': 0,
+                'TransactionID': 'MPESA-RECEIPT-001',
+            },
+            callback_id=str(self.callback.id),
+        )
+
+        self.callback.refresh_from_db()
+        self.assertTrue(self.callback.processed)
+        self.assertIsNotNone(self.callback.processed_at)
+
+    @patch('services.tasks.notify_user_task.delay')
+    def test_failure_also_marks_callback_processed(self, _delay):
+        from services.tasks import on_disbursement_b2c_callback
+
+        on_disbursement_b2c_callback(
+            str(self.loan.id),
+            {
+                'ResultCode': 1,
+                'ResultDesc': 'Insufficient funds in the utility account.',
+            },
+            callback_id=str(self.callback.id),
+        )
+
+        self.callback.refresh_from_db()
+        self.assertTrue(self.callback.processed)
+
+    @patch('services.tasks.send_disbursement_confirmation_request.delay')
+    def test_already_disbursed_short_circuit_marks_callback_processed(
+        self, _delay,
+    ):
+        from services.tasks import on_disbursement_b2c_callback
+
+        self.loan.disbursement_status = Loan.DisbursementStatus.DISBURSED
+        self.loan.save(update_fields=['disbursement_status'])
+
+        on_disbursement_b2c_callback(
+            str(self.loan.id),
+            {'ResultCode': 0, 'TransactionID': 'MPESA-RECEIPT-002'},
+            callback_id=str(self.callback.id),
+        )
+
+        self.callback.refresh_from_db()
+        self.assertTrue(self.callback.processed)
+
+    def test_missing_callback_id_does_not_raise(self):
+        """callback_id is optional - omitting it must not break the
+        actual disbursement processing, only skip the bookkeeping."""
+        from services.tasks import on_disbursement_b2c_callback
+
+        with patch(
+            'services.tasks.send_disbursement_confirmation_request.delay',
+        ):
+            result = on_disbursement_b2c_callback(
+                str(self.loan.id),
+                {'ResultCode': 0, 'TransactionID': 'MPESA-RECEIPT-003'},
+            )
+
+        self.assertTrue(result)
+        self.loan.refresh_from_db()
+        self.assertEqual(
+            self.loan.disbursement_status, Loan.DisbursementStatus.DISBURSED,
+        )

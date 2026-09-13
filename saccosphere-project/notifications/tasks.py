@@ -8,9 +8,9 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
-from config.utils import emit_metric
+from config.utils import emit_metric, sanitize_pii
 
-from .models import DeviceToken
+from .models import DeviceToken, Notification
 
 
 logger = logging.getLogger('saccosphere.notifications')
@@ -18,19 +18,43 @@ logger = logging.getLogger('saccosphere.notifications')
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_sms_task(self, phone_number, message):
-    from accounts.integrations.otp_service import ATSMSClient, ATSMSError
+    from accounts.integrations.otp_service import (
+        ATSMSClient,
+        ATSMSDeliveryUncertainError,
+        ATSMSError,
+    )
 
     try:
         ATSMSClient().send_sms(phone_number, message)
-        logger.info('SMS notification sent to %s.', phone_number)
+        logger.info(
+            'SMS notification sent to %s.', sanitize_pii(phone_number),
+        )
         emit_metric('sms_notification_sent')
         return True
+    except ATSMSDeliveryUncertainError as exc:
+        # The prior attempt's outcome is unknown - Africa's Talking may
+        # already have queued the message. Do not retry (a retry could
+        # double-send); surface it distinctly so ops can check the
+        # delivery report before deciding whether to resend by hand.
+        logger.error(
+            'SMS notification to %s has an uncertain delivery outcome '
+            'and will not be auto-retried: %s',
+            sanitize_pii(phone_number),
+            exc,
+        )
+        emit_metric(
+            'sms_notification_failed',
+            reason=type(exc).__name__,
+            retryable=False,
+            outcome='uncertain',
+        )
+        return False
     except ATSMSError as exc:
         if not exc.retryable:
             logger.error(
                 'SMS notification for %s rejected by Africa\'s Talking '
                 'and will not be retried: %s',
-                phone_number,
+                sanitize_pii(phone_number),
                 exc,
             )
             emit_metric(
@@ -43,7 +67,7 @@ def send_sms_task(self, phone_number, message):
         if self.request.retries >= self.max_retries:
             logger.error(
                 'SMS notification for %s exhausted retries.',
-                phone_number,
+                sanitize_pii(phone_number),
                 exc_info=True,
             )
             emit_metric(
@@ -57,7 +81,7 @@ def send_sms_task(self, phone_number, message):
         countdown = 60 * 2 ** self.request.retries
         logger.warning(
             'SMS notification failed for %s. Retrying in %s seconds.',
-            phone_number,
+            sanitize_pii(phone_number),
             countdown,
             exc_info=True,
         )
@@ -72,6 +96,8 @@ def send_sms_task(self, phone_number, message):
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_email_task(self, to_email, subject, body, html_body=None):
+    import smtplib
+
     try:
         sent_count = send_mail(
             subject=subject,
@@ -81,14 +107,37 @@ def send_email_task(self, to_email, subject, body, html_body=None):
             fail_silently=False,
             html_message=html_body,
         )
-        logger.info('Email notification sent to %s.', to_email)
+        logger.info(
+            'Email notification sent to %s.', sanitize_pii(to_email),
+        )
         emit_metric('email_notification_sent')
         return sent_count
+    except (smtplib.SMTPServerDisconnected, TimeoutError) as exc:
+        # The SMTP session dropped or timed out mid-transaction. By the
+        # time this happens (smtplib.SMTP.sendmail() has already flushed
+        # the message and is waiting on the server's final response),
+        # the mail server may have already accepted it even though we
+        # never saw the acknowledgement. Do not retry - a retry could
+        # send the same email twice - surface it distinctly instead.
+        logger.error(
+            'Email notification to %s has an uncertain delivery outcome '
+            'and will not be auto-retried: %s',
+            sanitize_pii(to_email),
+            exc,
+            exc_info=True,
+        )
+        emit_metric(
+            'email_notification_failed',
+            reason=type(exc).__name__,
+            retryable=False,
+            outcome='uncertain',
+        )
+        return False
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             logger.error(
                 'Email notification for %s exhausted retries.',
-                to_email,
+                sanitize_pii(to_email),
                 exc_info=True,
             )
             emit_metric(
@@ -101,7 +150,7 @@ def send_email_task(self, to_email, subject, body, html_body=None):
         countdown = 60 * 2 ** self.request.retries
         logger.warning(
             'Email notification failed for %s. Retrying in %s seconds.',
-            to_email,
+            sanitize_pii(to_email),
             countdown,
             exc_info=True,
         )
@@ -114,7 +163,9 @@ def send_email_task(self, to_email, subject, body, html_body=None):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def send_push_notification_task(self, user_id, title, body, data=None):
+def send_push_notification_task(
+    self, user_id, title, body, data=None, notification_id=None,
+):
     from notifications.integrations.fcm_push import FCMPushClient, FCMError
 
     client = FCMPushClient()
@@ -186,6 +237,12 @@ def send_push_notification_task(self, user_id, title, body, data=None):
             raise self.retry(exc=exc, countdown=countdown)
 
     emit_metric('push_notification_batch_sent', sent_count=sent_count)
+
+    if sent_count > 0 and notification_id is not None:
+        Notification.objects.filter(id=notification_id).update(
+            push_sent=True,
+        )
+
     return sent_count
 
 
@@ -203,6 +260,7 @@ def notify_user_task(
     send_sms=False,
     send_push=True,
     create_in_app=True,
+    _notification_id=None,
 ):
     from .utils import create_notification
 
@@ -214,8 +272,16 @@ def notify_user_task(
         logger.warning('Notification user_id=%s does not exist.', user_id)
         return None
 
+    # _notification_id is set only when this call is itself a retry (see
+    # except block below) - it means create_notification already
+    # succeeded on a prior attempt, so this run must reuse that row
+    # instead of creating a second one.
     notification = None
-    if create_in_app:
+    if _notification_id is not None:
+        notification = Notification.objects.filter(
+            id=_notification_id,
+        ).first()
+    elif create_in_app:
         notification = create_notification(
             user=user,
             title=title,
@@ -244,19 +310,71 @@ def notify_user_task(
                 title,
                 message,
                 push_data,
+                notification_id=(
+                    str(notification.id) if notification else None
+                ),
             )
         )
 
     if send_sms and user.phone_number:
         task_signatures.append(send_sms_task.s(user.phone_number, message))
 
-    for task_signature in task_signatures:
-        chain(task_signature).delay()
+    try:
+        for task_signature in task_signatures:
+            chain(task_signature).delay()
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            logger.error(
+                'Notification dispatch for user_id=%s exhausted retries.',
+                user_id,
+                exc_info=True,
+            )
+            raise
+
+        countdown = 60 * 2 ** self.request.retries
+        logger.warning(
+            'Notification dispatch for user_id=%s failed. Retrying in '
+            '%s seconds.',
+            user_id,
+            countdown,
+            exc_info=True,
+        )
+        raise self.retry(
+            exc=exc,
+            countdown=countdown,
+            kwargs={
+                'user_id': user_id,
+                'title': title,
+                'message': message,
+                'category': category,
+                'action_url': action_url,
+                'action_label': action_label,
+                'secondary_url': secondary_url,
+                'secondary_label': secondary_label,
+                'send_sms': send_sms,
+                'send_push': send_push,
+                'create_in_app': create_in_app,
+                '_notification_id': (
+                    str(notification.id) if notification else None
+                ),
+            },
+        )
 
     return str(notification.id) if notification else None
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+@shared_task(
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    # Up to sms_daily_limit recipients, each one synchronous outbound
+    # gateway call, could otherwise run unbounded on one worker if
+    # Africa's Talking degrades mid-campaign. The 60s gap before the
+    # hard kill gives the except-block below (which already finalizes
+    # campaign.status via determine_campaign_status) a chance to run.
+    soft_time_limit=1800,
+    time_limit=1860,
+)
 def send_bulk_sms_campaign_task(self, campaign_id):
     """Send a SACCO bulk SMS campaign through Africa's Talking."""
     from accounts.integrations.otp_service import ATSMSClient, ATSMSError
@@ -421,8 +539,25 @@ def mark_daily_limit_failures(recipients):
 
 
 def send_campaign_sms(client, campaign, recipient, sms_error_class):
+    from accounts.integrations.otp_service import ATSMSDeliveryUncertainError
+
     try:
         client.send_sms(recipient.phone_number, campaign.message)
+    except ATSMSDeliveryUncertainError as exc:
+        # Outcome unknown - Africa's Talking may already have queued
+        # this one. Tagged distinctly (not a plain rejection) so a
+        # re-send of the campaign, or support looking at this recipient,
+        # checks the delivery report before treating it as never-sent.
+        recipient.status = recipient.Status.FAILED
+        recipient.error_message = f'[UNCERTAIN DELIVERY] {exc}'[:255]
+        recipient.save(update_fields=['status', 'error_message'])
+        _refund_daily_sms_claim(campaign.sacco_id)
+        logger.error(
+            'Bulk SMS recipient_id=%s has an uncertain delivery outcome.',
+            recipient.id,
+            exc_info=True,
+        )
+        return False
     except sms_error_class as exc:
         recipient.status = recipient.Status.FAILED
         recipient.error_message = str(exc)[:255]

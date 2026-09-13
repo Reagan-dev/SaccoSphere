@@ -17,7 +17,7 @@ from notifications.tasks import notify_user_task
 from notifications.utils import create_notification
 from saccomanagement.models import Role
 
-from .engines.liquidity_monitor import check_liquidity_risk
+from .engines.liquidity_monitor import bulk_check_liquidity_risk
 from .engines.npl_monitor import arrears_buckets_for_monitored_loans
 from .engines.penalties import compute_penalty
 from .models import (
@@ -182,6 +182,74 @@ def notify_guarantors_task(self, loan_id):
         raise self.retry(exc=exc, countdown=countdown)
 
 
+@shared_task(name='services.tasks.expire_stale_internal_guarantors')
+def expire_stale_internal_guarantors_task():
+    """Expire internal guarantor requests past their response deadline.
+
+    Mirrors guarantor.tasks.expire_stale_external_guarantors_task: an
+    internal guarantor who never responds otherwise blocks the loan
+    forever with nothing telling the applicant to add another one -
+    check_loan_guarantors_complete only counts APPROVED guarantors, so a
+    stale PENDING one just silently never counts, with no signal that it
+    is time to move on. Guarantor.expires_at is null on rows created
+    before this field existed, so those pre-existing PENDING requests
+    are grandfathered and never swept.
+
+    Unlike the interactive DECLINE action in GuarantorRespondView, this
+    does not reset loan.status back to PENDING - a loan with other
+    already-APPROVED guarantors covering it should not be reopened just
+    because one separate, unrelated guarantor never responded.
+
+    Returns the number of requests expired.
+    """
+    now = timezone.now()
+    stale = Guarantor.objects.select_related(
+        'loan',
+        'loan__membership',
+        'loan__membership__user',
+        'guarantor',
+    ).filter(
+        status=Guarantor.Status.PENDING,
+        expires_at__isnull=False,
+        expires_at__lte=now,
+    )
+
+    expired_count = 0
+    for guarantor in stale:
+        guarantor.status = Guarantor.Status.EXPIRED
+        guarantor.save(update_fields=['status'])
+
+        guarantor_name = (
+            f'{guarantor.guarantor.first_name} '
+            f'{guarantor.guarantor.last_name}'
+        )
+        create_notification(
+            user=guarantor.loan.membership.user,
+            title='Guarantor Request Expired',
+            message=(
+                f'{guarantor_name} did not respond to your guarantee '
+                'request within 48 hours. Please request another '
+                'guarantor for your loan.'
+            ),
+            category='LOAN',
+            action_url=f'/loans/{guarantor.loan_id}/',
+            dispatch_async=False,
+        )
+        expired_count += 1
+        logger.info(
+            'Internal guarantor request expired: guarantor_id=%s '
+            'loan_id=%s.',
+            guarantor.id,
+            guarantor.loan_id,
+        )
+
+    logger.info(
+        'Expired %d stale internal guarantor request(s).',
+        expired_count,
+    )
+    return expired_count
+
+
 @shared_task(
     bind=True,
     max_retries=3,
@@ -189,38 +257,71 @@ def notify_guarantors_task(self, loan_id):
     name='services.tasks.check_all_sacco_liquidity',
 )
 def check_all_sacco_liquidity(self):
-    """Check every active SACCO for loan-disbursement liquidity risk."""
+    """Check every active SACCO for loan-disbursement liquidity risk.
+
+    The risk figures themselves are computed for every SACCO in one
+    batch of aggregate queries (bulk_check_liquidity_risk) rather than
+    one round-trip per SACCO. Acting on that risk - creating an alert,
+    notifying admins, or resolving a stale alert - is still done
+    per-SACCO and wrapped so that one SACCO's failure (e.g. a bad admin
+    role row) is logged and skipped instead of aborting the whole sweep
+    and retrying every other, already-healthy SACCO from scratch.
+    """
     try:
-        saccos = Sacco.objects.filter(is_active=True).select_related(
-            'settings',
-        )
+        saccos = list(Sacco.objects.filter(is_active=True))
+        risks = bulk_check_liquidity_risk(saccos)
+
         checked_count = 0
         alert_count = 0
-        resolved_count = 0
+        failed_sacco_ids = []
+        healthy_sacco_ids = []
 
         for sacco in saccos:
-            risk = check_liquidity_risk(sacco)
+            risk = risks.get(sacco.id)
+            if risk is None:
+                continue
             checked_count += 1
 
-            if risk['at_risk']:
+            if not risk['at_risk']:
+                healthy_sacco_ids.append(sacco.id)
+                continue
+
+            try:
                 alert = _create_liquidity_alert_if_needed(sacco, risk)
                 if alert:
                     alert_count += 1
-                    _notify_sacco_admins(sacco, risk, alert)
-                continue
+                    _notify_sacco_admins_of_liquidity_risk(
+                        sacco, risk, alert,
+                    )
+            except Exception:
+                failed_sacco_ids.append(str(sacco.id))
+                logger.exception(
+                    'Liquidity check action failed for sacco_id=%s.',
+                    sacco.id,
+                )
 
-            resolved_count += _resolve_open_liquidity_alerts(sacco)
+        # Resolving every healthy SACCO's open alert(s) is a single bulk
+        # UPDATE, not one query per SACCO - this path runs for the
+        # common case (most SACCOs are not at risk on most runs), so it
+        # is the one most worth keeping query-count-flat.
+        resolved_count = LiquidityAlert.objects.filter(
+            sacco_id__in=healthy_sacco_ids,
+            resolved=False,
+        ).update(resolved=True, resolved_at=timezone.now())
 
         logger.info(
-            'Liquidity check complete. checked=%s alerts=%s resolved=%s.',
+            'Liquidity check complete. checked=%s alerts=%s resolved=%s '
+            'failed=%s.',
             checked_count,
             alert_count,
             resolved_count,
+            len(failed_sacco_ids),
         )
         return {
             'checked': checked_count,
             'alerts_created': alert_count,
             'alerts_resolved': resolved_count,
+            'failed_sacco_ids': failed_sacco_ids,
         }
     except Exception as exc:
         logger.exception('Liquidity check failed.')
@@ -246,7 +347,19 @@ def _create_liquidity_alert_if_needed(sacco, risk):
     )
 
 
-def _notify_sacco_admins(sacco, risk, alert):
+def _notify_sacco_admins_of_liquidity_risk(sacco, risk, alert):
+    """Notify a SACCO's admins about a liquidity alert.
+
+    Named distinctly from the other, unrelated ``_notify_sacco_admins``
+    (below, ``sacco, title, message``) further down this module - the
+    two used to share a name, which meant Python's module-level name
+    resolution silently pointed every call at whichever one happened to
+    be defined last in the file (a call above the other definition still
+    resolves late, at call time, to the module's *current* binding for
+    that name). That routed every liquidity alert through the wrong
+    function with mismatched positional args, so no liquidity
+    notification was ever actually created correctly.
+    """
     admin_roles = Role.objects.filter(
         name=Role.SACCO_ADMIN,
         sacco=sacco,
@@ -289,16 +402,6 @@ def _notify_sacco_admins(sacco, risk, alert):
                 f'{risk["available_reserves"]:,.2f}.'
             )
             send_sms_notification(primary_role.user, sms_message)
-
-
-def _resolve_open_liquidity_alerts(sacco):
-    return LiquidityAlert.objects.filter(
-        sacco=sacco,
-        resolved=False,
-    ).update(
-        resolved=True,
-        resolved_at=timezone.now(),
-    )
 
 
 # Chunk size for iterating the delinquency working set. The sweep only
@@ -817,12 +920,36 @@ def _record_disbursement_invoice_item(loan) -> None:
         )
 
 
-@shared_task(name='services.on_disbursement_b2c_callback')
-def on_disbursement_b2c_callback(loan_id: str, mpesa_payload: dict):
-    """Process a loan-disbursement B2C callback from M-Pesa."""
+@shared_task(
+    name='services.on_disbursement_b2c_callback',
+    # A worker killed mid-callback must not silently drop a disbursement
+    # result - redeliver instead. The select_for_update + status guard
+    # below make re-processing the same callback a safe no-op.
+    acks_late=True,
+)
+def on_disbursement_b2c_callback(
+    loan_id: str, mpesa_payload: dict, callback_id: str = None,
+):
+    """Process a loan-disbursement B2C callback from M-Pesa.
+
+    callback_id identifies the durable Callback row payments.views
+    already persisted before dispatching here (mirroring
+    payments.tasks.process_b2c_callback_task) - marking it processed at
+    the end keeps the two B2C paths' Callback bookkeeping consistent
+    instead of leaving every disbursement callback's row stuck at
+    processed=False forever. Optional (defaults to None) only so a
+    direct/legacy call without one degrades to skipping that bookkeeping
+    rather than failing outright.
+    """
     from ledger.models import LedgerEntry
     from ledger.utils import create_ledger_entry
-    from payments.models import Transaction
+    from payments.models import Callback, Transaction
+
+    def _mark_callback_processed():
+        if callback_id is not None:
+            Callback.objects.filter(id=callback_id).update(
+                processed=True, processed_at=timezone.now(),
+            )
 
     result = mpesa_payload.get('Result') or mpesa_payload
     result_code = _normalize_mpesa_result_code(result.get('ResultCode'))
@@ -848,6 +975,7 @@ def on_disbursement_b2c_callback(loan_id: str, mpesa_payload: dict):
                 Loan.DisbursementStatus.MEMBER_CONFIRMED,
                 Loan.DisbursementStatus.AUTO_CONFIRMED,
             ]:
+                _mark_callback_processed()
                 return True
 
             loan.mpesa_transaction_id = transaction_id
@@ -904,6 +1032,7 @@ def on_disbursement_b2c_callback(loan_id: str, mpesa_payload: dict):
                 transaction=tx,
             )
 
+        _mark_callback_processed()
         send_disbursement_confirmation_request.delay(str(loan_id))
         return True
 
@@ -931,6 +1060,7 @@ def on_disbursement_b2c_callback(loan_id: str, mpesa_payload: dict):
             },
         )
 
+    _mark_callback_processed()
     notify_user_task.delay(
         str(loan.membership.user_id),
         'Loan Disbursement Failed',
