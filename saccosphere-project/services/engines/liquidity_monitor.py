@@ -117,6 +117,57 @@ def check_liquidity_risk(sacco):
     }
 
 
+def bulk_check_liquidity_risk(saccos):
+    """Same result as ``check_liquidity_risk``, for every SACCO in
+    ``saccos``, in a fixed number of aggregate queries instead of one
+    round-trip per SACCO. Returns ``{sacco.id: risk_dict}``; a SACCO
+    with no ledger activity and no pending disbursements simply gets
+    zeroed figures, same as the single-SACCO path.
+    """
+    sacco_ids = [sacco.id for sacco in saccos]
+    if not sacco_ids:
+        return {}
+
+    cash_in = _bulk_sum_ledger_amounts(
+        sacco_ids, CASH_IN_CATEGORIES, LedgerEntry.EntryType.CREDIT,
+    )
+    cash_out = _bulk_sum_ledger_amounts(
+        sacco_ids, CASH_OUT_CATEGORIES, LedgerEntry.EntryType.DEBIT,
+    )
+    commitments_posted = _bulk_sum_ledger_amounts(
+        sacco_ids, RESERVE_COMMITMENT_CATEGORIES,
+        LedgerEntry.EntryType.CREDIT,
+    )
+    commitments_reversed = _bulk_sum_ledger_amounts(
+        sacco_ids, RESERVE_COMMITMENT_CATEGORIES,
+        LedgerEntry.EntryType.DEBIT,
+    )
+    pending_totals = _bulk_pending_disbursement_totals(sacco_ids)
+    thresholds = _bulk_liquidity_thresholds(saccos)
+
+    risks = {}
+    for sacco_id in sacco_ids:
+        available_reserves = (
+            cash_in.get(sacco_id, MONEY_ZERO)
+            - cash_out.get(sacco_id, MONEY_ZERO)
+            - commitments_posted.get(sacco_id, MONEY_ZERO)
+            + commitments_reversed.get(sacco_id, MONEY_ZERO)
+        )
+        pending_disbursements = pending_totals.get(sacco_id, MONEY_ZERO)
+        utilisation_pct = _calculate_utilisation_pct(
+            available_reserves, pending_disbursements,
+        )
+        threshold = thresholds[sacco_id]
+
+        risks[sacco_id] = {
+            'available_reserves': available_reserves,
+            'pending_disbursements': pending_disbursements,
+            'utilisation_pct': utilisation_pct,
+            'at_risk': utilisation_pct >= threshold,
+        }
+    return risks
+
+
 def _sum_ledger_amounts(sacco, categories, entry_type):
     total = LedgerEntry.objects.filter(
         membership__sacco=sacco,
@@ -127,9 +178,63 @@ def _sum_ledger_amounts(sacco, categories, entry_type):
     return total or MONEY_ZERO
 
 
+def _bulk_sum_ledger_amounts(sacco_ids, categories, entry_type):
+    rows = (
+        LedgerEntry.objects.filter(
+            membership__sacco_id__in=sacco_ids,
+            category__in=categories,
+            entry_type=entry_type,
+        )
+        .values('membership__sacco_id')
+        .annotate(total=Sum('amount'))
+    )
+    return {
+        row['membership__sacco_id']: row['total'] or MONEY_ZERO
+        for row in rows
+    }
+
+
+def _bulk_pending_disbursement_totals(sacco_ids):
+    rows = (
+        Loan.objects.filter(
+            membership__sacco_id__in=sacco_ids,
+            status__in=PENDING_DISBURSEMENT_STATUSES,
+        )
+        .values('membership__sacco_id')
+        .annotate(total=Sum('amount'))
+    )
+    return {
+        row['membership__sacco_id']: row['total'] or MONEY_ZERO
+        for row in rows
+    }
+
+
 def _get_liquidity_threshold(sacco):
     settings, _created = SaccoSettings.objects.get_or_create(sacco=sacco)
     return settings.liquidity_threshold_percentage
+
+
+def _bulk_liquidity_thresholds(saccos):
+    """One query for every SACCO that already has settings; a SACCO
+    without one yet (rare - only ever true before its first liquidity
+    check) falls back to the get_or_create single-row path, which also
+    provisions its default settings row exactly as the single-SACCO
+    path always has.
+    """
+    existing = {
+        row['sacco_id']: row['liquidity_threshold_percentage']
+        for row in SaccoSettings.objects.filter(
+            sacco_id__in=[sacco.id for sacco in saccos],
+        ).values('sacco_id', 'liquidity_threshold_percentage')
+    }
+
+    thresholds = {}
+    for sacco in saccos:
+        if sacco.id in existing:
+            thresholds[sacco.id] = existing[sacco.id]
+        else:
+            thresholds[sacco.id] = _get_liquidity_threshold(sacco)
+    return thresholds
 
 
 def _calculate_utilisation_pct(available_reserves, pending_disbursements):
