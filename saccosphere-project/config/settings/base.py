@@ -5,7 +5,7 @@ from pathlib import Path
 import dj_database_url
 from decouple import Csv, config
 from corsheaders.defaults import default_headers
-
+from decimal import Decimal 
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -255,6 +255,33 @@ MPESA_B2C_SECURITY_CREDENTIAL = config(
 BILLING_ACCOUNT_NAME = config('BILLING_ACCOUNT_NAME', default='')
 BILLING_ACCOUNT_NUMBER = config('BILLING_ACCOUNT_NUMBER', default='')
 BILLING_PAYBILL = config('BILLING_PAYBILL', default='')
+
+
+DISBURSEMENT_TIERS = [
+    # (Maximum Amount, Invoice Fee)
+
+    (Decimal("10000"), Decimal("50.00")),      # KES 1 – 10,000
+    (Decimal("30000"), Decimal("100.00")),     # KES 10,001 – 30,000
+    (Decimal("70000"), Decimal("200.00")),     # KES 30,001 – 70,000
+    (Decimal("150000"), Decimal("350.00")),    # KES 70,001 – 150,000
+    (Decimal("300000"), Decimal("500.00")),    # KES 150,001 – 300,000
+    (None, Decimal("750.00")),                 # Above KES 300,000
+]
+
+WITHDRAWAL_TIERS = [
+    # (Maximum Amount, Invoice Fee)
+
+    (Decimal("2000"), Decimal("15.00")),       # KES 1 – 2,000
+    (Decimal("5000"), Decimal("25.00")),       # KES 2,001 – 5,000
+    (Decimal("10000"), Decimal("40.00")),      # KES 5,001 – 10,000
+    (Decimal("20000"), Decimal("60.00")),      # KES 10,001 – 20,000
+    (None, Decimal("100.00")),                 # Above KES 20,000
+]
+
+PLATFORM_TRANSACTION_PERCENTAGE_FEES = {
+    "deposit": Decimal("0.01"),        # 1%
+    "repayment": Decimal("0.005"),     # 0.5%
+}
 
 REDIS_URL = config('REDIS_URL', default='redis://localhost:6379/0')
 

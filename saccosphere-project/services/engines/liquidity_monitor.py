@@ -19,11 +19,40 @@ CASH_IN_CATEGORIES = (
     LedgerEntry.Category.LOAN_REPAYMENT,
     LedgerEntry.Category.FEE,
     LedgerEntry.Category.PENALTY,
+    # Reconciles the ledger to the true historical cash position (see
+    # backfill_savings_opening_balances). A CREDIT row here means the
+    # SACCO really was already holding that cash - it belongs on this
+    # side exactly like a deposit.
+    LedgerEntry.Category.OPENING_BALANCE,
 )
 CASH_OUT_CATEGORIES = (
     LedgerEntry.Category.SAVING_WITHDRAWAL,
     LedgerEntry.Category.LOAN_DISBURSEMENT,
-    LedgerEntry.Category.DIVIDEND,
+    # A DEBIT opening-balance row corrects the ledger *down* to the true
+    # historical position - the SACCO was never really holding that
+    # cash, so it comes off the reserve the same way a withdrawal does.
+    LedgerEntry.Category.OPENING_BALANCE,
+)
+
+# These categories CREDIT the member (raise what the SACCO owes them)
+# without any cash physically leaving yet: a dividend payout, a monthly
+# savings-interest credit, or an ADJUSTMENT such as the overpayment
+# refund liability booked in payments.tasks._record_repayment_overpayment.
+# ``LedgerEntry``'s own convention documents all three as "money moving
+# toward the member" (see ledger/models.py), i.e. always posted as
+# CREDIT - never DEBIT - so they can never appear in CASH_OUT_CATEGORIES
+# above (which is summed at entry_type=DEBIT and would silently total
+# zero for them). The money is not gone yet, but it is no longer free:
+# it is now earmarked to leave on the member's next withdrawal, so it
+# is treated as committed - subtracted from the reserve - the moment it
+# posts, not deferred until the (separately-counted) SAVING_WITHDRAWAL
+# that eventually pays it out. A DEBIT against one of these categories
+# (e.g. reversing a wrongly-booked adjustment) releases the commitment
+# and is added back.
+RESERVE_COMMITMENT_CATEGORIES = (
+    LedgerEntry.Category.DIVIDEND_PAYOUT,
+    LedgerEntry.Category.SAVINGS_INTEREST,
+    LedgerEntry.Category.ADJUSTMENT,
 )
 PENDING_DISBURSEMENT_STATUSES = (
     Loan.Status.APPROVED,
@@ -32,7 +61,10 @@ PENDING_DISBURSEMENT_STATUSES = (
 
 
 def get_available_liquid_reserves(sacco):
-    """Return cash-like ledger credits less cash-like ledger debits."""
+    """Return cash-like ledger credits, less cash-like ledger debits and
+    any dividend/interest/adjustment commitments already staged against
+    members but not yet withdrawn.
+    """
     cash_in = _sum_ledger_amounts(
         sacco=sacco,
         categories=CASH_IN_CATEGORIES,
@@ -43,8 +75,18 @@ def get_available_liquid_reserves(sacco):
         categories=CASH_OUT_CATEGORIES,
         entry_type=LedgerEntry.EntryType.DEBIT,
     )
+    commitments_posted = _sum_ledger_amounts(
+        sacco=sacco,
+        categories=RESERVE_COMMITMENT_CATEGORIES,
+        entry_type=LedgerEntry.EntryType.CREDIT,
+    )
+    commitments_reversed = _sum_ledger_amounts(
+        sacco=sacco,
+        categories=RESERVE_COMMITMENT_CATEGORIES,
+        entry_type=LedgerEntry.EntryType.DEBIT,
+    )
 
-    return cash_in - cash_out
+    return cash_in - cash_out - commitments_posted + commitments_reversed
 
 
 def get_pending_disbursement_total(sacco):
