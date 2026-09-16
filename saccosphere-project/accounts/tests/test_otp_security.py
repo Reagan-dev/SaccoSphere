@@ -125,9 +125,11 @@ class OTPConsolidationTestCase(TestCase):
         self.client = APIClient()
         self.user = User.objects.create_user(
             email='test@example.com',
-            phone_number='254700000001',
+            phone_number='+254700000001',
             password='testpass123',
         )
+        self.user.phone_verified_at = timezone.now()
+        self.user.save()
 
     @patch('accounts.otp_backends.PhoneOTPBackend.send')
     @override_settings(DEBUG=True, AT_API_KEY='test_key', AT_USERNAME='test_user')
@@ -139,7 +141,7 @@ class OTPConsolidationTestCase(TestCase):
         mock_send.return_value = None
 
         response = self.client.post(
-            '/api/v1/accounts/password/reset/',
+            '/api/v1/accounts/password/reset/request/',
             {
                 'phone_number': '+254700000001',
             },
@@ -165,7 +167,7 @@ class OTPConsolidationTestCase(TestCase):
         mock_send.return_value = None
 
         response = self.client.post(
-            '/api/v1/accounts/password/reset/',
+            '/api/v1/accounts/password/reset/request/',
             {
                 'phone_number': '+254999999999',  # Non-existent
             },
@@ -357,31 +359,31 @@ class PhoneValidationTestCase(TestCase):
         """Test that 8-digit numbers are rejected."""
         with self.assertRaises(OTPError) as cm:
             format_phone_number('12345678')
-        self.assertIn('Invalid phone number format', str(cm.exception))
+        self.assertIn('Invalid Kenyan phone number', str(cm.exception))
 
     def test_rejection_invalid_length_11_digits(self):
         """Test that 11-digit numbers are rejected."""
         with self.assertRaises(OTPError) as cm:
             format_phone_number('12345678901')
-        self.assertIn('Invalid phone number format', str(cm.exception))
+        self.assertIn('Invalid Kenyan phone number', str(cm.exception))
 
     def test_rejection_invalid_prefix_9_digit(self):
         """Test that 9-digit numbers not starting with 7 or 1 are rejected."""
         with self.assertRaises(OTPError) as cm:
             format_phone_number('912345678')
-        self.assertIn('Invalid phone number prefix', str(cm.exception))
+        self.assertIn('Invalid Kenyan phone number', str(cm.exception))
 
     def test_rejection_invalid_prefix_10_digit(self):
         """Test that 10-digit numbers starting with 0 but not 07 or 01 are rejected."""
         with self.assertRaises(OTPError) as cm:
             format_phone_number('0912345678')
-        self.assertIn('Invalid phone number prefix', str(cm.exception))
+        self.assertIn('Invalid Kenyan phone number', str(cm.exception))
 
     def test_rejection_invalid_prefix_12_digit(self):
         """Test that 12-digit numbers starting with 254 but not 2547 or 2541 are rejected."""
         with self.assertRaises(OTPError) as cm:
             format_phone_number('254912345678')
-        self.assertIn('Invalid phone number prefix', str(cm.exception))
+        self.assertIn('Invalid Kenyan phone number', str(cm.exception))
 
 
 class AfricasTalkingErrorHandlingTestCase(TestCase):

@@ -12,7 +12,7 @@ from PIL import Image
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 
-from accounts.models import OTPToken, Sacco, User
+from accounts.models import OTPToken, Sacco, SaccoPaymentConfig, User
 from ledger.models import LedgerEntry
 from notifications.models import Notification
 from payments.models import MpesaTransaction
@@ -243,6 +243,19 @@ class MpesaFlowTest(APITestCase):
             default_interest_rate=Decimal('12.00'),
             loan_multiplier=Decimal('3.00'),
             min_loan_months=0,
+            payment_ready=True,
+        )
+        SaccoPaymentConfig.objects.create(
+            sacco=cls.sacco,
+            shortcode_type=SaccoPaymentConfig.ShortcodeType.PAYBILL,
+            shortcode='600999',
+            stk_passkey='e2e_passkey',
+            daraja_consumer_key='e2e_consumer_key',
+            daraja_consumer_secret='e2e_consumer_secret',
+            environment=SaccoPaymentConfig.Environment.SANDBOX,
+            b2c_initiator_name='e2e_initiator',
+            b2c_security_credential='e2e_security_credential',
+            is_active=True,
         )
         cls.membership = Membership.objects.create(
             user=cls.user,
@@ -280,6 +293,7 @@ class MpesaFlowTest(APITestCase):
             status=Loan.Status.ACTIVE,
         )
 
+    @override_settings(MPESA_CALLBACK_TOKEN='e2e-test-token')
     @patch(
         'payments.views.DarajaClient.initiate_stk_push',
         return_value={
@@ -332,7 +346,10 @@ class MpesaFlowTest(APITestCase):
                     'ResultDesc': 'The service request is processed successfully.',
                     'CallbackMetadata': {
                         'Item': [
-                            {'Name': 'Amount', 'Value': 1000},
+                            # The customer pays the gross amount (net
+                            # deposit plus the platform fee); M-Pesa's
+                            # callback reports what was actually paid.
+                            {'Name': 'Amount', 'Value': 1010},
                             {'Name': 'MpesaReceiptNumber', 'Value': 'QWE123RTY'},
                         ],
                     },
@@ -340,18 +357,18 @@ class MpesaFlowTest(APITestCase):
             },
         }
         callback_response = client.post(
-            '/api/v1/payments/callback/mpesa/stk/',
+            reverse(
+                'payments:mpesa-stk-callback',
+                kwargs={'callback_token': 'e2e-test-token'},
+            ),
             callback_payload,
             format='json',
         )
         self.assertEqual(callback_response.status_code, status.HTTP_200_OK)
         delay_mock.assert_called_once()
+        callback_id = delay_mock.call_args.args[0]
 
-        process_stk_callback_task(
-            checkout_request_id='CRID-123',
-            result_code=0,
-            callback_body=callback_payload,
-        )
+        process_stk_callback_task(callback_id)
 
         mpesa_transaction.refresh_from_db()
         self.saving.refresh_from_db()

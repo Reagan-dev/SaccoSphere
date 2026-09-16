@@ -22,11 +22,11 @@ class AccountTaskTestCase(TestCase):
             password='testpass123',
         )
 
-    def create_token(self, code, expires_at, is_used):
+    def create_token(self, code, expires_at, is_used, phone_number=None):
         """Create an OTP token for cleanup tests."""
         return OTPToken.objects.create(
             user=self.user,
-            phone_number=self.user.phone_number,
+            phone_number=phone_number or self.user.phone_number,
             code=code,
             purpose=OTPToken.Purpose.PHONE_VERIFY,
             expires_at=expires_at,
@@ -41,10 +41,16 @@ class AccountTaskTestCase(TestCase):
             expires_at=now - timedelta(minutes=10),
             is_used=True,
         )
+        # A different phone_number is used for the abandoned token: the
+        # unique_active_otp_per_phone_purpose constraint allows only one
+        # unused token per (phone_number, purpose) at a time, so this and
+        # active_unused below cannot share a phone_number while both are
+        # unused.
         abandoned_unused = self.create_token(
             code='222222',
             expires_at=now + timedelta(minutes=10),
             is_used=False,
+            phone_number='254700000002',
         )
         OTPToken.objects.filter(id=abandoned_unused.id).update(
             created_at=now - timedelta(hours=25),

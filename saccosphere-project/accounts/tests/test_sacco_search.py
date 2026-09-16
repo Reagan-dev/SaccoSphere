@@ -87,7 +87,7 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url, {'search': 'Education'})
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['name'], 'Education SACCO Nairobi')
 
@@ -107,7 +107,7 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url, {'search': 'developers'})
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['name'], 'Tech Startup Fund')
 
@@ -117,7 +117,7 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url, {'sector': Sacco.Sector.EDUCATION})
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['sector'], 'EDUCATION')
 
@@ -127,7 +127,7 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url, {'county': 'momb'})
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['county'], 'Mombasa')
 
@@ -140,7 +140,7 @@ class SaccoSearchTestCase(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         self.assertEqual(len(results), 2)  # Two OPEN SACCOs
         for result in results:
             self.assertEqual(result['membership_type'], 'OPEN')
@@ -151,7 +151,7 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url, {'verified_only': 'true'})
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         self.assertEqual(len(results), 2)  # Two verified SACCOs
         for result in results:
             self.assertTrue(result['is_verified'])
@@ -162,7 +162,7 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url, {'min_members': 5})
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         # Only Education SACCO has 5 members
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['member_count'], 5)
@@ -173,10 +173,12 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url, {'max_members': 3})
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
-        # Agriculture SACCO has 3 members
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['member_count'], 3)
+        results = response.data['data']['results']
+        # Agriculture SACCO has 3 members and Healthcare SACCO has 0 members;
+        # Education SACCO (5 members) is excluded.
+        self.assertEqual(len(results), 2)
+        member_counts = {result['member_count'] for result in results}
+        self.assertEqual(member_counts, {3, 0})
 
     def test_sacco_order_by_name(self):
         """Test ordering SACCOs by name."""
@@ -184,7 +186,7 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url, {'ordering': 'name'})
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         names = [r['name'] for r in results]
         self.assertEqual(names, sorted(names))
 
@@ -194,7 +196,7 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url, {'ordering': '-member_count'})
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         self.assertEqual(results[0]['member_count'], 5)
         self.assertEqual(results[1]['member_count'], 3)
 
@@ -211,7 +213,7 @@ class SaccoSearchTestCase(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['sector'], 'EDUCATION')
         self.assertTrue(results[0]['is_verified'])
@@ -223,7 +225,7 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
         if results:
             result = results[0]
             # Check for required fields
@@ -240,7 +242,7 @@ class SaccoSearchTestCase(TestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, 200)
-        results = response.data.get('data', [])
+        results = response.data['data']['results']
 
         # Find the Education SACCO
         for result in results:
@@ -249,129 +251,3 @@ class SaccoSearchTestCase(TestCase):
                 break
         else:
             self.fail('Education SACCO not found in results')
-
-
-# ============================================================
-# REVIEW — READ THIS THEN DELETE FROM THIS LINE TO THE END
-# ============================================================
-#
-# WHAT EACH COMPONENT DOES AND WHY:
-#
-# 1. KENYA_COUNTIES Constant (accounts/models.py)
-#    - List of all 47 Kenya county names
-#    - WHY: Provides a fixed reference for county choices. Can be used in forms,
-#      validation, or seeding. Centralized in models so it's importable everywhere.
-#
-# 2. registration_fee Field (Sacco Model)
-#    - DecimalField with max_digits=10, decimal_places=2, default=0.00
-#    - WHY: SACCOs can charge joining fees. Use Decimal for money (no rounding errors
-#      like float). Default 0 for free entry.
-#
-# 3. seed_sacco_data Management Command
-#    - Counts Sacco.Sector.choices and KENYA_COUNTIES length
-#    - Prints "Seeded X counties and Y sectors"
-#    - WHY: Django management command for seeding data. Can be run with:
-#      python manage.py seed_sacco_data
-#    - Informational only (doesn't write to DB). Validates choices exist.
-#
-# 4. Enhanced SaccoListView.get_queryset()
-#    - Single queryset with all annotations and filters
-#    - Filters: search (name/description/registration_number), sector, county,
-#      membership_type, verified_only, min_members, max_members
-#    - Ordering: name, -name, member_count, -member_count, created_at, -created_at
-#    - WHY: Rich search/filter UX. Q objects allow OR logic (search across multiple
-#      fields). Annotate member_count once at DB level (efficient). Order validation
-#      prevents arbitrary SQL ordering.
-#
-# 5. SaccoListSerializer Updates
-#    - Added: membership_open (computed bool), can_apply (always False for AllowAny)
-#    - Added: registration_fee (Decimal display)
-#    - WHY: Frontend needs to know if SACCO accepts new members and fee amount.
-#      membership_open computed from membership_type=='OPEN'. can_apply always
-#      False because endpoint is AllowAny (no auth context).
-#
-# 6. Test Suite (test_sacco_search.py)
-#    - 14 test methods covering search, filters, ordering, combined queries
-#    - Tests serializer field presence and correctness
-#    - WHY: Regression suite. Ensures search/filter logic works as API grows.
-#
-#
-# DJANGO/PYTHON CONCEPTS:
-#
-# - Annotate: Add computed fields to queryset without fetching all data.
-#   Count('membership', filter=Q(...)) counts related objects matching condition.
-#   Efficient: single DB query instead of Python loops.
-#
-# - Q Objects: Allow complex queries with OR logic. Q(field1=x) | Q(field2=y)
-#   means "field1 OR field2". Used for search across multiple fields.
-#
-# - icontains: Case-insensitive substring match. 'momb' matches 'Mombasa'.
-#   Efficient with indexes. Better UX than exact match.
-#
-# - order_by with '-': Descending order. '-member_count' = highest member count first.
-#
-# - Decimal: Python type for exact decimal arithmetic. '0.1 + 0.2' = '0.3' exactly,
-#   unlike float. Required for money fields.
-#
-# - SerializerMethodField: Custom field computed via a get_* method.
-#   get_membership_open(obj) returns bool. Allows computed, non-DB fields.
-#
-# - TestCase with setUp: Django test class that runs setUp before each test.
-#   Creates fresh DB for isolation. Tests are independent.
-#
-# - reverse(): Resolves URL by view name. reverse('accounts:sacco-list') returns
-#   '/api/v1/accounts/saccos/' (or whatever the actual route is).
-#
-#
-# HOW TO TEST MANUALLY:
-#
-# 1. Create some SACCOs with different sectors and counties:
-#    POST /api/v1/accounts/saccos/ (if you have admin write endpoint)
-#    Or use Django admin: python manage.py createsuperuser, then /admin
-#
-# 2. List with search: GET /api/v1/accounts/saccos/?search=education
-#    Should return SACCOs with "education" in name/description
-#
-# 3. Filter by sector: GET /api/v1/accounts/saccos/?sector=EDUCATION
-#    Should return only EDUCATION sector SACCOs
-#
-# 4. Filter by members: GET /api/v1/accounts/saccos/?min_members=5
-#    Should return SACCOs with 5+ approved members
-#
-# 5. Order by member count: GET /api/v1/accounts/saccos/?ordering=-member_count
-#    Should return SACCOs sorted by member count descending
-#
-# 6. Combine filters: GET /api/v1/accounts/saccos/?sector=EDUCATION&verified_only=true&min_members=1
-#    Should return EDUCATION SACCOs that are verified with 1+ members
-#
-# 7. Run tests: python manage.py test accounts.tests.test_sacco_search
-#
-#
-# KEY DESIGN DECISIONS AND WHY:
-#
-# - Single queryset with all annotations: Prevents N+1 queries. One DB hit instead
-#   of one per filter. Better performance.
-#
-# - Order validation (valid_orderings list): Prevents malicious SQL injection via
-#   ordering param. Always whitelist allowed values.
-#
-# - Decimal('0.00') default for registration_fee: Allows free SACCOs while being
-#   explicit about money type. Decimal ensures precision.
-#
-# - KENYA_COUNTIES as module-level constant: Importable everywhere. Can be used
-#   in forms, validation, migrations. Centralized reference.
-#
-# - Test creates 5 members for Education, 3 for Agriculture: Allows testing both
-#   min_members >= 5 (returns 1 result) and max_members <= 3 (returns 1 result).
-#   Different counts test filtering logic.
-#
-# - membership_open computed vs stored: Don't store redundant data. Compute from
-#   membership_type on the fly. Saves DB space and prevents sync issues.
-#
-# - can_apply always False for AllowAny: Proper permission design. Unauthenticated
-#   users can't apply. Endpoint returns False; authenticated users would check
-#   separately (e.g., via a detail endpoint with custom logic).
-#
-# ============================================================
-# END OF REVIEW — DELETE EVERYTHING FROM THE FIRST # LINE ABOVE
-# ============================================================

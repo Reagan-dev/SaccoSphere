@@ -181,7 +181,7 @@ class StatementAccessLoggingFailureTestCase(TestCase):
 
     def test_record_statement_access_swallows_write_failure(self):
         from accounts.models import Sacco
-        from ledger.engines.statement_builder import _record_statement_access
+        from ledger.engines.statement_builder import record_statement_access
         from saccomembership.models import Membership
 
         user = User.objects.create_user(
@@ -209,6 +209,6 @@ class StatementAccessLoggingFailureTestCase(TestCase):
                 side_effect=OperationalError('connection lost'),
             ):
                 # Must not raise even though every retry attempt fails.
-                _record_statement_access(membership)
+                record_statement_access(membership)
 
         self.assertEqual(DataConsentLog.objects.count(), 0)

@@ -311,7 +311,7 @@ class TopSaccosTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         flagged = next(
             row for row in response.data
-            if row['sacco_id'] == self.sacco1.id
+            if row['sacco_id'] == str(self.sacco1.id)
         )
         self.assertEqual(flagged['health_status'], 'REVIEW')
 
@@ -503,7 +503,6 @@ class LiveTransactionFeedTest(APITestCase):
             transaction=txn,
             checkout_request_id='test_checkout',
             phone_number='254700000000',
-            amount=Decimal('1000.00'),
         )
 
         self.client.force_authenticate(user=self.super_admin)

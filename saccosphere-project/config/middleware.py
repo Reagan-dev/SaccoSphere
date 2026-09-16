@@ -33,7 +33,9 @@ class RequestContextFilter(logging.Filter):
     """
 
     def filter(self, record):
-        record.correlation_id = get_current_correlation_id() or '-'
+        explicit_correlation_id = getattr(record, 'correlation_id', None)
+        if not explicit_correlation_id or explicit_correlation_id == '-':
+            record.correlation_id = get_current_correlation_id() or '-'
         record.sacco_id = get_current_sacco_id() or '-'
         return True
 

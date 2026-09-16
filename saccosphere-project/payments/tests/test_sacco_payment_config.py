@@ -127,9 +127,11 @@ class DarajaClientCredentialIsolationTestCase(TestCase):
             daraja_consumer_key='consumer_key_a',
             daraja_consumer_secret='consumer_secret_a',
             environment=SaccoPaymentConfig.Environment.SANDBOX,
+            b2c_initiator_name='initiator_a',
+            b2c_security_credential='security_credential_a',
             is_active=True,
         )
-        
+
         self.config_b = SaccoPaymentConfig.objects.create(
             sacco=self.sacco_b,
             shortcode_type=SaccoPaymentConfig.ShortcodeType.PAYBILL,
@@ -138,6 +140,8 @@ class DarajaClientCredentialIsolationTestCase(TestCase):
             daraja_consumer_key='consumer_key_b',
             daraja_consumer_secret='consumer_secret_b',
             environment=SaccoPaymentConfig.Environment.SANDBOX,
+            b2c_initiator_name='initiator_b',
+            b2c_security_credential='security_credential_b',
             is_active=True,
         )
         
@@ -196,12 +200,12 @@ class DarajaClientCredentialIsolationTestCase(TestCase):
         """Test that a token for SACCO A is never reused for SACCO B."""
         # Mock successful token response
         mock_response_a = type('MockResponse', (), {
-            'json': lambda: {'access_token': 'token_a'},
-            'raise_for_status': lambda: None,
+            'json': lambda self: {'access_token': 'token_a'},
+            'raise_for_status': lambda self: None,
         })()
         mock_response_b = type('MockResponse', (), {
-            'json': lambda: {'access_token': 'token_b'},
-            'raise_for_status': lambda: None,
+            'json': lambda self: {'access_token': 'token_b'},
+            'raise_for_status': lambda self: None,
         })()
         
         # First call for SACCO A

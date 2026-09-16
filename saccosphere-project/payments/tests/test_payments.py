@@ -152,7 +152,11 @@ class DepositInitiateViewTests(TestCase):
         )
 
     def test_user_cannot_deposit_into_unowned_sacco(self):
-        """A user needs approved membership in the target SACCO."""
+        """The deposit-initiate endpoint is deprecated and no longer
+        performs SACCO-membership scoping itself - it always returns 410,
+        regardless of the caller's membership. Scoping for real deposits
+        now lives in STKPushView._get_owned_saving (see
+        payments/tests/test_deposit_guardrails.py)."""
         self.client.force_authenticate(user=self.user)
         response = self.client.post(
             reverse('payments:deposit-initiate'),
@@ -164,8 +168,7 @@ class DepositInitiateViewTests(TestCase):
             format='json',
         )
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertIn('approved membership', response.data['detail'])
+        self.assertEqual(response.status_code, status.HTTP_410_GONE)
         self.assertFalse(Transaction.objects.exists())
 
     def test_deposit_endpoint_deprecated(self):
@@ -339,6 +342,7 @@ class STKPushInitiationHardeningTests(TestCase):
             sector=Sacco.Sector.FINANCE,
             county='Nairobi',
             membership_type=Sacco.MembershipType.OPEN,
+            payment_ready=True,
         )
         self.membership = Membership.objects.create(
             user=self.user,
@@ -357,6 +361,18 @@ class STKPushInitiationHardeningTests(TestCase):
             amount=Decimal('1000.00'),
             total_contributions=Decimal('1000.00'),
             status=Saving.Status.ACTIVE,
+        )
+        self.payment_config = SaccoPaymentConfig.objects.create(
+            sacco=self.sacco,
+            shortcode_type=SaccoPaymentConfig.ShortcodeType.PAYBILL,
+            shortcode='600999',
+            stk_passkey='hardening_passkey',
+            daraja_consumer_key='hardening_consumer_key',
+            daraja_consumer_secret='hardening_consumer_secret',
+            environment=SaccoPaymentConfig.Environment.SANDBOX,
+            b2c_initiator_name='hardening_initiator',
+            b2c_security_credential='hardening_security_credential',
+            is_active=True,
         )
 
     def _payload(self):
@@ -500,7 +516,7 @@ class STKPushInitiationHardeningTests(TestCase):
         )
         MpesaTransaction.objects.create(
             transaction=transaction,
-            phone_number='254712900001',
+            phone_number='+254712900001',
             merchant_request_id='MRID-STK-HARD-DUPLICATE',
             checkout_request_id='CRID-STK-HARD-DUPLICATE',
             related_saving=self.saving,
@@ -613,6 +629,7 @@ class MpesaCallbackAcknowledgementTests(TestCase):
             description='Callback acknowledgement test',
         )
 
+    @override_settings(MPESA_CALLBACK_TOKEN='callback-ack-test-token')
     @patch('payments.views.is_safaricom_ip', return_value=True)
     @patch('payments.views.is_replay_attack', return_value=False)
     @patch('payments.tasks.process_stk_callback_task.delay')
@@ -645,7 +662,10 @@ class MpesaCallbackAcknowledgementTests(TestCase):
         }
 
         response = self.client.post(
-            reverse('payments:mpesa-stk-callback'),
+            reverse(
+                'payments:mpesa-stk-callback',
+                kwargs={'callback_token': 'callback-ack-test-token'},
+            ),
             callback_body,
             format='json',
         )
@@ -657,10 +677,10 @@ class MpesaCallbackAcknowledgementTests(TestCase):
         callback = Callback.objects.get()
         self.assertFalse(callback.processed)
         self.assertEqual(callback.transaction, transaction)
-        self.assertEqual(callback.raw_payload['callback_type'], 'STK')
-        self.assertEqual(callback.raw_payload['payload'], callback_body)
+        self.assertEqual(callback.raw_payload, callback_body)
         self.assertIn('broker unavailable', callback.processing_error)
 
+    @override_settings(MPESA_CALLBACK_TOKEN='callback-ack-test-token')
     @patch('payments.views.is_safaricom_ip', return_value=True)
     @patch('payments.views.is_replay_attack', return_value=False)
     @patch('payments.tasks.process_b2c_callback_task.delay')
@@ -690,7 +710,10 @@ class MpesaCallbackAcknowledgementTests(TestCase):
         }
 
         response = self.client.post(
-            reverse('payments:mpesa-b2c-callback'),
+            reverse(
+                'payments:mpesa-b2c-callback',
+                kwargs={'callback_token': 'callback-ack-test-token'},
+            ),
             callback_body,
             format='json',
         )
@@ -702,8 +725,7 @@ class MpesaCallbackAcknowledgementTests(TestCase):
         callback = Callback.objects.get()
         self.assertFalse(callback.processed)
         self.assertEqual(callback.transaction, transaction)
-        self.assertEqual(callback.raw_payload['callback_type'], 'B2C')
-        self.assertEqual(callback.raw_payload['payload'], callback_body)
+        self.assertEqual(callback.raw_payload, callback_body)
         self.assertIn('broker unavailable', callback.processing_error)
 
 

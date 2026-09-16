@@ -174,9 +174,9 @@ class ExternalGuarantorTests(TestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        results = response.data['results']
+        results = response.data['data']['results']
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['id'], external_guarantor.id)
+        self.assertEqual(results[0]['id'], str(external_guarantor.id))
         self.assertNotIn('response_token', results[0])
 
     def test_external_guarantor_accept_response_endpoint(self):

@@ -117,7 +117,7 @@ def normalize_phone_number(raw: str, region: str = 'KE') -> str:
     elif len(clean_num) == 10 and clean_num.startswith('0') and clean_num[1] in ('7', '1'):
         # Format: 0712345678 or 0112345678 -> +254712345678
         return f'+254{clean_num[1:]}'
-    elif len(clean_num) == 12 and clean_num.startswith('254'):
+    elif len(clean_num) == 12 and clean_num.startswith('254') and clean_num[3] in ('7', '1'):
         # Format: 254712345678 -> +254712345678
         return f'+{clean_num}'
     elif len(clean_num) == 13 and clean_num.startswith('+254'):
