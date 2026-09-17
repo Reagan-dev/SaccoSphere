@@ -1,0 +1,14 @@
+# Railway builds this service with Nixpacks. WeasyPrint (ledger/statement
+# PDF generation) needs native system libraries that a plain
+# `pip install -r requirements.txt` does not provide - without this file
+# ledger/views.py's PDF endpoint falls back to
+# "503 PDF generation temporarily unavailable." in every environment.
+[phases.setup]
+nixPkgs = [
+    "pango",
+    "cairo",
+    "gdk-pixbuf",
+    "libffi",
+    "shared-mime-info",
+    "fontconfig",
+]

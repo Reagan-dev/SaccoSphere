@@ -1,3 +1,4 @@
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.core.cache import cache
@@ -11,6 +12,17 @@ from rest_framework.test import APITestCase
 from .models import JobHeartbeat
 from .monitored_jobs import MONITORED_JOBS
 from .tasks import ALERT_STATE_CACHE_KEY, check_job_heartbeats
+
+
+def _seed_healthy_heartbeats():
+    for job_name in MONITORED_JOBS:
+        JobHeartbeat.objects.update_or_create(
+            job_name=job_name,
+            defaults={
+                'last_run_at': timezone.now(),
+                'last_status': JobHeartbeat.Status.OK,
+            },
+        )
 
 
 class LivenessViewTests(APITestCase):
@@ -77,14 +89,7 @@ class CheckJobHeartbeatsTaskTests(TestCase):
 
     def setUp(self):
         cache.delete(ALERT_STATE_CACHE_KEY)
-        for job_name in MONITORED_JOBS:
-            JobHeartbeat.objects.update_or_create(
-                job_name=job_name,
-                defaults={
-                    'last_run_at': timezone.now(),
-                    'last_status': JobHeartbeat.Status.OK,
-                },
-            )
+        _seed_healthy_heartbeats()
 
     def test_no_alert_when_all_jobs_are_healthy(self):
         with patch('health.tasks.mail_admins') as mail_admins:
@@ -114,3 +119,67 @@ class CheckJobHeartbeatsTaskTests(TestCase):
 
         mail_admins.assert_called_once()
         self.assertFalse(cache.get(ALERT_STATE_CACHE_KEY, False))
+
+
+class JobHealthViewTests(APITestCase):
+
+    def test_ok_when_every_monitored_job_is_fresh_and_healthy(self):
+        _seed_healthy_heartbeats()
+
+        response = self.client.get(reverse('health:job-health'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'ok')
+        for job_name in MONITORED_JOBS:
+            self.assertEqual(
+                response.data['jobs'][job_name]['status'], 'ok',
+            )
+
+    def test_unavailable_when_a_monitored_job_has_no_heartbeat(self):
+        response = self.client.get(reverse('health:job-health'))
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        self.assertEqual(response.data['status'], 'degraded')
+        missing_job = next(iter(MONITORED_JOBS))
+        self.assertEqual(
+            response.data['jobs'][missing_job]['status'], 'missing',
+        )
+
+    def test_unavailable_when_a_monitored_job_last_errored(self):
+        _seed_healthy_heartbeats()
+        errored_job = next(iter(MONITORED_JOBS))
+        JobHeartbeat.objects.filter(job_name=errored_job).update(
+            last_status=JobHeartbeat.Status.ERROR,
+        )
+
+        response = self.client.get(reverse('health:job-health'))
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        self.assertEqual(response.data['status'], 'degraded')
+        self.assertEqual(
+            response.data['jobs'][errored_job]['status'], 'errored',
+        )
+
+    def test_unavailable_when_a_monitored_job_heartbeat_is_stale(self):
+        _seed_healthy_heartbeats()
+        stale_job, max_age = next(iter(MONITORED_JOBS.items()))
+        JobHeartbeat.objects.filter(job_name=stale_job).update(
+            last_run_at=timezone.now() - max_age - timedelta(minutes=1),
+        )
+
+        response = self.client.get(reverse('health:job-health'))
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+        self.assertEqual(response.data['status'], 'degraded')
+        self.assertEqual(
+            response.data['jobs'][stale_job]['status'], 'stale',
+        )

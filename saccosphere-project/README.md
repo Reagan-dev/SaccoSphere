@@ -12,8 +12,8 @@ Required Railway services:
 
 | Service | Start command | Notes |
 | --- | --- | --- |
-| Web/API | `python manage.py migrate && python manage.py collectstatic --noinput && gunicorn config.wsgi:application` | The only service that needs a public domain. |
-| Worker | `celery -A config.celery worker -Q payments,notifications,reports,default -l info` | Consumes queued payment, notification, report, and default tasks. |
+| Web/API | `python manage.py migrate && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --workers=${WEB_CONCURRENCY:-3} --timeout=${GUNICORN_TIMEOUT:-60} --graceful-timeout=30` | The only service that needs a public domain. |
+| Worker | `celery -A config.celery worker -Q payments,notifications,reports,default -l info --concurrency=${CELERY_WORKER_CONCURRENCY:-4}` | Consumes queued payment, notification, report, and default tasks. |
 | Beat | `celery -A config.celery beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler` | Runs scheduled jobs through `django-celery-beat`. |
 
 All three services must use `DJANGO_SETTINGS_MODULE=config.settings.production`
@@ -27,13 +27,32 @@ Celery uses Redis through `REDIS_URL`. In production settings,
 the Railway Redis private URL must be present on the web, worker, and beat
 services.
 
-## PDF Statement Generation On Render
+`WEB_CONCURRENCY` and `GUNICORN_TIMEOUT` (see `.env.example`) tune the web
+service's gunicorn worker count and per-request timeout - both are required
+env vars in practice, since gunicorn otherwise defaults to a single
+synchronous worker.
+
+### Migrations and multiple web replicas
+
+The web service's start command runs `python manage.py migrate` inline before
+`gunicorn` starts, on every boot. This is safe with a single web replica. If
+the web service is ever scaled to more than one replica, do not let each
+replica run `migrate` concurrently against the same database - move the
+migrate step into Railway's **Pre-Deploy Command** (configured per-service in
+the Railway dashboard, runs once per deploy before any replica starts) instead
+of leaving it in the `web` process line.
+
+## PDF Statement Generation On Railway
 
 SaccoSphere uses WeasyPrint to generate member statement PDFs. WeasyPrint needs
-native system libraries in addition to the Python package.
+native system libraries in addition to the Python package. Railway builds this
+service with Nixpacks, and `nixpacks.toml` at the project root already declares
+the required packages (`pango`, `cairo`, `gdk-pixbuf`, `libffi`,
+`shared-mime-info`, `fontconfig`) - no extra build configuration should be
+needed on Railway as long as that file is present.
 
-On Render, install the required system packages during build before running
-`pip install -r requirements.txt`. A typical Debian-based setup is:
+If deploying to a plain Debian-based container instead (e.g. a Dockerfile),
+install the equivalent apt packages before `pip install -r requirements.txt`:
 
 ```bash
 apt-get update && apt-get install -y \
@@ -46,4 +65,4 @@ apt-get update && apt-get install -y \
 ```
 
 If these packages are missing, the JSON statement endpoint will still work, but
-PDF generation may return `503 PDF generation temporarily unavailable.`
+PDF generation will return `503 PDF generation temporarily unavailable.`
