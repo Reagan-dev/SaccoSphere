@@ -560,9 +560,10 @@ class LoanApprovalListCRBTests(TestCase):
         )
         
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data['results']), 1)
-        
-        loan_data = response.data['results'][0]
+        results = response.data['data']['results']
+        self.assertEqual(len(results), 1)
+
+        loan_data = results[0]
         self.assertEqual(loan_data['crb_status'], CRBCheck.CreditBand.GOOD)
         self.assertEqual(loan_data['crb_score'], 700)
         self.assertIsNotNone(loan_data['crb_checked_at'])
@@ -578,9 +579,10 @@ class LoanApprovalListCRBTests(TestCase):
         )
         
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data['results']), 1)
-        
-        loan_data = response.data['results'][0]
+        results = response.data['data']['results']
+        self.assertEqual(len(results), 1)
+
+        loan_data = results[0]
         self.assertIsNone(loan_data['crb_status'])
         self.assertIsNone(loan_data['crb_score'])
         self.assertIsNone(loan_data['crb_checked_at'])

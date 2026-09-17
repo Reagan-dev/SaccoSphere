@@ -28,6 +28,49 @@ class SaccoSpherePagination(PageNumberPagination):
             }
         )
 
+    def get_paginated_response_schema(self, schema):
+        return {
+            'type': 'object',
+            'properties': {
+                'success': {'type': 'boolean', 'example': True},
+                'message': {'type': 'string', 'example': 'Success'},
+                'data': {
+                    'type': 'object',
+                    'required': [
+                        'count', 'total_pages', 'current_page', 'results',
+                    ],
+                    'properties': {
+                        'count': {'type': 'integer', 'example': 123},
+                        'total_pages': {'type': 'integer', 'example': 7},
+                        'current_page': {'type': 'integer', 'example': 1},
+                        'next': {
+                            'type': 'string',
+                            'nullable': True,
+                            'format': 'uri',
+                            'example': (
+                                'http://api.example.org/accounts/'
+                                '?{page_query_param}=4'.format(
+                                    page_query_param=self.page_query_param,
+                                )
+                            ),
+                        },
+                        'previous': {
+                            'type': 'string',
+                            'nullable': True,
+                            'format': 'uri',
+                            'example': (
+                                'http://api.example.org/accounts/'
+                                '?{page_query_param}=2'.format(
+                                    page_query_param=self.page_query_param,
+                                )
+                            ),
+                        },
+                        'results': schema,
+                    },
+                },
+            },
+        }
+
 
 class FinancialPagination(SaccoSpherePagination):
     page_size = 50

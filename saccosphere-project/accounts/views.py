@@ -1056,7 +1056,15 @@ class OTPSendView(APIView):
     @swagger_auto_schema(
         operation_summary='Send OTP code',
         request_body=account_serializers.OTPRequestSerializer,
-        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
+        responses={200: openapi.Response(
+            'OTP sent',
+            openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'message': openapi.Schema(type=openapi.TYPE_STRING),
+                },
+            ),
+        )},
     )
     def post(self, request):
         serializer = account_serializers.OTPRequestSerializer(
@@ -1126,7 +1134,15 @@ class OTPVerifyView(APIView):
     @swagger_auto_schema(
         operation_summary='Verify OTP code',
         request_body=account_serializers.OTPVerifySerializer,
-        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
+        responses={200: openapi.Response(
+            'OTP verified',
+            openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'message': openapi.Schema(type=openapi.TYPE_STRING),
+                },
+            ),
+        )},
     )
     def post(self, request):
         serializer = account_serializers.OTPVerifySerializer(data=request.data)
@@ -1168,8 +1184,25 @@ class OTPResendView(APIView):
     @swagger_auto_schema(
         operation_summary='Resend OTP code',
         request_body=account_serializers.OTPRequestSerializer,
-        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}},
-                  429: {'type': 'object', 'properties': {'error': {'type': 'string'}}},
+        responses={
+            200: openapi.Response(
+                'OTP resent',
+                openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                    },
+                ),
+            ),
+            429: openapi.Response(
+                'Too many requests',
+                openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'error': openapi.Schema(type=openapi.TYPE_STRING),
+                    },
+                ),
+            ),
         }
     )
     def post(self, request):
@@ -1261,7 +1294,15 @@ class PasswordResetRequestView(APIView):
     @swagger_auto_schema(
         operation_summary='Request password reset',
         request_body=account_serializers.PasswordResetRequestSerializer,
-        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
+        responses={200: openapi.Response(
+            'Reset OTP sent',
+            openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'message': openapi.Schema(type=openapi.TYPE_STRING),
+                },
+            ),
+        )},
     )
     def post(self, request):
         serializer = account_serializers.PasswordResetRequestSerializer(data=request.data)
@@ -1332,7 +1373,15 @@ class PasswordResetConfirmView(APIView):
     @swagger_auto_schema(
         operation_summary='Verify OTP for password reset',
         request_body=account_serializers.OTPVerifySerializer,
-        responses={200: {'type': 'object', 'properties': {'reset_token': {'type': 'string'}}}},
+        responses={200: openapi.Response(
+            'Reset token issued',
+            openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'reset_token': openapi.Schema(type=openapi.TYPE_STRING),
+                },
+            ),
+        )},
     )
     def post(self, request):
         serializer = account_serializers.OTPVerifySerializer(data=request.data)
@@ -1382,7 +1431,15 @@ class PasswordResetCompleteView(APIView):
     @swagger_auto_schema(
         operation_summary='Complete password reset',
         request_body=account_serializers.PasswordResetCompleteSerializer,
-        responses={200: {'type': 'object', 'properties': {'message': {'type': 'string'}}}},
+        responses={200: openapi.Response(
+            'Password reset',
+            openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'message': openapi.Schema(type=openapi.TYPE_STRING),
+                },
+            ),
+        )},
     )
     def post(self, request):
         serializer = account_serializers.PasswordResetCompleteSerializer(

@@ -148,6 +148,12 @@ class SaccoScopedMixin:
         Raises:
             PermissionDenied: If user is not SACCO_ADMIN or SUPER_ADMIN
         """
+        if getattr(self, 'swagger_fake_view', False):
+            # drf-yasg introspects get_queryset() with an unauthenticated
+            # fake request during schema generation; there is no real
+            # user/role to scope against, so short-circuit safely.
+            return queryset.none()
+
         user = self.request.user
 
         # SUPER_ADMIN: return unchanged

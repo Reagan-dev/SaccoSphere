@@ -6,16 +6,22 @@ from drf_yasg import openapi
 from drf_yasg.views import get_schema_view
 from health.views import HealthCheckView, JobHealthView, ReadinessCheckView
 from rest_framework import permissions
+from rest_framework.authentication import SessionAuthentication
 
 
+# The schema enumerates every endpoint on the platform, including
+# staff/superadmin-only views and internal serializer field names, so it
+# is not public: staff log in via /admin/login/ (session auth) and then
+# browse /swagger/ or /redoc/ in the same browser session.
 schema_view = get_schema_view(
     openapi.Info(
         title='SaccoSphere API',
         default_version='v1.0.0',
         description='SaccoSphere SACCO management API',
     ),
-    public=True,
-    permission_classes=(permissions.AllowAny,),
+    public=False,
+    authentication_classes=(SessionAuthentication,),
+    permission_classes=(permissions.IsAdminUser,),
 )
 
 api_v1_patterns = [
@@ -53,12 +59,15 @@ urlpatterns = [
     path('health/jobs/', JobHealthView.as_view(), name='job-health-check'),
     path(
         'swagger/',
-        schema_view.with_ui('swagger', cache_timeout=0),
+        # Schema generation walks every installed viewset/serializer, so
+        # it is not free; cache it briefly rather than regenerating on
+        # every staff page load/navigation within drf-yasg's UI.
+        schema_view.with_ui('swagger', cache_timeout=60),
         name='schema-swagger-ui',
     ),
     path(
         'redoc/',
-        schema_view.with_ui('redoc', cache_timeout=0),
+        schema_view.with_ui('redoc', cache_timeout=60),
         name='schema-redoc',
     ),
 ]

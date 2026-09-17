@@ -7,7 +7,16 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView, UpdateAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.serializers import CharField, ChoiceField, Serializer
+from rest_framework.serializers import (
+    BooleanField,
+    CharField,
+    ChoiceField,
+    DateTimeField,
+    DictField,
+    IntegerField,
+    ListField,
+    Serializer,
+)
 
 from accounts.permissions import IsSaccoAdmin
 from guarantor.utils import check_loan_guarantors_complete
@@ -53,6 +62,31 @@ class LoanStatusUpdateSerializer(Serializer):
     )
 
 
+class LoanApprovalSerializer(Serializer):
+    """Documents the shape LoanApprovalListView._serialize_loan() returns.
+
+    Not used to actually build the response - that is built by hand for
+    prefetch efficiency (see the docstring on build_guarantors_summary).
+    This exists only so drf-yasg can document the response shape.
+    """
+
+    loan_id = CharField()
+    member_name = CharField()
+    member_number = CharField()
+    loan_type_name = CharField(allow_null=True)
+    amount = CharField()
+    term_months = IntegerField()
+    application_notes = CharField(allow_null=True, allow_blank=True)
+    applied_at = DateTimeField()
+    status = CharField()
+    guarantors_summary = DictField()
+    required_documents = ListField(child=DictField())
+    crb_status = CharField(allow_null=True)
+    crb_score = IntegerField(allow_null=True)
+    crb_checked_at = CharField(allow_null=True)
+    crb_listed_negative = BooleanField(allow_null=True)
+
+
 class LoanApprovalListView(SaccoScopedMixin, ListAPIView):
     """
     List loans awaiting SACCO admin approval.
@@ -61,7 +95,7 @@ class LoanApprovalListView(SaccoScopedMixin, ListAPIView):
     """
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
-    pagination_class = None
+    serializer_class = LoanApprovalSerializer
 
     def get(self, request, *args, **kwargs):
         response = self._set_sacco_context()
@@ -87,11 +121,15 @@ class LoanApprovalListView(SaccoScopedMixin, ListAPIView):
         ).order_by('-created_at')
 
     def list(self, request, *args, **kwargs):
-        loans = self.get_queryset()
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+        loans = page if page is not None else queryset
         results = [
             self._serialize_loan(loan, request)
             for loan in loans
         ]
+        if page is not None:
+            return self.get_paginated_response(results)
         return Response(
             {
                 'success': True,
@@ -138,6 +176,7 @@ class AdminLoanApprovalView(SaccoScopedMixin, UpdateAPIView):
     """
 
     permission_classes = [IsAuthenticated, IsSaccoAdmin]
+    serializer_class = LoanStatusUpdateSerializer
     lookup_field = 'id'
     http_method_names = ['patch', 'head', 'options']
     # Loan status changes here drive disbursement (money movement) - a

@@ -381,7 +381,7 @@ class PlatformAlertsTest(APITestCase):
         response = self.client.get('/api/v1/management/superadmin/alerts/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIsInstance(response.data, list)
+        self.assertIsInstance(response.data['data']['results'], list)
 
     def test_alerts_only_shows_open_flags(self):
         """Alerts view only shows OPEN and INVESTIGATING flags."""
@@ -405,8 +405,9 @@ class PlatformAlertsTest(APITestCase):
         response = self.client.get('/api/v1/management/superadmin/alerts/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]['severity'], 'CRITICAL')
+        results = response.data['data']['results']
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['severity'], 'CRITICAL')
 
     def test_auto_created_flag_appears_in_alerts(self):
         """A detector-created flag surfaces here just like a manual one."""
@@ -436,9 +437,10 @@ class PlatformAlertsTest(APITestCase):
         response = self.client.get('/api/v1/management/superadmin/alerts/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]['flag_type'], 'PAYMENT_FAILURE')
-        self.assertEqual(response.data[0]['sacco_name'], self.sacco.name)
+        results = response.data['data']['results']
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['flag_type'], 'PAYMENT_FAILURE')
+        self.assertEqual(results[0]['sacco_name'], self.sacco.name)
 
 
 class LiveTransactionFeedTest(APITestCase):
@@ -551,8 +553,9 @@ class AllSaccosTest(APITestCase):
         response = self.client.get('/api/v1/management/superadmin/saccos/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIsInstance(response.data, list)
-        self.assertEqual(len(response.data), 2)
+        results = response.data['data']['results']
+        self.assertIsInstance(results, list)
+        self.assertEqual(len(results), 2)
 
     def test_all_saccos_has_required_fields(self):
         """All SACCOs data has required fields."""
@@ -560,7 +563,7 @@ class AllSaccosTest(APITestCase):
         response = self.client.get('/api/v1/management/superadmin/saccos/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        for sacco_data in response.data:
+        for sacco_data in response.data['data']['results']:
             self.assertIn('id', sacco_data)
             self.assertIn('name', sacco_data)
             self.assertIn('member_count', sacco_data)
@@ -623,7 +626,7 @@ class AllMembersTest(APITestCase):
         response = self.client.get('/api/v1/management/superadmin/members/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('results', response.data)
+        self.assertIn('results', response.data['data'])
 
     def test_all_members_pagination(self):
         """All members endpoint uses pagination."""
@@ -631,8 +634,8 @@ class AllMembersTest(APITestCase):
         response = self.client.get('/api/v1/management/superadmin/members/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('count', response.data)
-        self.assertIn('results', response.data)
+        self.assertIn('count', response.data['data'])
+        self.assertIn('results', response.data['data'])
 
     def test_all_members_filter_by_sacco(self):
         """Can filter members by SACCO ID."""
@@ -642,7 +645,7 @@ class AllMembersTest(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['count'], 2)
+        self.assertEqual(response.data['data']['count'], 2)
 
     def test_all_members_search(self):
         """Can search members by email or name."""
@@ -652,5 +655,7 @@ class AllMembersTest(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['count'], 1)
-        self.assertEqual(response.data['results'][0]['email'], 'user1@test.com')
+        self.assertEqual(response.data['data']['count'], 1)
+        self.assertEqual(
+            response.data['data']['results'][0]['email'], 'user1@test.com'
+        )

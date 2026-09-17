@@ -16,7 +16,6 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -24,6 +23,7 @@ from rest_framework.views import APIView
 from accounts.permissions import IsSuperAdmin
 from accounts.models import Sacco, User
 from billing.models import InvoiceLineItem
+from config.pagination import SaccoSpherePagination
 from payments.models import Transaction, MpesaTransaction
 from saccomembership.models import Membership
 
@@ -257,7 +257,7 @@ class PlatformAlertsView(ListAPIView):
     """
 
     permission_classes = [IsAuthenticated, IsSuperAdmin]
-    pagination_class = None
+    serializer_class = PlatformAlertSerializer
 
     def get_queryset(self):
         return ComplianceFlag.objects.filter(
@@ -269,8 +269,10 @@ class PlatformAlertsView(ListAPIView):
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+
         alerts = []
-        for flag in queryset:
+        for flag in page if page is not None else queryset:
             alerts.append({
                 'sacco_name': flag.sacco.name,
                 'flag_type': flag.flag_type,
@@ -280,6 +282,8 @@ class PlatformAlertsView(ListAPIView):
             })
 
         serializer = PlatformAlertSerializer(alerts, many=True)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -339,16 +343,9 @@ class AllSaccosListView(ListAPIView):
 
     permission_classes = [IsAuthenticated, IsSuperAdmin]
     serializer_class = AllSaccosSerializer
-    pagination_class = None
 
     def get_queryset(self):
         return Sacco.objects.all().prefetch_related('compliance_flags')
-
-
-class MemberPagination(PageNumberPagination):
-    page_size = 20
-    page_size_query_param = 'page_size'
-    max_page_size = 100
 
 
 class AllMembersListView(ListAPIView):
@@ -360,7 +357,8 @@ class AllMembersListView(ListAPIView):
     """
 
     permission_classes = [IsAuthenticated, IsSuperAdmin]
-    pagination_class = MemberPagination
+    pagination_class = SaccoSpherePagination
+    serializer_class = AllMembersSerializer
 
     def get_queryset(self):
         queryset = Membership.objects.filter(
