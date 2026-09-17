@@ -7,6 +7,8 @@ __pycache__/
 
 db.sqlite3
 saccosphere-project/db.sqlite3
+*.sqlite3.backup
+saccosphere-project/*.sqlite3.backup
 
 logs/
 saccosphere-project/logs/
@@ -14,3 +16,9 @@ saccosphere-project/logs/
 .env
 *.log
 tmp*/
+
+# User-uploaded content (KYC documents, member import CSVs, etc.) - never
+# belongs in source control: it is real or test PII, accumulates on every
+# upload, and is already served from S3/local disk via MEDIA_ROOT.
+media/
+saccosphere-project/media/
