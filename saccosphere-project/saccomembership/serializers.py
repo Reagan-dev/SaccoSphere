@@ -262,12 +262,17 @@ class MembershipApplySerializer(serializers.Serializer):
                 {'sacco': 'You have already applied to this SACCO.'}
             ) from exc
 
-        SaccoApplication.objects.create(
+        application = SaccoApplication.objects.create(
             user=request.user,
             sacco=sacco,
             status=SaccoApplication.Status.SUBMITTED,
             **application_fields,
         )
+        # Not a model relation - Membership and SaccoApplication have no FK
+        # between them. Stashed on the instance purely so the view can put
+        # application.id in the POST /memberships/ response without a
+        # second query; nothing persists this attribute.
+        membership.application = application
 
         field_map = {
             field.id: field

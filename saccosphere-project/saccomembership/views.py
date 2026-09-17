@@ -67,6 +67,7 @@ class MembershipListView(StandardResponseMixin, ListAPIView):
             membership,
             context=self.get_serializer_context(),
         ).data
+        data['application_id'] = str(membership.application.id)
         return self.created(data, 'Membership application submitted')
 
 
@@ -83,6 +84,7 @@ class MembershipApplyView(StandardResponseMixin, CreateAPIView):
             membership,
             context=self.get_serializer_context(),
         ).data
+        data['application_id'] = str(membership.application.id)
         return self.created(data, 'Membership application submitted')
 
 

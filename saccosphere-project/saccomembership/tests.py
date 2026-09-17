@@ -502,3 +502,55 @@ class SaccoFieldsPublicViewRegressionTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data['data']), 1)
         self.assertEqual(response.data['data'][0]['label'], 'Employer Name')
+
+
+class MembershipApplyResponseTests(TestCase):
+    """POST /members/memberships/ must return the SaccoApplication id.
+
+    Regression test for the gap where the SaccoApplication created
+    alongside the Membership was never surfaced to the client, leaving
+    the document-upload endpoint (which requires that id) unreachable.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.sacco = Sacco.objects.create(
+            name='Apply Response SACCO',
+            registration_number='AR001',
+            sector=Sacco.Sector.FINANCE,
+            county='Nairobi',
+        )
+        self.applicant = User.objects.create_user(
+            email='apply-response@example.com',
+            password='StrongPass123',
+        )
+        self.client.force_authenticate(user=self.applicant)
+
+    def test_response_includes_the_created_application_id(self):
+        response = self.client.post(
+            reverse('saccomembership:membership-list'),
+            {'sacco': str(self.sacco.id)},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        application = SaccoApplication.objects.get(
+            user=self.applicant, sacco=self.sacco,
+        )
+        self.assertEqual(
+            response.data['data']['application_id'], str(application.id),
+        )
+
+    def test_returned_application_id_unlocks_the_document_endpoint(self):
+        response = self.client.post(
+            reverse('saccomembership:membership-list'),
+            {'sacco': str(self.sacco.id)},
+            format='json',
+        )
+        application_id = response.data['data']['application_id']
+
+        document_response = self.client.get(
+            f'/api/v1/members/applications/{application_id}/documents/',
+        )
+
+        self.assertEqual(document_response.status_code, status.HTTP_200_OK)
