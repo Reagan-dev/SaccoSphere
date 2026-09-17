@@ -150,12 +150,19 @@ class ErasureRequestEndpointTestCase(TestCase):
             phone_number='+254700000001',
             email='test@example.com',
         )
+        self.staff_user = User.objects.create_user(
+            phone_number='+254700000002',
+            email='staff@example.com',
+            is_staff=True,
+        )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
 
-    def test_erasure_request_executes_immediately_without_hold(self):
+    def test_erasure_request_is_queued_for_review_without_hold(self):
         """
-        Test that erasure request executes immediately when no hold applies.
+        Test that an erasure request with no active hold is queued as
+        PENDING for staff review rather than executed immediately, and
+        that KYC data is only anonymized once staff approve it.
         """
         # Create a KYC record
         kyc = KYCVerification.objects.create(
@@ -175,10 +182,22 @@ class ErasureRequestEndpointTestCase(TestCase):
             {'reason': 'I want my data deleted'},
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data['status'], 'COMPLETED')
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['status'], 'PENDING')
 
-        # Verify KYC was anonymized
+        # KYC is untouched until a reviewer approves the request
+        kyc.refresh_from_db()
+        self.assertEqual(kyc.id_number, '12345678')
+
+        # Staff approves the request
+        self.client.force_authenticate(user=self.staff_user)
+        review_response = self.client.post(
+            f'/api/v1/accounts/erasure-requests/{response.data["id"]}/review/',
+            {'action': 'approve'},
+        )
+        self.assertEqual(review_response.status_code, 200)
+
+        # Verify KYC was anonymized on approval
         kyc.refresh_from_db()
         self.assertIsNone(kyc.id_number)
 
@@ -231,9 +250,10 @@ class ErasureRequestEndpointTestCase(TestCase):
         ).order_by('-requested_at').first()
         self.assertEqual(new_request.status, DataErasureRequest.Status.ON_HOLD)
 
-    def test_queued_erasure_executes_when_hold_cleared(self):
+    def test_queued_erasure_moves_to_pending_when_hold_cleared(self):
         """
-        Test that a queued erasure request executes when hold is cleared.
+        Test that a queued erasure request moves to PENDING for staff
+        review once its hold expires, rather than executing automatically.
         """
         from accounts.kyc_retention import process_queued_erasure_requests
 
@@ -258,13 +278,14 @@ class ErasureRequestEndpointTestCase(TestCase):
         # Process queued requests
         process_queued_erasure_requests()
 
-        # Verify KYC was anonymized
+        # KYC is untouched until a reviewer approves the request
         kyc.refresh_from_db()
-        self.assertIsNone(kyc.id_number)
+        self.assertEqual(kyc.id_number, '12345678')
 
-        # Verify request was marked as completed
+        # Verify request was moved to PENDING for staff review
         erasure_request.refresh_from_db()
-        self.assertEqual(erasure_request.status, DataErasureRequest.Status.COMPLETED)
+        self.assertEqual(erasure_request.status, DataErasureRequest.Status.PENDING)
+        self.assertIsNone(erasure_request.hold_until)
 
 
 class KYCDeletionCascadeTestCase(TestCase):

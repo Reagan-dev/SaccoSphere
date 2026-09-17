@@ -147,13 +147,15 @@ def _delete_s3_objects(kyc):
 
 def process_queued_erasure_requests():
     """
-    Process erasure requests that were on hold but are now eligible.
+    Move erasure requests out of ON_HOLD once their hold has expired.
+
+    Anonymization only ever happens through staff review
+    (DataErasureReviewView), so a cleared hold moves the request to
+    PENDING for review rather than executing it automatically.
 
     This function should be called periodically (e.g., via Celery beat)
     to check for erasure requests whose holds have expired.
     """
-    from django.db import models
-
     now = timezone.now()
 
     # Find requests on hold where hold_until has passed
@@ -164,25 +166,29 @@ def process_queued_erasure_requests():
 
     for request in eligible_requests:
         try:
-            # Get the user's KYC record
-            kyc = KYCVerification.objects.filter(user=request.user).first()
-            if kyc:
-                success = anonymize_kyc_record(
-                    kyc,
-                    triggered_by=None,
-                    reason=f'Erasure request processed after hold lifted: {request.get_hold_reason_display()}',
-                )
-                if success:
-                    request.status = DataErasureRequest.Status.COMPLETED
-                    request.completed_at = now
-                    request.save()
-                    logger.info(
-                        f'Processed queued erasure request {request.id}',
-                        extra={'request_id': str(request.id)},
-                    )
-        except Exception as e:
+            hold_reason = request.get_hold_reason_display()
+            request.status = DataErasureRequest.Status.PENDING
+            request.hold_reason = None
+            request.hold_until = None
+            request.save()
+
+            log_audit(
+                user=None,
+                action='ERASURE_HOLD_CLEARED',
+                resource_type='DataErasureRequest',
+                resource_id=str(request.id),
+                old_values={'hold_reason': hold_reason},
+                new_values={'status': DataErasureRequest.Status.PENDING},
+            )
+
+            logger.info(
+                f'Erasure request {request.id} moved to PENDING for review '
+                f'after hold cleared: {hold_reason}',
+                extra={'request_id': str(request.id)},
+            )
+        except Exception:
             logger.error(
-                f'Failed to process erasure request {request.id}',
+                f'Failed to clear hold on erasure request {request.id}',
                 exc_info=True,
                 extra={'request_id': str(request.id)},
             )
