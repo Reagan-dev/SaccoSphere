@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "SaccoSphere API",
-    "description": "SaccoSphere API Collection - v1.0.0\n\nBase URL: http://localhost:8000\n\nAuthentication: JWT Bearer Token",
+    "description": "SaccoSphere API Collection - v1.0.0\n\nBase URL: http://localhost:8000\n\nAuthentication: JWT Bearer Token\n\nbase_url is the active variable every request uses. base_url_local (http://localhost:8000) and base_url_railway (fill in with your deployed Railway web service domain - not committed here, no railway.json/custom-domain config was found in-repo to source a default from) are provided as copy-paste presets: set base_url to whichever one you are targeting.\n\nNever fire mutating requests (disbursement, STK push, erasure, anything irreversible or touching real PII) at a Railway/production base_url - use sandbox credentials against a local instance only.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "123456"
   },
@@ -110,6 +110,48 @@
               ]
             },
             "description": "Versioned API readiness probe."
+          },
+          "response": []
+        },
+        {
+          "name": "Job Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health/jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health",
+                "jobs",
+                ""
+              ]
+            },
+            "description": "Reports staleness of scheduled Celery jobs (JobHeartbeat-backed). 200 if all monitored jobs are fresh and last ran OK, 503 if any is stale/missing/errored. No auth required."
+          },
+          "response": []
+        },
+        {
+          "name": "API v1 Job Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/health/jobs/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health",
+                "jobs",
+                ""
+              ]
+            },
+            "description": "Same as /health/jobs/, mounted under the versioned API prefix for API clients. No auth required."
           },
           "response": []
         }
@@ -495,7 +537,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"code\": \"google_oauth_code\",\n  \"flow\": \"signup\"\n}"
+              "raw": "{\n  \"id_token\": \"{{google_id_token}}\",\n  \"flow\": \"signup\",\n  \"nonce\": \"\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/oauth/google/callback/",
@@ -512,7 +554,44 @@
                 ""
               ]
             },
-            "description": "Google Sign-In + Sign-Up callback with flow parameter"
+            "description": "Google Sign-In + Sign-Up callback. GoogleAuthSerializer takes id_token (Google ID token, NOT an OAuth 'code') + flow (login|signup, default login) + optional nonce. 200 login success / existing linked user; 201 new user created via signup flow; 400 bad token/serializer; 401 verification failed/nonce invalid/email not verified; 404 login flow, no account for that email; 409 a password-only account already exists with that email."
+          },
+          "response": []
+        },
+        {
+          "name": "Google OAuth Link",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/oauth/google/link/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "oauth",
+                "google",
+                "link",
+                ""
+              ]
+            },
+            "description": "Attach a Google identity to the CURRENT authenticated account (distinct from the public login/signup callback above). Body: id_token + optional nonce. The token's email must match the logged-in user's email. 200 linked; 400 bad token/email mismatch; 401 verification failed; 409 that Google identity is already linked to a different user.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id_token\": \"{{google_id_token}}\",\n  \"nonce\": \"\"\n}"
+            }
           },
           "response": []
         },
@@ -532,7 +611,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"device_name\": \"iPhone 14 Pro\",\n  \"device_type\": \"ios\",\n  \"device_identifier\": \"unique_device_id\"\n}"
+              "raw": "{\n  \"device_id\": \"unique_device_id\",\n  \"device_name\": \"iPhone 14 Pro\",\n  \"platform\": \"ios\",\n  \"push_token\": \"\",\n  \"biometric_enabled\": false\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/device/register/",
@@ -799,7 +878,7 @@
               "raw": "{\n  \"phone_number\": \"+254712345678\"\n}"
             },
             "url": {
-              "raw": "{{base_url}}/api/v1/accounts/password/reset/",
+              "raw": "{{base_url}}/api/v1/accounts/password/reset/request/",
               "host": [
                 "{{base_url}}"
               ],
@@ -809,10 +888,11 @@
                 "accounts",
                 "password",
                 "reset",
+                "request",
                 ""
               ]
             },
-            "description": "Request password reset via OTP"
+            "description": "Step 1 of 3. Body: phone_number only. Always returns 200 with a generic message regardless of whether the phone exists (anti-enumeration) - never reveals success/failure of delivery."
           },
           "response": []
         },
@@ -828,7 +908,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"code\": \"123456\",\n  \"new_password\": \"NewSecurePass456\",\n  \"new_password2\": \"NewSecurePass456\"\n}"
+              "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"code\": \"123456\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/accounts/password/reset/confirm/",
@@ -845,7 +925,279 @@
                 ""
               ]
             },
-            "description": "Confirm password reset with OTP"
+            "description": "Step 2 of 3. Body: phone_number + the 6-digit OTP code (verifies purpose=PASSWORD_RESET) - it does NOT take a new password here. On success returns {\"reset_token\": \"<uuid>\"}, valid for 15 minutes, which step 3 (password/reset/complete/) needs."
+          },
+          "response": []
+        },
+        {
+          "name": "Complete Password Reset",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/password/reset/complete/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "password",
+                "reset",
+                "complete",
+                ""
+              ]
+            },
+            "description": "Step 3 of 3. Body: reset_token (from step 2's response) + new_password + new_password2. 200 success; 400 if passwords mismatch/weak, reset_token expired (>15 min), already used, or invalid.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reset_token\": \"{{reset_token}}\",\n  \"new_password\": \"NewSecurePass456\",\n  \"new_password2\": \"NewSecurePass456\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Give Consent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/consents/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "consents",
+                ""
+              ]
+            },
+            "description": "Record the user's consent. consent_type must be one of TERMS | PRIVACY | DATA_PROCESSING | MARKETING (UserConsent.ConsentType). version must start with 'v' (e.g. v1.0). 200 idempotent if an identical active consent already exists; 201 new consent recorded; 400 invalid consent_type/version or a protected field (user/ip_address/timestamp/user_agent) was sent; 429 throttled (10/hr/user, 20/hr/IP).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"consent_type\": \"TERMS\",\n  \"version\": \"v1.0\",\n  \"consented\": true\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Consents (Current Status)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/consents/list/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "consents",
+                "list",
+                ""
+              ]
+            },
+            "description": "One entry per ConsentType (4 total) showing the user's CURRENT status for each - either the most recent real consent record, or a 'never_given' placeholder. Distinct from /consents/history/ which returns the full audit trail."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Consent History",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/consents/history/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "consents",
+                "history",
+                ""
+              ]
+            },
+            "description": "Full chronological list of every consent record for this user (including withdrawn/superseded ones), newest first."
+          },
+          "response": []
+        },
+        {
+          "name": "Export Consents",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/consents/export/?consents_page=1&consents_page_size=50&logs_page=1&logs_page_size=50",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "consents",
+                "export",
+                ""
+              ],
+              "query": [
+                {
+                  "key": "consents_page",
+                  "value": "1"
+                },
+                {
+                  "key": "consents_page_size",
+                  "value": "50"
+                },
+                {
+                  "key": "logs_page",
+                  "value": "1"
+                },
+                {
+                  "key": "logs_page_size",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Downloadable export of the user's own consents + DataConsentLog entries where they were the data subject. Uses non-standard pagination param names (consents_page/consents_page_size, logs_page/logs_page_size), not the usual page/page_size. Throttled 5/hr/user, 10/hr/IP."
+          },
+          "response": []
+        },
+        {
+          "name": "Withdraw Consent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/consents/{{consent_type}}/withdraw/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "consents",
+                "{{consent_type}}",
+                "withdraw",
+                ""
+              ]
+            },
+            "description": "consent_type is a PATH parameter (TERMS|PRIVACY|DATA_PROCESSING|MARKETING), no request body needed. 200 the now-withdrawn record; 400 invalid consent_type; 404 no active consent of that type to withdraw."
+          },
+          "response": []
+        },
+        {
+          "name": "Request Data Erasure",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/me/erasure-requests/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "me",
+                "erasure-requests",
+                ""
+              ]
+            },
+            "description": "Member-initiated DPA data-erasure request. Body: reason. 201 created (status=PENDING) if no compliance hold applies; 202 created (status=ON_HOLD) if a KYC/regulatory hold applies - response includes hold_reason/hold_until; 400 if the user already has a PENDING request.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"No longer using the platform\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Review Data Erasure Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/accounts/erasure-requests/{{erasure_request_id}}/review/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "accounts",
+                "erasure-requests",
+                "{{erasure_request_id}}",
+                "review",
+                ""
+              ]
+            },
+            "description": "STAFF ONLY (checks request.user.is_staff directly, not a SACCO-admin role). Body: action (approve|reject) + optional reviewer_notes. approve immediately anonymizes the user + KYC record and revokes all outstanding JWTs. 200 success; 400 invalid action, or the request was already reviewed (status != PENDING); 403 caller is not staff; 404 unknown request_id.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"approve\",\n  \"reviewer_notes\": \"Verified identity, no active loans\"\n}"
+            }
           },
           "response": []
         }
@@ -1018,7 +1370,7 @@
               "formdata": [
                 {
                   "key": "document_type",
-                  "value": "payslip",
+                  "value": "LATEST_PAYSLIP",
                   "type": "text"
                 },
                 {
@@ -1354,7 +1706,7 @@
           "response": []
         },
         {
-          "name": "Replace Application Review",
+          "name": "Replace Application Review [FLAGGED - DO NOT USE]",
           "request": {
             "method": "PUT",
             "header": [
@@ -1386,7 +1738,7 @@
                 ""
               ]
             },
-            "description": "Approve or reject a SACCO membership application using PUT.",
+            "description": "Approve or reject a SACCO membership application using PUT. [FLAGGED - DO NOT USE] This view has no working update()/put() implementation (its Serializer has no create()/update()); DRF's default UpdateModelMixin.update() then calls serializer.save() which raises an unhandled AssertionError, so this PUT currently returns an unhandled 500, not a real alternate to PATCH. Kept here only so the bug is documented and doesn't get silently dropped; use the PATCH request instead.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"status\": \"APPROVED\",\n  \"review_notes\": \"Application approved\"\n}"
@@ -1507,7 +1859,7 @@
           "response": []
         },
         {
-          "name": "Replace KYC Review",
+          "name": "Replace KYC Review [FLAGGED - DO NOT USE]",
           "request": {
             "method": "PUT",
             "header": [
@@ -1539,7 +1891,7 @@
                 ""
               ]
             },
-            "description": "Approve or reject a member KYC record using PUT.",
+            "description": "Approve or reject a member KYC record using PUT. [FLAGGED - DO NOT USE] This view has no working update()/put() implementation (its Serializer has no create()/update()); DRF's default UpdateModelMixin.update() then calls serializer.save() which raises an unhandled AssertionError, so this PUT currently returns an unhandled 500, not a real alternate to PATCH. Kept here only so the bug is documented and doesn't get silently dropped; use the PATCH request instead.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"status\": \"APPROVED\",\n  \"manual_verification_reason\": \"Documents verified manually\",\n  \"rejection_reason\": \"\"\n}"
@@ -1584,7 +1936,7 @@
                 ""
               ]
             },
-            "description": "Update loan status through approval workflow"
+            "description": "PATCH only (GET/PUT/DELETE -> 405). status must be one of UNDER_REVIEW|APPROVED|REJECTED|DISBURSED (not the full Loan.Status enum). override_reason (>=10 chars) is required only when approving a loan that has a negative CRB listing on file. APPROVED->DISBURSED triggers a real M-Pesa B2C disbursement call."
           },
           "response": []
         },
@@ -1813,7 +2165,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"status\": \"APPROVED\",\n  \"review_notes\": \"Guarantor verified\"\n}"
+              "raw": "{\n  \"action\": \"APPROVE\",\n  \"admin_notes\": \"Guarantor verified\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/management/external-guarantors/{{id}}/review/",
@@ -1830,7 +2182,7 @@
                 ""
               ]
             },
-            "description": "Approve or reject external guarantor request (SACCO_ADMIN only)"
+            "description": "ExternalGuarantorAdminReviewView. Body: action (APPROVE|REJECT, required) + admin_notes (optional, <=500 chars). APPROVE is only valid when the guarantor's current status is ACCEPTED. PATCH only - GET/PUT/DELETE on this route return 405."
           },
           "response": []
         },
@@ -2884,10 +3236,15 @@
         {
           "name": "Dispute Loan Disbursement",
           "request": {
-            "method": "GET",
-            "header": [],
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{base_url}}/api/v1/services/loans/dispute-disbursement/?token={{disbursement_token}}&reason=Funds%20not%20received",
+              "raw": "{{base_url}}/api/v1/services/loans/dispute-disbursement/",
               "host": [
                 "{{base_url}}"
               ],
@@ -2898,29 +3255,28 @@
                 "loans",
                 "dispute-disbursement",
                 ""
-              ],
-              "query": [
-                {
-                  "key": "token",
-                  "value": "{{disbursement_token}}"
-                },
-                {
-                  "key": "reason",
-                  "value": "Funds not received"
-                }
               ]
             },
-            "description": "Public dispute link used by a member to report a missing disbursement."
+            "description": "PUBLIC link (no auth) for a member to report a missing/incorrect disbursement. POST with token+reason in the JSON body (same token-in-body reasoning as confirm-disbursement above, NOT a GET). 200 on success or idempotent re-dispute; 400 missing/expired/bad token, or already MEMBER_CONFIRMED/AUTO_CONFIRMED.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{disbursement_token}}\",\n  \"reason\": \"Funds not received\"\n}"
+            }
           },
           "response": []
         },
         {
           "name": "Confirm Loan Disbursement",
           "request": {
-            "method": "GET",
-            "header": [],
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "url": {
-              "raw": "{{base_url}}/api/v1/services/loans/confirm-disbursement/?token={{disbursement_token}}",
+              "raw": "{{base_url}}/api/v1/services/loans/confirm-disbursement/",
               "host": [
                 "{{base_url}}"
               ],
@@ -2931,15 +3287,13 @@
                 "loans",
                 "confirm-disbursement",
                 ""
-              ],
-              "query": [
-                {
-                  "key": "token",
-                  "value": "{{disbursement_token}}"
-                }
               ]
             },
-            "description": "Public confirmation link used by a member to confirm loan receipt."
+            "description": "PUBLIC link a member clicks from an SMS/email to confirm they received a loan disbursement (authentication_classes=[], no login needed). This is a POST with the token in the JSON BODY, deliberately NOT a GET+query-param - a GET would risk being triggered by mail-scanner/link-prefetch bots before the human clicks it. token is a TimestampSigner-signed value, 24h max_age. 200 on first confirm or idempotent re-confirm; 400 missing/expired/bad token, or disbursement already DISPUTED; 404 unknown loan.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{disbursement_token}}\"\n}"
+            }
           },
           "response": []
         },
@@ -3128,7 +3482,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"full_name\": \"Jane Smith\",\n  \"phone_number\": \"+254723456789\",\n  \"email\": \"jane@example.com\",\n  \"guarantee_amount\": 25000.00\n}"
+              "raw": "{\n  \"full_name\": \"Jane Smith\",\n  \"phone_number\": \"+254723456789\",\n  \"id_number\": \"12345678\",\n  \"employment_status\": \"Employed\",\n  \"monthly_income\": 45000.0,\n  \"guarantee_amount\": 25000.0\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/services/loans/{{loan_id}}/external-guarantors/",
@@ -3145,7 +3499,7 @@
                 ""
               ]
             },
-            "description": "Submit external guarantor for a loan"
+            "description": "ExternalGuarantorCreateSerializer requires full_name, phone_number, id_number (exactly 8 digits), employment_status, monthly_income, guarantee_amount (>=100.00, <= loan.amount). id_front/id_back optional image files can be added as formdata if needed. loan_id comes from the URL, not the body. 400 if the sacco is MEMBER_ONLY for guarantors, or this id_number is already an APPROVED_BY_ADMIN guarantor on this loan."
           },
           "response": []
         },
@@ -3211,6 +3565,10 @@
               {
                 "key": "Authorization",
                 "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
               }
             ],
             "url": {
@@ -3229,7 +3587,7 @@
             "description": "Create a SACCO savings type. Admin only.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"BOSA\",\n  \"description\": \"Back office savings account\",\n  \"minimum_contribution\": \"1000.00\",\n  \"interest_rate\": \"0.00\",\n  \"sacco\": \"{{sacco_id}}\"\n}"
+              "raw": "{\n  \"name\": \"BOSA\",\n  \"description\": \"Back office savings account\",\n  \"minimum_contribution\": \"1000.00\",\n  \"interest_rate\": \"0.00\"\n}"
             }
           },
           "response": []
@@ -3269,6 +3627,10 @@
               {
                 "key": "Authorization",
                 "value": "Bearer {{access_token}}"
+              },
+              {
+                "key": "X-Sacco-ID",
+                "value": "{{sacco_id}}"
               }
             ],
             "url": {
@@ -3288,7 +3650,7 @@
             "description": "Replace a SACCO savings type. Admin only.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"BOSA\",\n  \"description\": \"Back office savings account\",\n  \"minimum_contribution\": \"1000.00\",\n  \"interest_rate\": \"0.00\",\n  \"sacco\": \"{{sacco_id}}\"\n}"
+              "raw": "{\n  \"name\": \"BOSA\",\n  \"description\": \"Back office savings account\",\n  \"minimum_contribution\": \"1000.00\",\n  \"interest_rate\": \"0.00\"\n}"
             }
           },
           "response": []
@@ -3913,7 +4275,7 @@
           "response": []
         },
         {
-          "name": "Generic Payment Callback",
+          "name": "Generic Payment Callback [DEPRECATED]",
           "request": {
             "method": "POST",
             "header": [
@@ -3935,7 +4297,7 @@
                 ""
               ]
             },
-            "description": "Receive a generic PSP callback payload.",
+            "description": "Receive a generic PSP callback payload. [DEPRECATED - ALWAYS RETURNS 410] This view does no real work; it always returns HTTP 410 Gone pointing callers at its replacement. Kept here so the deprecation is documented rather than silently dropped from the collection. Replacement: the tokenized M-Pesa-specific callback URLs above.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"provider_reference\": \"PROVIDER-REF-001\",\n  \"status\": \"COMPLETED\",\n  \"amount\": \"1000.00\",\n  \"metadata\": {}\n}"
@@ -3944,7 +4306,7 @@
           "response": []
         },
         {
-          "name": "Initiate Withdrawal",
+          "name": "Initiate Withdrawal [DEPRECATED]",
           "request": {
             "method": "POST",
             "header": [
@@ -3970,7 +4332,7 @@
                 ""
               ]
             },
-            "description": "Initiate a PSP-backed savings withdrawal.",
+            "description": "Initiate a PSP-backed savings withdrawal. [DEPRECATED - ALWAYS RETURNS 410] This view does no real work; it always returns HTTP 410 Gone pointing callers at its replacement. Kept here so the deprecation is documented rather than silently dropped from the collection. Replacement is actually /api/v1/payments/mpesa/b2c/withdraw/ (SavingsWithdrawalView, added below as 'Savings Withdrawal (B2C)') - note the 410 response body's own 'alternative' field points at /mpesa/b2c/disburse/, which is the LOAN disbursement endpoint, not a savings withdrawal endpoint; that looks like a stale message in the code itself.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"amount\": \"1000.00\",\n  \"sacco_id\": \"{{sacco_id}}\",\n  \"saving_id\": \"{{saving_id}}\"\n}"
@@ -3979,7 +4341,40 @@
           "response": []
         },
         {
-          "name": "Initiate Deposit",
+          "name": "Savings Withdrawal (B2C)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/mpesa/b2c/withdraw/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "mpesa",
+                "b2c",
+                "withdraw",
+                ""
+              ]
+            },
+            "description": "The REAL, functioning member-initiated savings withdrawal (SavingsWithdrawalView) - distinct from the deprecated 410 stub at /withdrawal/ above. Member-facing (IsAuthenticated only, no admin role) - ownership/status checks happen server-side. amount must be >0 and <= 250,000.00 (MAX_B2C_WITHDRAWAL_AMOUNT), net of fee must be >0. idempotency_key is optional client-supplied dedup token. 201 initiated; 200 duplicate/idempotent match; 202 Daraja timeout (balance stays reserved, PENDING_CONFIRMATION); 502 hard Daraja error (balance auto-reversed); 400 validation (over ceiling, account not ACTIVE, insufficient balance, wrong owner/sacco, unapproved membership).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"amount\": \"1000.00\",\n  \"sacco_id\": \"{{sacco_id}}\",\n  \"saving_id\": \"{{saving_id}}\",\n  \"idempotency_key\": \"\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Initiate Deposit [DEPRECATED]",
           "request": {
             "method": "POST",
             "header": [
@@ -4005,7 +4400,7 @@
                 ""
               ]
             },
-            "description": "Initiate a PSP-backed member deposit.",
+            "description": "Initiate a PSP-backed member deposit. [DEPRECATED - ALWAYS RETURNS 410] This view does no real work; it always returns HTTP 410 Gone pointing callers at its replacement. Kept here so the deprecation is documented rather than silently dropped from the collection. Replacement: /api/v1/payments/mpesa/stk-push/ (STKPushView, already covered by 'Initiate STK Push' below).",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"phone_number\": \"+254712345678\",\n  \"amount\": \"1000.00\",\n  \"sacco_id\": \"{{sacco_id}}\"\n}"
@@ -4158,6 +4553,40 @@
           "response": []
         },
         {
+          "name": "B2C Disbursement (Alternate Number)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/payments/mpesa/b2c/disburse/alternate-number/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "payments",
+                "mpesa",
+                "b2c",
+                "disburse",
+                "alternate-number",
+                ""
+              ]
+            },
+            "description": "SUPER ADMIN ONLY (IsSuperAdmin, not IsSaccoAdmin - not SACCO-scoped by header, loan_id resolves the sacco). Disburses to a phone number OTHER than the member's own registered number (e.g. lost SIM) - requires a written reason (>=10 chars). amount must exactly equal loan.amount. Writes two DisbursementAuditLog rows (B2C_INITIATED + B2C_ALTERNATE_NUMBER_AUTHORIZED). 201 initiated; 202 Daraja timeout/ambiguous; 502 hard Daraja error; 409 disbursement already in progress/done; 400 validation (loan not APPROVED, amount mismatch, pending guarantors, etc); 403 not super admin; 404 loan not found.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"loan_id\": \"{{loan_id}}\",\n  \"phone_number\": \"+254712345678\",\n  \"amount\": \"50000.00\",\n  \"remarks\": \"Loan Disbursement\",\n  \"reason\": \"Member reports lost SIM card, verified via ID + alternate contact\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
           "name": "Get B2C Status",
           "request": {
             "method": "GET",
@@ -4225,7 +4654,7 @@
           "response": []
         },
         {
-          "name": "Create Callback",
+          "name": "Create Callback [DEPRECATED]",
           "request": {
             "method": "POST",
             "header": [
@@ -4251,7 +4680,7 @@
                 ""
               ]
             },
-            "description": "Create a callback record (testing/debugging)"
+            "description": "Create a callback record (testing/debugging) [DEPRECATED - ALWAYS RETURNS 410] This view does no real work; it always returns HTTP 410 Gone pointing callers at its replacement. Kept here so the deprecation is documented rather than silently dropped from the collection. Replacement: the tokenized M-Pesa-specific callback URLs above."
           },
           "response": []
         },
@@ -4266,7 +4695,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/payments/callback/mpesa/stk/",
+              "raw": "{{base_url}}/api/v1/payments/callback/mpesa/stk/{{mpesa_callback_token}}/",
               "host": [
                 "{{base_url}}"
               ],
@@ -4277,10 +4706,11 @@
                 "callback",
                 "mpesa",
                 "stk",
+                "{{mpesa_callback_token}}",
                 ""
               ]
             },
-            "description": "Public Safaricom callback endpoint for STK push results.",
+            "description": "PUBLIC Daraja-facing callback (authentication_classes=[]) - the real gate is (1) callback_token as a PATH segment matching the single app-wide MPESA_CALLBACK_TOKEN setting, checked with hmac.compare_digest, (2) Safaricom IP allowlist, (3) an HMAC signature check. Set the {{mpesa_callback_token}} collection variable to match your target deployment's MPESA_CALLBACK_TOKEN env var. Always returns 200 {ResultCode:0} once persisted, REGARDLESS of the underlying M-Pesa result (Daraja convention) - 403 only for token/IP/signature failures, 400 for bad JSON, 503 (retryable) if the matching transaction isn't found yet or the broker is down.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"Body\": {\n    \"stkCallback\": {\n      \"MerchantRequestID\": \"29115-34620561-1\",\n      \"CheckoutRequestID\": \"ws_CO_16072026123456789\",\n      \"ResultCode\": 0,\n      \"ResultDesc\": \"The service request is processed successfully.\"\n    }\n  }\n}"
@@ -4299,7 +4729,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/payments/callback/mpesa/b2c/",
+              "raw": "{{base_url}}/api/v1/payments/callback/mpesa/b2c/{{mpesa_callback_token}}/",
               "host": [
                 "{{base_url}}"
               ],
@@ -4310,10 +4740,11 @@
                 "callback",
                 "mpesa",
                 "b2c",
+                "{{mpesa_callback_token}}",
                 ""
               ]
             },
-            "description": "Public Safaricom callback endpoint for B2C disbursement results.",
+            "description": "PUBLIC Daraja-facing B2C result callback - same token-in-path + IP-allowlist + HMAC-signature gating and 200-always-once-persisted convention as the STK callback above.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"Result\": {\n    \"ConversationID\": \"AG_20260716_123456789\",\n    \"ResultCode\": 0,\n    \"ResultDesc\": \"The service request is processed successfully.\"\n  }\n}"
@@ -4500,7 +4931,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"response\": \"ACCEPT\",\n  \"notes\": \"I accept to be a guarantor\"\n}"
+              "raw": "{\n  \"action\": \"ACCEPT\",\n  \"notes\": \"I accept to be a guarantor\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/guarantors/external/respond/{{response_token}}/",
@@ -4517,7 +4948,7 @@
                 ""
               ]
             },
-            "description": "External guarantor accepts or declines guarantee request via token"
+            "description": "PUBLIC link (AllowAny, no auth) an external/non-member guarantor clicks from an SMS. Body: action (ACCEPT|DECLINE, required, uppercase) + notes (optional, <=300 chars). All three 'can't respond' cases share the SAME status code: invalid token, expired token, and already-responded token all return 403 Forbidden (distinguished only by the detail message) - NOT 410 Gone and NOT differentiated 400s."
           },
           "response": []
         }
@@ -4629,7 +5060,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"token\": \"device_push_token_string\",\n  \"platform\": \"ios\"\n}"
+              "raw": "{\n  \"token\": \"device_push_token_string\",\n  \"platform\": \"IOS\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/notifications/device/",
@@ -4644,7 +5075,7 @@
                 ""
               ]
             },
-            "description": "Register or reactivate a device token for push notifications"
+            "description": "Upserts by token (update_or_create) - if the token previously belonged to a different user it's reassigned (audit-logged). platform must be one of ANDROID|IOS|WEB (DeviceToken.Platform, UPPERCASE) - note this is a different casing convention than accounts/device/register/'s platform field (ios|android, lowercase) since they're two separate serializers/models. 201 new token; 200 existing token updated/reassigned; 400 missing/invalid platform."
           },
           "response": []
         }
@@ -4731,7 +5162,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/billing/invoices/{{invoice_id}}/resend/",
+              "raw": "{{base_url}}/api/v1/billing/invoices/{{monthly_invoice_id}}/resend/",
               "host": [
                 "{{base_url}}"
               ],
@@ -4740,12 +5171,12 @@
                 "v1",
                 "billing",
                 "invoices",
-                "{{invoice_id}}",
+                "{{monthly_invoice_id}}",
                 "resend",
                 ""
               ]
             },
-            "description": "Resend existing invoice report to SACCO emails/admin recipients"
+            "description": "MODEL MISMATCH TO BE AWARE OF: this view (MonthlyInvoiceResendView) looks up the MonthlySaccoInvoice model, NOT the Invoice model that backs every other /billing/invoices/... endpoint (list/detail/download/mark-paid). These are two separate id spaces - do NOT reuse {{invoice_id}} captured from the invoice list here; it will 404. Use a MonthlySaccoInvoice id (set as {{monthly_invoice_id}}, a new collection variable added for this reason). 200 sent; 400 no recipients configured; 404 no such MonthlySaccoInvoice."
           },
           "response": []
         },
@@ -4764,7 +5195,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/api/v1/billing/invoices/{{invoice_id}}/download/?format=csv",
+              "raw": "{{base_url}}/api/v1/billing/invoices/{{invoice_id}}/download/",
               "host": [
                 "{{base_url}}"
               ],
@@ -4776,15 +5207,9 @@
                 "{{invoice_id}}",
                 "download",
                 ""
-              ],
-              "query": [
-                {
-                  "key": "format",
-                  "value": "csv"
-                }
               ]
             },
-            "description": "Download invoice report as CSV or PDF"
+            "description": "InvoiceDownloadView takes NO query parameters - it unconditionally streams the invoice PDF at invoice.pdf_path as application/pdf. There is no ?format=csv/pdf switch in this view; a format param would simply be ignored (no-op), so it has been removed here. 200 PDF stream; 404 no such invoice OR pdf_path empty/file missing (JSON body {\"detail\": \"Invoice PDF is not available.\"}); 403 wrong role or cross-SACCO access."
           },
           "response": []
         },
@@ -4881,6 +5306,72 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"amount\": \"5000.00\",\n  \"payment_method\": \"mpesa\",\n  \"payment_ref\": \"MPESA-REF-001\",\n  \"notes\": \"Payment confirmed by finance team\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Grant SACCO Billing Exemption",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/billing/saccos/{{sacco_id}}/exemption/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "billing",
+                "saccos",
+                "{{sacco_id}}",
+                "exemption",
+                ""
+              ]
+            },
+            "description": "SUPER ADMIN ONLY. Grants or lifts a SACCO's exemption from automatic billing suspension - never set automatically. Body: exempt (bool, required - must be a real JSON boolean, not the string \"true\") + reason (required, non-blank, ONLY when exempt=true; ignored/cleared when exempt=false). No expiry field exists - exemption is indefinite until reversed with a follow-up exempt:false call. 200 success; 400 exempt missing/not boolean, or missing reason while granting; 404 no such sacco.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exempt\": true,\n  \"reason\": \"Pilot deal Q4 2026 - waived per partnership agreement\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Lift SACCO Billing Exemption",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{access_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/billing/saccos/{{sacco_id}}/exemption/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "billing",
+                "saccos",
+                "{{sacco_id}}",
+                "exemption",
+                ""
+              ]
+            },
+            "description": "Same endpoint as 'Grant SACCO Billing Exemption' - send exempt:false to reverse it. reason is ignored/cleared in this direction.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"exempt\": false\n}"
             }
           },
           "response": []
@@ -5545,7 +6036,7 @@
           "response": []
         },
         {
-          "name": "Replace Application Review",
+          "name": "Replace Application Review [FLAGGED - DO NOT USE]",
           "request": {
             "method": "PUT",
             "header": [
@@ -5577,7 +6068,7 @@
                 ""
               ]
             },
-            "description": "Approve or reject a SACCO membership application using PUT.",
+            "description": "Approve or reject a SACCO membership application using PUT. [FLAGGED - DO NOT USE] This view has no working update()/put() implementation (its Serializer has no create()/update()); DRF's default UpdateModelMixin.update() then calls serializer.save() which raises an unhandled AssertionError, so this PUT currently returns an unhandled 500, not a real alternate to PATCH. Kept here only so the bug is documented and doesn't get silently dropped; use the PATCH request instead.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"status\": \"APPROVED\",\n  \"review_notes\": \"Application approved\"\n}"
@@ -5698,7 +6189,7 @@
           "response": []
         },
         {
-          "name": "Replace KYC Review",
+          "name": "Replace KYC Review [FLAGGED - DO NOT USE]",
           "request": {
             "method": "PUT",
             "header": [
@@ -5730,7 +6221,7 @@
                 ""
               ]
             },
-            "description": "Approve or reject a member KYC record using PUT.",
+            "description": "Approve or reject a member KYC record using PUT. [FLAGGED - DO NOT USE] This view has no working update()/put() implementation (its Serializer has no create()/update()); DRF's default UpdateModelMixin.update() then calls serializer.save() which raises an unhandled AssertionError, so this PUT currently returns an unhandled 500, not a real alternate to PATCH. Kept here only so the bug is documented and doesn't get silently dropped; use the PATCH request instead.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"status\": \"APPROVED\",\n  \"manual_verification_reason\": \"Documents verified manually\",\n  \"rejection_reason\": \"\"\n}"
@@ -5775,7 +6266,7 @@
                 ""
               ]
             },
-            "description": "Update loan status through approval workflow"
+            "description": "PATCH only (GET/PUT/DELETE -> 405). status must be one of UNDER_REVIEW|APPROVED|REJECTED|DISBURSED (not the full Loan.Status enum). override_reason (>=10 chars) is required only when approving a loan that has a negative CRB listing on file. APPROVED->DISBURSED triggers a real M-Pesa B2C disbursement call."
           },
           "response": []
         },
@@ -6004,7 +6495,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"status\": \"APPROVED\",\n  \"review_notes\": \"Guarantor verified\"\n}"
+              "raw": "{\n  \"action\": \"APPROVE\",\n  \"admin_notes\": \"Guarantor verified\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/saccomanagement/external-guarantors/{{id}}/review/",
@@ -6021,7 +6512,7 @@
                 ""
               ]
             },
-            "description": "Approve or reject external guarantor request (SACCO_ADMIN only)"
+            "description": "ExternalGuarantorAdminReviewView. Body: action (APPROVE|REJECT, required) + admin_notes (optional, <=500 chars). APPROVE is only valid when the guarantor's current status is ACCEPTED. PATCH only - GET/PUT/DELETE on this route return 405."
           },
           "response": []
         },
@@ -7097,6 +7588,34 @@
     {
       "key": "disbursement_token",
       "value": ""
+    },
+    {
+      "key": "mpesa_callback_token",
+      "value": ""
+    },
+    {
+      "key": "reset_token",
+      "value": ""
+    },
+    {
+      "key": "monthly_invoice_id",
+      "value": ""
+    },
+    {
+      "key": "erasure_request_id",
+      "value": ""
+    },
+    {
+      "key": "consent_type",
+      "value": "TERMS"
+    },
+    {
+      "key": "base_url_local",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "base_url_railway",
+      "value": "https://saccosphere-production-f0d6.up.railway.app"
     }
   ]
 }
