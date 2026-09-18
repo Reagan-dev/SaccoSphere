@@ -31,6 +31,11 @@ class MembershipListSerializer(serializers.ModelSerializer):
     user = MembershipUserSerializer(read_only=True)
     user_id = serializers.UUIDField(read_only=True)
     sacco = MembershipSaccoSerializer(read_only=True)
+    # Populated only when the queryset annotates it (AdminMemberListView) -
+    # Membership has no FK to SaccoApplication, so plain member-facing
+    # querysets that don't add the annotation simply won't have this
+    # attribute, and DRF returns null for it rather than erroring.
+    application_id = serializers.UUIDField(read_only=True, allow_null=True)
 
     class Meta:
         model = Membership
@@ -42,6 +47,7 @@ class MembershipListSerializer(serializers.ModelSerializer):
             'member_number',
             'status',
             'application_date',
+            'application_id',
         )
 
 

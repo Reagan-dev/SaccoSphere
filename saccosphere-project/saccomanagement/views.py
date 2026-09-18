@@ -84,6 +84,22 @@ class AdminMemberListView(SaccoScopedMixin, ListAPIView):
         # Select related for performance
         queryset = queryset.select_related('user', 'sacco')
 
+        # Membership and SaccoApplication have no FK between them (see
+        # MembershipApplySerializer.create()) - resolve the application an
+        # admin needs for GET/PATCH .../applications/<id>/review/ by
+        # (user, sacco), taking the most recently created one. Every
+        # current code path creates at most one SaccoApplication per
+        # (user, sacco) - the apply flow blocks re-applying once any
+        # Membership row exists there at all - so -created_at is a
+        # defensive tie-break, not something today's data can exercise.
+        latest_application = SaccoApplication.objects.filter(
+            user_id=OuterRef('user_id'),
+            sacco_id=OuterRef('sacco_id'),
+        ).order_by('-created_at')
+        queryset = queryset.annotate(
+            application_id=Subquery(latest_application.values('id')[:1]),
+        )
+
         # Search filter (email, member_number)
         search = self.request.query_params.get('search')
         if search:
@@ -131,6 +147,13 @@ class AdminMemberDetailView(DataAccessMixin, SaccoScopedMixin, RetrieveAPIView):
         ).values('membership').annotate(
             total=Sum('outstanding_balance')
         ).values('total')[:1]
+        # Membership and SaccoApplication have no FK between them - see
+        # the matching annotation in AdminMemberListView.get_queryset()
+        # for why this is resolved by (user, sacco) rather than a join.
+        latest_application = SaccoApplication.objects.filter(
+            user_id=OuterRef('user_id'),
+            sacco_id=OuterRef('sacco_id'),
+        ).order_by('-created_at')
 
         queryset = Membership.objects.select_related(
             'user',
@@ -172,6 +195,7 @@ class AdminMemberDetailView(DataAccessMixin, SaccoScopedMixin, RetrieveAPIView):
                 Value(ZERO),
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             ),
+            application_id=Subquery(latest_application.values('id')[:1]),
         )
 
         return self.apply_sacco_scope(queryset)

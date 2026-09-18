@@ -44,6 +44,10 @@ class AdminMemberDetailSerializer(serializers.ModelSerializer):
         decimal_places=2,
         read_only=True,
     )
+    # Membership has no FK to SaccoApplication - populated by the
+    # (user, sacco) Subquery annotation in
+    # AdminMemberDetailView.get_queryset().
+    application_id = serializers.UUIDField(read_only=True, allow_null=True)
     savings_breakdown = serializers.SerializerMethodField()
     active_loans = serializers.SerializerMethodField()
     recent_transactions = serializers.SerializerMethodField()
@@ -61,6 +65,7 @@ class AdminMemberDetailSerializer(serializers.ModelSerializer):
             'status',
             'application_date',
             'approved_date',
+            'application_id',
             'savings_total',
             'outstanding_loans',
             'monthly_contribution',
