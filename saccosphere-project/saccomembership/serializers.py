@@ -323,6 +323,23 @@ class SaccoFieldDefinitionAdminSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ('id',)
 
+    def validate_field_type(self, value):
+        # FieldType.FILE is a real choice on the model, but no write path
+        # exists anywhere to ever fill one in: MembershipApplySerializer's
+        # custom_fields only ever accepts a text value
+        # (CustomFieldInputSerializer.value is a CharField) and explicitly
+        # rejects FILE-type answers. Rather than let an admin create a
+        # field a member can never actually complete, refuse it here until
+        # a real file-upload path exists for custom fields.
+        if value == SaccoFieldDefinition.FieldType.FILE:
+            raise serializers.ValidationError(
+                'FILE fields are not yet supported - there is no way for '
+                'a member to submit a file answer to a custom field. '
+                'Use a document upload requirement instead, or a TEXT '
+                'field for a reference number.',
+            )
+        return value
+
     def validate_options(self, value):
         field_type = self.initial_data.get(
             'field_type', getattr(self.instance, 'field_type', None),
@@ -373,21 +390,4 @@ class MemberFieldDataSerializer(serializers.ModelSerializer):
             'field',
             'value',
             'file_value',
-        )
-
-
-class SaccoApplicationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = SaccoApplication
-        fields = '__all__'
-        read_only_fields = (
-            'id',
-            'user',
-            'status',
-            'reviewed_by',
-            'review_notes',
-            'submitted_at',
-            'reviewed_at',
-            'created_at',
-            'updated_at',
         )

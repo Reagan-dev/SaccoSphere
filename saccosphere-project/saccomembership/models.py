@@ -159,7 +159,6 @@ class SaccoApplication(models.Model):
         null=True,
         blank=True,
     )
-    additional_docs = models.JSONField(default=list)
     registration_fee_paid = models.BooleanField(default=False)
     fee_transaction = models.ForeignKey(
         'payments.Transaction',

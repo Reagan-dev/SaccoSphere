@@ -19,13 +19,18 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.models import KYCVerification
 from accounts.permissions import IsSaccoAdmin, IsSuperAdmin
+from accounts.serializers import KYCStatusSerializer
 from payments.models import Transaction
 from saccomembership.membership_doc_serializers import (
     MembershipDocumentDetailSerializer,
 )
-from saccomembership.models import Membership, SaccoApplication
-from saccomembership.serializers import MembershipListSerializer
+from saccomembership.models import MemberFieldData, Membership, SaccoApplication
+from saccomembership.serializers import (
+    MemberFieldDataSerializer,
+    MembershipListSerializer,
+)
 from saccomembership.services import generate_member_number
 from services.models import Loan, Saving
 
@@ -485,6 +490,35 @@ class ApplicationReviewView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
             many=True,
             context={'request': request},
         )
+
+        # Membership and SaccoApplication have no FK between them (see
+        # MembershipApplySerializer.create()) - the custom-field answers
+        # submitted with this application were written against the
+        # Membership row for this (user, sacco), so that's how a reviewer
+        # gets to them too.
+        membership = Membership.objects.filter(
+            user=application.user,
+            sacco=application.sacco,
+        ).first()
+        custom_field_answers = []
+        if membership is not None:
+            field_data = MemberFieldData.objects.filter(
+                membership=membership,
+            ).select_related('field')
+            custom_field_answers = MemberFieldDataSerializer(
+                field_data,
+                many=True,
+                context={'request': request},
+            ).data
+
+        try:
+            kyc = KYCStatusSerializer(
+                application.user.kyc,
+                context={'request': request},
+            ).data
+        except KYCVerification.DoesNotExist:
+            kyc = None
+
         return {
             'id': str(application.id),
             'user_id': str(application.user_id),
@@ -493,7 +527,6 @@ class ApplicationReviewView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
             'employment_status': application.employment_status,
             'employer_name': application.employer_name,
             'monthly_income': application.monthly_income,
-            'additional_docs': application.additional_docs,
             'registration_fee_paid': application.registration_fee_paid,
             'status': application.status,
             'reviewed_by_id': (
@@ -507,6 +540,8 @@ class ApplicationReviewView(AuditMixin, SaccoScopedMixin, UpdateAPIView):
             'created_at': application.created_at,
             'updated_at': application.updated_at,
             'membership_documents': document_serializer.data,
+            'custom_field_answers': custom_field_answers,
+            'kyc': kyc,
         }
 
     def _notify_applicant(self, application):
